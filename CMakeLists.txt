@@ -46,6 +46,8 @@ qt_add_qml_module(appyamp
         src/CoverImageProvider.cpp
         src/MusicLibrary.h
         src/MusicLibrary.cpp
+        src/LibraryWatcher.h
+        src/LibraryWatcher.cpp
         src/PlayerBackend.h
         src/PlayerBackend.cpp
         src/MprisAdaptor.h

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AlbumModel.h"
+#include "LibraryWatcher.h"
 #include "QueueModel.h"
 #include "TrackModel.h"
 #include "TrackQueue.h"
@@ -97,12 +98,13 @@ private:
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
 
-    QMediaPlayer *m_player        = nullptr;
-    QAudioOutput *m_audioOutput   = nullptr;
-    TrackModel   *m_trackModel    = nullptr;
-    AlbumModel   *m_albumModel    = nullptr;
-    QueueModel   *m_queueModel    = nullptr;
-    TrackQueue    m_queue;
+    QMediaPlayer   *m_player        = nullptr;
+    QAudioOutput   *m_audioOutput   = nullptr;
+    TrackModel     *m_trackModel    = nullptr;
+    AlbumModel     *m_albumModel    = nullptr;
+    QueueModel     *m_queueModel    = nullptr;
+    LibraryWatcher *m_libraryWatcher = nullptr;
+    TrackQueue      m_queue;
 
     QString m_currentPath;
     QString m_currentTitle;

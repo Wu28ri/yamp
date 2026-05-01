@@ -33,15 +33,37 @@ bool initialize() {
     }
 
     QSqlQuery q(db);
-    const bool ok = q.exec(QStringLiteral(
-        "CREATE TABLE IF NOT EXISTS tracks ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "title TEXT, artist TEXT, album TEXT, "
-        "path TEXT UNIQUE, duration INTEGER, "
-        "search_text TEXT, track_no INTEGER, "
-        "tech_info TEXT)"));
-    if (!ok) qWarning() << "[MusicLibrary] schema:" << q.lastError().text();
-    return ok;
+    if (!q.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS tracks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "title TEXT, artist TEXT, album TEXT, "
+            "path TEXT UNIQUE, duration INTEGER, "
+            "search_text TEXT, track_no INTEGER, "
+            "tech_info TEXT, file_size INTEGER DEFAULT 0)"))) {
+        qWarning() << "[MusicLibrary] schema tracks:" << q.lastError().text();
+        return false;
+    }
+
+    bool hasFileSize = false;
+    if (q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
+        while (q.next()) {
+            if (q.value(1).toString() == QLatin1String("file_size")) { hasFileSize = true; break; }
+        }
+    }
+    if (!hasFileSize) {
+        QSqlQuery alterQ(db);
+        if (!alterQ.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN file_size INTEGER DEFAULT 0"))) {
+            qWarning() << "[MusicLibrary] add file_size:" << alterQ.lastError().text();
+        }
+    }
+
+    QSqlQuery wq(db);
+    if (!wq.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"))) {
+        qWarning() << "[MusicLibrary] schema watch_roots:" << wq.lastError().text();
+        return false;
+    }
+    return true;
 }
 
 }
@@ -85,8 +107,8 @@ void LibraryScanner::run() {
         QSqlQuery q(db);
         q.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
-            "(title, artist, album, path, duration, search_text, track_no, tech_info) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"));
+            "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
         QDirIterator it(m_rootPath,
                         {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
@@ -104,6 +126,7 @@ void LibraryScanner::run() {
             QString techInfo;
             int duration = 0;
             int trackNo = 0;
+            const qint64 fileSize = it.fileInfo().size();
 
             if (!f.isNull()) {
                 if (auto *tag = f.tag()) {
@@ -131,6 +154,7 @@ void LibraryScanner::run() {
             q.bindValue(5, searchText);
             q.bindValue(6, trackNo);
             q.bindValue(7, techInfo);
+            q.bindValue(8, fileSize);
 
             if (q.exec() && q.numRowsAffected() > 0) {
                 newTracks.append({filePath, title, artist, album, duration, techInfo, trackNo});

@@ -37,6 +37,12 @@ PlayerBackend::PlayerBackend(QObject *parent)
 
     m_queueModel = new QueueModel(&m_queue, this);
 
+    m_libraryWatcher = new LibraryWatcher(this);
+    connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this, [this]() {
+        m_trackModel->select();
+        refreshAlbumModel();
+    });
+
     m_player      = new QMediaPlayer(this);
     m_audioOutput = new QAudioOutput(this);
     m_player->setAudioOutput(m_audioOutput);
@@ -50,6 +56,8 @@ PlayerBackend::PlayerBackend(QObject *parent)
             [this](QMediaPlayer::MediaStatus status) {
                 if (status == QMediaPlayer::EndOfMedia) playNext();
             });
+
+    m_libraryWatcher->start();
 
     m_queue.setTracks(queryTracks());
 }
@@ -240,11 +248,12 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     scanner->moveToThread(thread);
 
     connect(thread, &QThread::started, scanner, &LibraryScanner::run);
-    connect(scanner, &LibraryScanner::finished, this, [this, scanner, thread](const QList<Track> &newTracks) {
+    connect(scanner, &LibraryScanner::finished, this, [this, path, scanner, thread](const QList<Track> &newTracks) {
         for (const Track &t : newTracks) m_queue.addTrack(t);
         m_queueModel->resetAll();
         m_trackModel->select();
         refreshAlbumModel();
+        if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
         thread->quit();
         scanner->deleteLater();
     });
