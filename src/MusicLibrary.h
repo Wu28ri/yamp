@@ -19,7 +19,7 @@ signals:
     void finished(const QList<Track> &newTracks);
 
 private:
-    static QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate);
+    static QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth);
 
     QString m_rootPath;
 };

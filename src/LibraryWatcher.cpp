@@ -15,21 +15,22 @@
 #include <QVariant>
 
 #include <taglib/fileref.h>
+#include <taglib/flacproperties.h>
 #include <taglib/tag.h>
 
 namespace {
 
 constexpr int kDebounceMs = 350;
 
-QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate) {
+QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
     const double khz = sampleRate / 1000.0;
     QString prefix;
     if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))      prefix = QStringLiteral("FLAC | ");
     else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive))  prefix = QStringLiteral("MP3 | ");
-    return QStringLiteral("%1%2 kHz | %3 kbps")
-        .arg(prefix)
-        .arg(khz, 0, 'f', 1)
-        .arg(bitrate);
+    QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
+    if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
+    out += QStringLiteral(" | %1 kbps").arg(bitrate);
+    return out;
 }
 
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
@@ -59,7 +60,11 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
         }
         if (auto *audio = f.audioProperties()) {
             duration = audio->lengthInSeconds();
-            techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate());
+            int bitDepth = 0;
+            if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
+                bitDepth = flac->bitsPerSample();
+            }
+            techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
         }
     }
 

@@ -14,6 +14,7 @@
 #include <QVariant>
 
 #include <taglib/fileref.h>
+#include <taglib/flacproperties.h>
 #include <taglib/tag.h>
 
 namespace MusicLibrary {
@@ -180,15 +181,15 @@ void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArti
 LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
     : QObject(parent), m_rootPath(std::move(rootPath)) {}
 
-QString LibraryScanner::makeTechInfo(const QString &filePath, int sampleRate, int bitrate) {
+QString LibraryScanner::makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
     const double khz = sampleRate / 1000.0;
     QString prefix;
     if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive)) prefix = QStringLiteral("FLAC | ");
     else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive)) prefix = QStringLiteral("MP3 | ");
-    return QStringLiteral("%1%2 kHz | %3 kbps")
-        .arg(prefix)
-        .arg(khz, 0, 'f', 1)
-        .arg(bitrate);
+    QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
+    if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
+    out += QStringLiteral(" | %1 kbps").arg(bitrate);
+    return out;
 }
 
 void LibraryScanner::run() {
@@ -249,7 +250,9 @@ void LibraryScanner::run() {
                 }
                 if (auto *audio = f.audioProperties()) {
                     duration = audio->lengthInSeconds();
-                    techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate());
+                    int bitDepth = 0;
+                    if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) bitDepth = flac->bitsPerSample();
+                    techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
                 }
             }
 
