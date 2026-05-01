@@ -28,6 +28,8 @@ qt_add_qml_module(appyamp
         qml/Tracklist.qml
         qml/Albums.qml
         qml/AlbumDetail.qml
+        qml/Artists.qml
+        qml/ArtistDetail.qml
         qml/QueuePanel.qml
         qml/SortableHeader.qml
     SOURCES
@@ -38,6 +40,8 @@ qt_add_qml_module(appyamp
         src/TrackModel.cpp
         src/AlbumModel.h
         src/AlbumModel.cpp
+        src/ArtistModel.h
+        src/ArtistModel.cpp
         src/QueueModel.h
         src/QueueModel.cpp
         src/CoverExtractor.h

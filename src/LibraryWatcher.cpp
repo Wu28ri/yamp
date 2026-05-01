@@ -1,5 +1,6 @@
 #include "LibraryWatcher.h"
 
+#include "MusicLibrary.h"
 #include "Track.h"
 
 #include <QDebug>
@@ -97,7 +98,12 @@ bool insertTrackRow(const QString &path) {
         qWarning() << "[LibraryWatcher] insert failed:" << q.lastError().text() << path;
         return false;
     }
-    return q.numRowsAffected() > 0;
+    if (q.numRowsAffected() > 0) {
+        QSqlDatabase db = QSqlDatabase::database();
+        MusicLibrary::linkTrackToArtists(db, q.lastInsertId().toLongLong(), t.artist);
+        return true;
+    }
+    return false;
 }
 
 bool deleteTrackRow(const QString &path) {

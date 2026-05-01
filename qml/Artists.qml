@@ -1,0 +1,108 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+GridView {
+    id: artistsGrid
+    anchors.fill: parent
+    clip: true
+    cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 200)))
+    cellHeight: 280
+    cacheBuffer: 2000
+    model: playerBackend.artistModel
+
+    ScrollBar.vertical: ScrollBar {
+        policy: ScrollBar.AsNeeded
+    }
+
+    function colorForName(name) {
+        if (!name) return Qt.hsla(0.6, 0.35, 0.5, 1.0)
+        let h = 0
+        for (let i = 0; i < name.length; ++i) {
+            h = (h * 31 + name.charCodeAt(i)) >>> 0
+        }
+        const hue = (h % 360) / 360.0
+        return Qt.hsla(hue, 0.45, 0.5, 1.0)
+    }
+
+    function initialsForName(name) {
+        if (!name) return "?"
+        const parts = name.trim().split(/\s+/)
+        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase()
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    }
+
+    delegate: Item {
+        id: tile
+        width: artistsGrid.cellWidth
+        height: artistsGrid.cellHeight
+
+        required property string artist
+        required property int    albumCount
+        required property int    trackCount
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+
+            Rectangle {
+                id: avatar
+                Layout.preferredWidth: Math.floor(parent.width * 0.9)
+                Layout.preferredHeight: width
+                Layout.alignment: Qt.AlignHCenter
+                radius: width / 2
+                color: artistsGrid.colorForName(tile.artist)
+
+                scale: artistClickArea.containsMouse ? 1.03 : 1.0
+                Behavior on scale { NumberAnimation { duration: 150 } }
+                opacity: artistClickArea.pressed ? 0.85 : 1.0
+
+                Text {
+                    anchors.centerIn: parent
+                    text: artistsGrid.initialsForName(tile.artist)
+                    color: "white"
+                    font.pixelSize: Math.round(parent.width * 0.32)
+                    font.bold: true
+                }
+
+                MouseArea {
+                    id: artistClickArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        root.selectedArtist = tile.artist
+                        root.currentView    = "artistDetail"
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 5
+                text: tile.artist || "Unknown Artist"
+                color: sysPalette.text
+                font.bold: true
+                font.pixelSize: 14
+                elide: Text.ElideRight
+            }
+            Text {
+                Layout.fillWidth: true
+                Layout.leftMargin: 5
+                text: {
+                    const a = tile.albumCount
+                    const t = tile.trackCount
+                    return a + (a === 1 ? " album · " : " albums · ")
+                         + t + (t === 1 ? " track"   : " tracks")
+                }
+                color: sysPalette.windowText
+                font.pixelSize: 12
+                opacity: 0.7
+                elide: Text.ElideRight
+            }
+
+            Item { Layout.fillHeight: true }
+        }
+    }
+}

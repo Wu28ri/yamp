@@ -7,6 +7,9 @@
 #include <QQuickWindow>
 
 int main(int argc, char *argv[]) {
+    QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
+
     QGuiApplication app(argc, argv);
 
     QGuiApplication::setApplicationName(QStringLiteral("yamp"));
@@ -14,7 +17,7 @@ int main(int argc, char *argv[]) {
     QGuiApplication::setApplicationDisplayName(QStringLiteral("YAMP"));
     QGuiApplication::setDesktopFileName(QStringLiteral("yamp"));
 
-    QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
+    QQuickWindow::setTextRenderType(QQuickWindow::QtTextRendering);
 
     PlayerBackend backend;
     QQmlApplicationEngine engine;

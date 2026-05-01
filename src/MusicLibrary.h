@@ -4,7 +4,9 @@
 
 #include <QList>
 #include <QObject>
+#include <QSqlDatabase>
 #include <QString>
+#include <QStringList>
 
 class LibraryScanner : public QObject {
     Q_OBJECT
@@ -26,5 +28,9 @@ namespace MusicLibrary {
 
 QString databasePath();
 bool initialize();
+
+QString normalizeArtistName(const QString &raw);
+QStringList splitArtists(const QString &raw);
+void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists);
 
 }

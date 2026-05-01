@@ -4,11 +4,14 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QRegularExpression>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QUuid>
+#include <QVariant>
 
 #include <taglib/fileref.h>
 #include <taglib/tag.h>
@@ -63,7 +66,113 @@ bool initialize() {
         qWarning() << "[MusicLibrary] schema watch_roots:" << wq.lastError().text();
         return false;
     }
+
+    if (!q.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS artists ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "name TEXT NOT NULL, "
+            "name_norm TEXT NOT NULL UNIQUE)"))) {
+        qWarning() << "[MusicLibrary] schema artists:" << q.lastError().text();
+        return false;
+    }
+    if (!q.exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS track_artists ("
+            "track_id INTEGER NOT NULL, "
+            "artist_id INTEGER NOT NULL, "
+            "PRIMARY KEY (track_id, artist_id))"))) {
+        qWarning() << "[MusicLibrary] schema track_artists:" << q.lastError().text();
+        return false;
+    }
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)"));
+    q.exec(QStringLiteral(
+        "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
+        "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"));
+    q.exec(QStringLiteral(
+        "CREATE TRIGGER IF NOT EXISTS ta_after_delete AFTER DELETE ON track_artists "
+        "BEGIN DELETE FROM artists WHERE id = OLD.artist_id "
+        "AND NOT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = OLD.artist_id); END"));
+
+    QSqlQuery countQ(db);
+    bool needBackfill = false;
+    if (countQ.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM tracks), (SELECT COUNT(*) FROM track_artists)"))
+        && countQ.next()) {
+        const int tracksCount = countQ.value(0).toInt();
+        const int linksCount  = countQ.value(1).toInt();
+        needBackfill = tracksCount > 0 && linksCount == 0;
+    }
+    if (needBackfill) {
+        db.transaction();
+        QSqlQuery iter(db);
+        if (iter.exec(QStringLiteral("SELECT id, artist FROM tracks"))) {
+            while (iter.next()) {
+                linkTrackToArtists(db, iter.value(0).toLongLong(), iter.value(1).toString());
+            }
+        }
+        db.commit();
+    }
+
     return true;
+}
+
+QString normalizeArtistName(const QString &raw) {
+    return raw.trimmed().toLower().simplified();
+}
+
+QStringList splitArtists(const QString &raw) {
+    QStringList result;
+    const QString trimmed = raw.trimmed();
+    if (trimmed.isEmpty()) return result;
+
+    static const QRegularExpression splitter(
+        QStringLiteral(R"(\s*(?:,|;|/|\\|&|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bx\b|×|\bpresents\b|\bwith\b)\s*)"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    const QStringList parts = trimmed.split(splitter, Qt::SkipEmptyParts);
+    QSet<QString> seen;
+    for (const QString &p : parts) {
+        const QString name = p.trimmed();
+        if (name.isEmpty()) continue;
+        const QString norm = normalizeArtistName(name);
+        if (norm.isEmpty() || seen.contains(norm)) continue;
+        seen.insert(norm);
+        result.append(name);
+    }
+    if (result.isEmpty()) result.append(trimmed);
+    return result;
+}
+
+void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists) {
+    if (trackId <= 0) return;
+    const QStringList names = splitArtists(rawArtists);
+
+    QSqlQuery upsert(db);
+    upsert.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
+    QSqlQuery findId(db);
+    findId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
+    QSqlQuery link(db);
+    link.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
+
+    for (const QString &display : names) {
+        const QString norm = normalizeArtistName(display);
+        if (norm.isEmpty()) continue;
+
+        upsert.bindValue(0, display);
+        upsert.bindValue(1, norm);
+        if (!upsert.exec()) {
+            qWarning() << "[MusicLibrary] upsert artist:" << upsert.lastError().text();
+            continue;
+        }
+
+        findId.bindValue(0, norm);
+        if (!findId.exec() || !findId.next()) continue;
+        const qint64 artistId = findId.value(0).toLongLong();
+
+        link.bindValue(0, trackId);
+        link.bindValue(1, artistId);
+        if (!link.exec()) {
+            qWarning() << "[MusicLibrary] link track-artist:" << link.lastError().text();
+        }
+    }
 }
 
 }
@@ -157,6 +266,7 @@ void LibraryScanner::run() {
             q.bindValue(8, fileSize);
 
             if (q.exec() && q.numRowsAffected() > 0) {
+                MusicLibrary::linkTrackToArtists(db, q.lastInsertId().toLongLong(), artist);
                 newTracks.append({filePath, title, artist, album, duration, techInfo, trackNo});
             }
         }

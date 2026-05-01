@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AlbumModel.h"
+#include "ArtistModel.h"
 #include "LibraryWatcher.h"
 #include "QueueModel.h"
 #include "TrackModel.h"
@@ -32,9 +33,10 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(int currentIndex         READ currentIndex         NOTIFY currentIndexChanged)
     Q_PROPERTY(int currentQueuePosition READ currentQueuePosition NOTIFY currentQueuePositionChanged)
 
-    Q_PROPERTY(QAbstractItemModel* trackModel READ trackModel CONSTANT)
-    Q_PROPERTY(QAbstractItemModel* albumModel READ albumModel CONSTANT)
-    Q_PROPERTY(QAbstractItemModel* queueModel READ queueModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* trackModel  READ trackModel  CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* albumModel  READ albumModel  CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* artistModel READ artistModel CONSTANT)
+    Q_PROPERTY(QAbstractItemModel* queueModel  READ queueModel  CONSTANT)
 
 public:
     explicit PlayerBackend(QObject *parent = nullptr);
@@ -56,9 +58,10 @@ public:
     int currentIndex()         const { return m_currentIndex; }
     int currentQueuePosition() const { return m_queue.currentPosition(); }
 
-    QAbstractItemModel* trackModel() const { return m_trackModel; }
-    QAbstractItemModel* albumModel() const { return m_albumModel; }
-    QAbstractItemModel* queueModel() const { return m_queueModel; }
+    QAbstractItemModel* trackModel()  const { return m_trackModel; }
+    QAbstractItemModel* albumModel()  const { return m_albumModel; }
+    QAbstractItemModel* artistModel() const { return m_artistModel; }
+    QAbstractItemModel* queueModel()  const { return m_queueModel; }
 
     void setMuted(bool muted);
     void setVolume(qreal v);
@@ -73,6 +76,7 @@ public:
     Q_INVOKABLE void playPrevious();
     Q_INVOKABLE void searchTracks(const QString &query);
     Q_INVOKABLE void filterByAlbum(const QString &albumName);
+    Q_INVOKABLE void filterByArtist(const QString &artistName);
     Q_INVOKABLE void sortTracks(int column, bool ascending = true);
     Q_INVOKABLE int  getRowForPath(const QString &path);
     Q_INVOKABLE void addPlayNext(const QString &path);
@@ -94,6 +98,7 @@ private:
     void loadTrack(const Track &track);
     void rebuildQueueFromCurrentFilter();
     void refreshAlbumModel();
+    void refreshArtistModel();
     QList<Track> queryTracks(const QString &whereClause = {});
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
@@ -102,6 +107,7 @@ private:
     QAudioOutput   *m_audioOutput   = nullptr;
     TrackModel     *m_trackModel    = nullptr;
     AlbumModel     *m_albumModel    = nullptr;
+    ArtistModel    *m_artistModel   = nullptr;
     QueueModel     *m_queueModel    = nullptr;
     LibraryWatcher *m_libraryWatcher = nullptr;
     TrackQueue      m_queue;

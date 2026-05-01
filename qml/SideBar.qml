@@ -72,6 +72,14 @@ Rectangle {
 
         ToolButton {
             Layout.fillWidth: true
+            text: "Artists"
+            icon.name: "system-users"
+            display: AbstractButton.TextBesideIcon
+            onClicked: root.currentView = "artists"
+        }
+
+        ToolButton {
+            Layout.fillWidth: true
             text: "Add music"
             icon.name: "folder-add"
             onClicked: folderDialog.open()

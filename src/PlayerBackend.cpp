@@ -35,12 +35,16 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_albumModel = new AlbumModel(this);
     refreshAlbumModel();
 
+    m_artistModel = new ArtistModel(this);
+    refreshArtistModel();
+
     m_queueModel = new QueueModel(&m_queue, this);
 
     m_libraryWatcher = new LibraryWatcher(this);
     connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this, [this]() {
         m_trackModel->select();
         refreshAlbumModel();
+        refreshArtistModel();
     });
 
     m_player      = new QMediaPlayer(this);
@@ -253,6 +257,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
         m_queueModel->resetAll();
         m_trackModel->select();
         refreshAlbumModel();
+        refreshArtistModel();
         if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
         thread->quit();
         scanner->deleteLater();
@@ -273,6 +278,24 @@ void PlayerBackend::filterByAlbum(const QString &albumName) {
         m_filterClause = QStringLiteral("album = '%1'").arg(safe);
         m_trackModel->setFilter(m_filterClause);
         m_trackModel->setSort(TrackModel::TrackNoColumn, Qt::AscendingOrder);
+    }
+    m_trackModel->select();
+}
+
+void PlayerBackend::filterByArtist(const QString &artistName) {
+    if (artistName.isEmpty()) {
+        m_filterClause.clear();
+        m_trackModel->setFilter({});
+        m_trackModel->setSort(TrackModel::TitleColumn, Qt::AscendingOrder);
+    } else {
+        QString norm = MusicLibrary::normalizeArtistName(artistName);
+        norm.replace(QLatin1Char('\''), QLatin1String("''"));
+        m_filterClause = QStringLiteral(
+            "id IN (SELECT track_id FROM track_artists ta "
+            "JOIN artists a ON a.id = ta.artist_id "
+            "WHERE a.name_norm = '%1')").arg(norm);
+        m_trackModel->setFilter(m_filterClause);
+        m_trackModel->setSort(TrackModel::AlbumColumn, Qt::AscendingOrder);
     }
     m_trackModel->select();
 }
@@ -345,4 +368,8 @@ void PlayerBackend::openInFileManager(const QString &path) {
 
 void PlayerBackend::refreshAlbumModel() {
     m_albumModel->refresh();
+}
+
+void PlayerBackend::refreshArtistModel() {
+    m_artistModel->refresh();
 }

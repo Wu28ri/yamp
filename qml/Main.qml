@@ -44,6 +44,8 @@ Window {
                 source: {
                     if (root.currentView === "albums") return "Albums.qml"
                     if (root.currentView === "albumDetail") return "AlbumDetail.qml"
+                    if (root.currentView === "artists") return "Artists.qml"
+                    if (root.currentView === "artistDetail") return "ArtistDetail.qml"
                     return "Tracklist.qml"
                 }
             }
