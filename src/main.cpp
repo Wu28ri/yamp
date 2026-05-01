@@ -8,7 +8,6 @@
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
-    QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
 
     QGuiApplication::setApplicationName(QStringLiteral("yamp"));
     QGuiApplication::setOrganizationName(QStringLiteral("yamp"));
