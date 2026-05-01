@@ -24,13 +24,21 @@ This project is currently in a **very early stage of development**.
 - **MPRIS Support:** Full integration with system media controllers and lock screens.
 - **Modern Stack:** Built using Qt 6.5+, QtMultimedia, and TagLib.
 
-## Prerequisites (Arch Linux)
+## Prerequisites
 To build YAMP, you need the following packages installed:
 
-```bash
+```bash for arch based
 sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative qt6-multimedia taglib
 ```
 Installation
+
+YAMP is now in the AUR. Install via any AUR helper.
+
+```Bash
+yay -S yamp-git
+```
+without helpers
+
 Clone the repository:
 ```Bash
     git clone https://github.com/Wu28ri/yamp.git
