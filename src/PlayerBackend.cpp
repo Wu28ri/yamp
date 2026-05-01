@@ -137,7 +137,26 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause) {
 }
 
 void PlayerBackend::rebuildQueueFromCurrentFilter() {
-    m_queue.setTracks(queryTracks(m_filterClause));
+    while (m_trackModel->canFetchMore()) {
+        m_trackModel->fetchMore();
+    }
+
+    QList<Track> tracks;
+    const int rows = m_trackModel->rowCount();
+    tracks.reserve(rows);
+    for (int i = 0; i < rows; ++i) {
+        tracks.append({
+            m_trackModel->data(m_trackModel->index(i, TrackModel::PathColumn)).toString(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::TitleColumn)).toString(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::ArtistColumn)).toString(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::AlbumColumn)).toString(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::DurationColumn)).toInt(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::TechInfoColumn)).toString(),
+            m_trackModel->data(m_trackModel->index(i, TrackModel::TrackNoColumn)).toInt()
+        });
+    }
+
+    m_queue.setTracks(tracks);
     m_queueModel->resetAll();
 }
 
