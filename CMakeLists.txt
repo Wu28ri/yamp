@@ -32,6 +32,7 @@ qt_add_qml_module(appyamp
         qml/ArtistDetail.qml
         qml/QueuePanel.qml
         qml/SortableHeader.qml
+        qml/SettingsWindow.qml
     SOURCES
         src/Track.h
         src/TrackQueue.h
@@ -56,6 +57,8 @@ qt_add_qml_module(appyamp
         src/PlayerBackend.cpp
         src/MprisAdaptor.h
         src/MprisAdaptor.cpp
+        src/settings.h
+        src/settings.cpp
 )
 
 set_target_properties(appyamp PROPERTIES

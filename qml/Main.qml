@@ -17,6 +17,11 @@ Window {
 
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
+    SettingsWindow {
+        id: settingsWindow
+        visible: false
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -36,6 +41,7 @@ Window {
                 SplitView.preferredWidth: 250
                 SplitView.minimumWidth: 150
                 SplitView.maximumWidth: 400
+                onSettingsClicked: settingsWindow.show()
             }
 
             Loader {

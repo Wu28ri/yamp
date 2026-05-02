@@ -1,10 +1,12 @@
 #include "CoverImageProvider.h"
 #include "PlayerBackend.h"
+#include "settings.h"
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QSqlQuery>
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -20,8 +22,27 @@ int main(int argc, char *argv[]) {
     QQuickWindow::setTextRenderType(QQuickWindow::QtTextRendering);
 
     PlayerBackend backend;
+    Settings settings;
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
+    engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), &settings);
+
+    QObject::connect(&settings, &Settings::requestRescanDatabase, &backend, [&backend](const QStringList &folders) {
+        for (const QString &folder : folders) {
+            backend.scanFolder(QUrl::fromLocalFile(folder));
+        }
+    });
+
+    QObject::connect(&settings, &Settings::requestClearDatabase, &backend, [&backend]() {
+        QSqlQuery q;
+        q.exec("DELETE FROM tracks");
+        q.exec("DELETE FROM track_artists");
+        q.exec("DELETE FROM artists");
+        q.exec("DELETE FROM albums");
+        q.exec("DELETE FROM watch_roots");
+        backend.searchTracks("");
+    });
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

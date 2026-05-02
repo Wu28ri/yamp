@@ -1,17 +1,12 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
-import QtQuick.Dialogs
 
 Rectangle {
     implicitWidth: 250
     color: sysPalette.base
 
-    FolderDialog {
-        id: folderDialog
-        title: "Choose directory to scan"
-        onAccepted: playerBackend.scanFolder(folderDialog.selectedFolder)
-    }
+    signal settingsClicked()
 
     ColumnLayout {
         anchors.fill: parent
@@ -78,13 +73,12 @@ Rectangle {
             onClicked: root.currentView = "artists"
         }
 
-        ToolButton {
-            Layout.fillWidth: true
-            text: "Add music"
-            icon.name: "folder-add"
-            onClicked: folderDialog.open()
-        }
-
         Item { Layout.fillHeight: true }
+
+        ToolButton {
+            Layout.alignment: Qt.AlignLeft
+            icon.name: "settings-configure"
+            onClicked: settingsClicked()
+        }
     }
 }
