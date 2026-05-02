@@ -36,8 +36,6 @@ int main(int argc, char *argv[]) {
     QObject::connect(&settings, &Settings::requestClearDatabase,
                      &backend, &PlayerBackend::clearLibrary);
 
-    backend.syncWithFolders(settings.musicFolders());
-
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,
                      &app,
