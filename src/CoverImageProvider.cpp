@@ -1,6 +1,7 @@
 #include "CoverImageProvider.h"
 #include "CoverExtractor.h"
 
+#include <QFileInfo>
 #include <QMutexLocker>
 #include <QUrl>
 
@@ -8,6 +9,14 @@ namespace {
 constexpr int kSourceBudgetKb = 512 * 1024;
 constexpr int kScaledBudgetKb = 256 * 1024;
 constexpr int kSourceMaxEdge  = 1024;
+
+QString fileSignature(const QString &path) {
+    QFileInfo info(path);
+    if (!info.exists()) return QStringLiteral("missing");
+    return QString::number(info.lastModified().toMSecsSinceEpoch())
+         + QLatin1Char(':')
+         + QString::number(info.size());
+}
 }
 
 CoverImageProvider::CoverImageProvider()
@@ -20,9 +29,11 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     QString path = QUrl::fromPercentEncoding(id.toUtf8());
     if (!path.startsWith(QLatin1Char('/'))) path.prepend(QLatin1Char('/'));
 
+    const QString sig       = fileSignature(path);
+    const QString sourceKey = path + QLatin1Char('?') + sig;
     const int reqW = requestedSize.width();
     const int reqH = requestedSize.height();
-    const QString scaledKey = path + QLatin1Char('@') + QString::number(reqW);
+    const QString scaledKey = sourceKey + QLatin1Char('@') + QString::number(reqW);
 
     {
         QMutexLocker locker(&m_mutex);
@@ -35,7 +46,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     QImage source;
     {
         QMutexLocker locker(&m_mutex);
-        if (auto *entry = m_sources.object(path)) source = entry->image;
+        if (auto *entry = m_sources.object(sourceKey)) source = entry->image;
     }
 
     if (source.isNull()) {
@@ -52,7 +63,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
         const int kb = qMax(1, static_cast<int>(source.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
-        m_sources.insert(path, new Entry{source, kb}, kb);
+        m_sources.insert(sourceKey, new Entry{source, kb}, kb);
     }
 
     QImage out = source;
