@@ -26,8 +26,8 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 15
-        spacing: 15
+        anchors.margins: 16
+        spacing: 16
         visible: queuePanel.width > 50
 
         RowLayout {
@@ -80,7 +80,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            spacing: 4
+            spacing: 0
             model: playerBackend.queueModel
 
             property bool ignoreNextScroll: false
@@ -103,7 +103,7 @@ Rectangle {
             delegate: Item {
                 id: delegateRoot
                 width: queueList.width
-                height: 50
+                height: 56
                 z: mouseArea.drag.active ? 100 : 1
 
                 required property int  index
@@ -149,7 +149,7 @@ Rectangle {
                     Item {
                         id: contentItem
                         width: delegateRoot.width
-                        height: 50
+                        height: 56
                         Drag.active: mouseArea.drag.active
 
                         states: State {
@@ -181,8 +181,8 @@ Rectangle {
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.margins: 5
-                            spacing: 10
+                            anchors.margins: 4
+                            spacing: 8
 
                             Text {
                                 text: "⋮"
