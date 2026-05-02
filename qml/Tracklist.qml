@@ -35,7 +35,7 @@ ListView {
         anchors.fill: parent
         acceptedButtons: Qt.NoButton
         onWheel: (wheel) => {
-            const multiplier = 3.5
+            const multiplier = 3.0
             const step = (wheel.angleDelta.y / 120) * 120 * multiplier
             const minY = listView.originY
             const maxY = Math.max(minY, listView.contentHeight - listView.height + listView.originY)
