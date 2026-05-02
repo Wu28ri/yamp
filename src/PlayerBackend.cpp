@@ -23,6 +23,17 @@ namespace {
 const QString kDefaultTitle  = QStringLiteral("N/A");
 const QString kDefaultArtist = QStringLiteral("Unknown Artist");
 const QString kDefaultAlbum  = QStringLiteral("Unknown Album");
+
+QString sortColumnName(int col) {
+    switch (col) {
+    case TrackModel::TitleColumn:    return QStringLiteral("title");
+    case TrackModel::ArtistColumn:   return QStringLiteral("artist");
+    case TrackModel::AlbumColumn:    return QStringLiteral("album");
+    case TrackModel::DurationColumn: return QStringLiteral("duration");
+    case TrackModel::TrackNoColumn:  return QStringLiteral("track_no");
+    default:                         return {};
+    }
+}
 }
 
 PlayerBackend::PlayerBackend(QObject *parent)
@@ -134,12 +145,13 @@ void PlayerBackend::togglePlayback() {
     }
 }
 
-QList<Track> PlayerBackend::queryTracks(const QString &whereClause) {
+QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
     QList<Track> out;
     QString sql = QStringLiteral(
         "SELECT path, title, artist, album, duration, tech_info, track_no FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
-    sql += QStringLiteral(" ORDER BY id");
+    if (!orderBy.isEmpty()) sql += QStringLiteral(" ORDER BY ") + orderBy;
+    else                    sql += QStringLiteral(" ORDER BY id");
 
     QSqlQuery q;
     q.setForwardOnly(true);
@@ -162,26 +174,13 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause) {
 }
 
 void PlayerBackend::rebuildQueueFromCurrentFilter() {
-    while (m_trackModel->canFetchMore()) {
-        m_trackModel->fetchMore();
+    const QString colName = sortColumnName(m_sortColumn);
+    QString orderBy;
+    if (!colName.isEmpty()) {
+        orderBy = colName + (m_sortOrder == Qt::AscendingOrder
+                             ? QStringLiteral(" ASC") : QStringLiteral(" DESC"));
     }
-
-    QList<Track> tracks;
-    const int rows = m_trackModel->rowCount();
-    tracks.reserve(rows);
-    for (int i = 0; i < rows; ++i) {
-        tracks.append({
-            m_trackModel->data(m_trackModel->index(i, TrackModel::PathColumn)).toString(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::TitleColumn)).toString(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::ArtistColumn)).toString(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::AlbumColumn)).toString(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::DurationColumn)).toInt(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::TechInfoColumn)).toString(),
-            m_trackModel->data(m_trackModel->index(i, TrackModel::TrackNoColumn)).toInt()
-        });
-    }
-
-    m_queue.setTracks(tracks);
+    m_queue.setTracks(queryTracks(m_filterClause, orderBy));
     m_queueModel->resetAll();
 }
 
@@ -312,7 +311,8 @@ void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artis
     if (albumName.isEmpty()) {
         m_filterClause.clear();
         m_trackModel->setFilter({});
-        m_trackModel->setSort(TrackModel::TitleColumn, Qt::AscendingOrder);
+        m_sortColumn = TrackModel::TitleColumn;
+        m_sortOrder  = Qt::AscendingOrder;
     } else {
         QString safeAlbum = albumName;
         safeAlbum.replace(QLatin1Char('\''), QLatin1String("''"));
@@ -325,8 +325,10 @@ void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artis
                                  .arg(safeAlbum, safeArtist);
         }
         m_trackModel->setFilter(m_filterClause);
-        m_trackModel->setSort(TrackModel::TrackNoColumn, Qt::AscendingOrder);
+        m_sortColumn = TrackModel::TrackNoColumn;
+        m_sortOrder  = Qt::AscendingOrder;
     }
+    m_trackModel->setSort(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 }
 
@@ -334,7 +336,8 @@ void PlayerBackend::filterByArtist(const QString &artistName) {
     if (artistName.isEmpty()) {
         m_filterClause.clear();
         m_trackModel->setFilter({});
-        m_trackModel->setSort(TrackModel::TitleColumn, Qt::AscendingOrder);
+        m_sortColumn = TrackModel::TitleColumn;
+        m_sortOrder  = Qt::AscendingOrder;
     } else {
         QString norm = MusicLibrary::normalizeArtistName(artistName);
         norm.replace(QLatin1Char('\''), QLatin1String("''"));
@@ -343,8 +346,10 @@ void PlayerBackend::filterByArtist(const QString &artistName) {
             "JOIN artists a ON a.id = ta.artist_id "
             "WHERE a.name_norm = '%1')").arg(norm);
         m_trackModel->setFilter(m_filterClause);
-        m_trackModel->setSort(TrackModel::AlbumColumn, Qt::AscendingOrder);
+        m_sortColumn = TrackModel::AlbumColumn;
+        m_sortOrder  = Qt::AscendingOrder;
     }
+    m_trackModel->setSort(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 }
 
@@ -365,7 +370,9 @@ void PlayerBackend::searchTracks(const QString &query) {
 }
 
 void PlayerBackend::sortTracks(int column, bool ascending) {
-    m_trackModel->setSort(column, ascending ? Qt::AscendingOrder : Qt::DescendingOrder);
+    m_sortColumn = column;
+    m_sortOrder  = ascending ? Qt::AscendingOrder : Qt::DescendingOrder;
+    m_trackModel->setSort(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 }
 

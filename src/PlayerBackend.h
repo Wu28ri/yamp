@@ -119,7 +119,7 @@ private:
     void refreshArtistModel();
     void refreshAllModels();
     void resetPlaybackState();
-    QList<Track> queryTracks(const QString &whereClause = {});
+    QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
 
@@ -141,6 +141,8 @@ private:
     QString m_filterClause;
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
+    int           m_sortColumn = -1;
+    Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
     QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
     QTimer *m_scanRefreshTimer = nullptr;
