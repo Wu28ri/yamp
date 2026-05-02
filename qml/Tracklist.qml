@@ -186,8 +186,8 @@ ListView {
         }
 
         background: Rectangle {
-            color: trackItem.isCurrent ? sysPalette.highlight : (trackItem.hovered ? sysPalette.windowText : "transparent")
-            opacity: trackItem.isCurrent ? 0.15 : (trackItem.hovered ? 0.05 : 0)
+            color: trackItem.isCurrent ? sysPalette.highlight : (trackItem.hovered ? sysPalette.highlight : "transparent")
+            opacity: trackItem.isCurrent ? 0.15 : (trackItem.hovered ? 0.08 : 0)
         }
 
         contentItem: Item {
