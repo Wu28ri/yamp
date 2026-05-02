@@ -22,7 +22,7 @@ This project is currently in a **very early stage of development**.
 ## Key Features
 - **Fast Media Scanning:** SQLite-backed library management for handling thousands of tracks instantly.
 - **MPRIS Support:** Full integration with system media controllers and lock screens.
-- **Modern Stack:** Built using Qt 6.5+, QtMultimedia, and TagLib.
+- **Modern Stack:** Built using Qt 6.8+, QtMultimedia, and TagLib.
 
 ## Prerequisites
 To build YAMP, you need the following packages installed:
