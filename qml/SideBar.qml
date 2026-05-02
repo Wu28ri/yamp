@@ -75,6 +75,43 @@ Rectangle {
 
         Item { Layout.fillHeight: true }
 
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 4
+            visible: playerBackend.scanInProgress
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text {
+                    text: "Scanning library…"
+                    color: sysPalette.windowText
+                    font.pixelSize: 11
+                    opacity: 0.7
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                }
+
+                Text {
+                    visible: playerBackend.scanTotal > 0
+                    text: playerBackend.scanProgress + " / " + playerBackend.scanTotal
+                    color: sysPalette.windowText
+                    font.pixelSize: 11
+                    font.family: "Monospace"
+                    opacity: 0.6
+                }
+            }
+
+            ProgressBar {
+                Layout.fillWidth: true
+                from: 0
+                to: Math.max(1, playerBackend.scanTotal)
+                value: playerBackend.scanProgress
+                indeterminate: playerBackend.scanTotal === 0
+            }
+        }
+
         ToolButton {
             Layout.alignment: Qt.AlignLeft
             icon.name: "settings-configure"
