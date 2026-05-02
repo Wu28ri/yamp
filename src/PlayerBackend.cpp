@@ -3,6 +3,7 @@
 #include "CoverExtractor.h"
 #include "MprisAdaptor.h"
 #include "MusicLibrary.h"
+#include "ScanSession.h"
 
 #include <QCryptographicHash>
 #include <QDebug>
@@ -14,7 +15,6 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
-#include <QThread>
 #include <QThreadPool>
 #include <QUrl>
 
@@ -270,51 +270,34 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     const QString path = folderUrl.toLocalFile();
     if (path.isEmpty()) return;
 
-    auto *thread = new QThread(this);
-    auto *scanner = new LibraryScanner(path);
-    scanner->moveToThread(thread);
-
-    m_scanProgresses.insert(scanner, qMakePair(0, 0));
+    auto *session = new ScanSession(path, this);
+    m_scanProgresses.insert(session, qMakePair(0, 0));
     recomputeScanTotals();
 
-    connect(thread, &QThread::started, scanner, &LibraryScanner::run);
+    connect(session, &ScanSession::progressChanged, this, [this, session]() {
+        auto it = m_scanProgresses.find(session);
+        if (it == m_scanProgresses.end()) return;
+        it->first  = session->processed();
+        it->second = session->total();
+        recomputeScanTotals();
+    });
 
-    connect(scanner, &LibraryScanner::countDetermined, this,
-            [this, scanner](int total) {
-                auto it = m_scanProgresses.find(scanner);
-                if (it == m_scanProgresses.end()) return;
-                it->second = total;
-                recomputeScanTotals();
-            });
-
-    connect(scanner, &LibraryScanner::progress, this,
-            [this, scanner](int processed, int total) {
-                auto it = m_scanProgresses.find(scanner);
-                if (it == m_scanProgresses.end()) return;
-                it->first  = processed;
-                it->second = total;
-                recomputeScanTotals();
-            });
-
-    connect(scanner, &LibraryScanner::batchReady, this, [this]() {
+    connect(session, &ScanSession::batchReady, this, [this]() {
         if (!m_scanRefreshTimer->isActive()) m_scanRefreshTimer->start();
     });
 
-    connect(scanner, &LibraryScanner::finished, this,
-            [this, path, scanner, thread](const QList<Track> &newTracks) {
+    connect(session, &ScanSession::finished, this,
+            [this, session](const QString &rootPath, const QList<Track> &newTracks) {
                 if (m_scanRefreshTimer->isActive()) m_scanRefreshTimer->stop();
                 for (const Track &t : newTracks) m_queue.addTrack(t);
                 m_queueModel->resetAll();
                 refreshAllModels();
-                if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(path);
-                m_scanProgresses.remove(scanner);
+                if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(rootPath);
+                m_scanProgresses.remove(session);
                 recomputeScanTotals();
-                thread->quit();
             });
-    connect(thread, &QThread::finished, scanner, &QObject::deleteLater);
-    connect(thread, &QThread::finished, thread,  &QObject::deleteLater);
 
-    thread->start();
+    session->start();
 }
 
 QString PlayerBackend::combinedFilter() const {

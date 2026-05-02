@@ -20,7 +20,7 @@
 #include <QtMultimedia/QAudioOutput>
 #include <QtMultimedia/QMediaPlayer>
 
-class LibraryScanner;
+class ScanSession;
 
 class PlayerBackend : public QObject {
     Q_OBJECT
@@ -150,7 +150,7 @@ private:
     int           m_sortColumn = -1;
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
-    QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
+    QHash<ScanSession*, QPair<int, int>> m_scanProgresses;
     int     m_scanProgressCached = 0;
     int     m_scanTotalCached    = 0;
     QTimer *m_scanRefreshTimer = nullptr;
