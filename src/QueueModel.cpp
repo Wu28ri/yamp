@@ -4,7 +4,7 @@ QueueModel::QueueModel(TrackQueue *queue, QObject *parent)
     : QAbstractListModel(parent), m_queue(queue) {}
 
 int QueueModel::rowCount(const QModelIndex &parent) const {
-    Q_UNUSED(parent);
+    if (parent.isValid()) return 0;
     return m_queue->count();
 }
 
