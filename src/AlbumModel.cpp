@@ -21,6 +21,6 @@ void AlbumModel::refresh() {
     setQuery(QStringLiteral(
         "SELECT album, artist, MIN(path) AS path "
         "FROM tracks "
-        "GROUP BY album "
-        "ORDER BY album COLLATE NOCASE"));
+        "GROUP BY album, artist "
+        "ORDER BY album COLLATE NOCASE, artist COLLATE NOCASE"));
 }

@@ -75,7 +75,7 @@ public:
     Q_INVOKABLE void playNext();
     Q_INVOKABLE void playPrevious();
     Q_INVOKABLE void searchTracks(const QString &query);
-    Q_INVOKABLE void filterByAlbum(const QString &albumName);
+    Q_INVOKABLE void filterByAlbum(const QString &albumName, const QString &artistName = QString());
     Q_INVOKABLE void filterByArtist(const QString &artistName);
     Q_INVOKABLE void sortTracks(int column, bool ascending = true);
     Q_INVOKABLE int  getRowForPath(const QString &path);

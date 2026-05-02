@@ -6,7 +6,7 @@ Item {
     id: albumDetailRoot
     anchors.fill: parent
 
-    Component.onCompleted: playerBackend.filterByAlbum(root.selectedAlbum)
+    Component.onCompleted: playerBackend.filterByAlbum(root.selectedAlbum, root.selectedArtist)
 
     ColumnLayout {
         anchors.fill: parent

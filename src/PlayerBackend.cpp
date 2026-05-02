@@ -272,15 +272,22 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     thread->start();
 }
 
-void PlayerBackend::filterByAlbum(const QString &albumName) {
+void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
     if (albumName.isEmpty()) {
         m_filterClause.clear();
         m_trackModel->setFilter({});
         m_trackModel->setSort(TrackModel::TitleColumn, Qt::AscendingOrder);
     } else {
-        QString safe = albumName;
-        safe.replace(QLatin1Char('\''), QLatin1String("''"));
-        m_filterClause = QStringLiteral("album = '%1'").arg(safe);
+        QString safeAlbum = albumName;
+        safeAlbum.replace(QLatin1Char('\''), QLatin1String("''"));
+        if (artistName.isEmpty()) {
+            m_filterClause = QStringLiteral("album = '%1'").arg(safeAlbum);
+        } else {
+            QString safeArtist = artistName;
+            safeArtist.replace(QLatin1Char('\''), QLatin1String("''"));
+            m_filterClause = QStringLiteral("album = '%1' AND artist = '%2'")
+                                 .arg(safeAlbum, safeArtist);
+        }
         m_trackModel->setFilter(m_filterClause);
         m_trackModel->setSort(TrackModel::TrackNoColumn, Qt::AscendingOrder);
     }
