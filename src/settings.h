@@ -22,6 +22,7 @@ signals:
     void musicFoldersChanged();
     void requestClearDatabase();
     void requestRescanDatabase(const QStringList &folders);
+    void requestRemoveFolder(const QString &folder);
 
 private:
     QStringList m_folders;

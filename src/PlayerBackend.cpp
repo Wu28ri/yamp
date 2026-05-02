@@ -410,3 +410,48 @@ void PlayerBackend::clearLibrary() {
     emit currentIndexChanged();
     emit currentQueuePositionChanged();
 }
+
+void PlayerBackend::removeFolder(const QString &folder) {
+    if (folder.isEmpty()) return;
+    const QString clean = QDir(folder).absolutePath();
+    if (clean.isEmpty()) return;
+
+    m_libraryWatcher->removeRoot(clean);
+
+    {
+        QSqlDatabase db = QSqlDatabase::database();
+        db.transaction();
+        QSqlQuery del(db);
+        del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ? OR path LIKE ?"));
+        del.addBindValue(clean);
+        del.addBindValue(clean + QStringLiteral("/%"));
+        if (!del.exec()) {
+            qWarning() << "[removeFolder] delete tracks failed:" << del.lastError().text();
+        }
+        db.commit();
+    }
+
+    const QString prefix = clean + QLatin1Char('/');
+    const bool currentInRemoved = !m_currentPath.isEmpty() &&
+                                  (m_currentPath == clean || m_currentPath.startsWith(prefix));
+    if (currentInRemoved) {
+        m_player->stop();
+        m_player->setSource(QUrl());
+        m_currentPath.clear();
+        m_currentTitle    = QStringLiteral("N/A");
+        m_currentArtist   = QStringLiteral("Unknown Artist");
+        m_currentAlbum    = QStringLiteral("Unknown Album");
+        m_currentTechInfo.clear();
+        m_currentCoverPath.clear();
+        m_currentIndex    = -1;
+        emit metadataChanged();
+        emit currentIndexChanged();
+    }
+
+    m_trackModel->select();
+    refreshAlbumModel();
+    refreshArtistModel();
+
+    rebuildQueueFromCurrentFilter();
+    emit currentQueuePositionChanged();
+}

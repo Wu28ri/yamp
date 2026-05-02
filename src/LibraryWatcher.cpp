@@ -259,6 +259,28 @@ void LibraryWatcher::onDirectoryChanged(const QString &dir) {
     m_debounce->start();
 }
 
+void LibraryWatcher::removeRoot(const QString &path) {
+    const QString clean = QDir(path).absolutePath();
+    if (!m_roots.contains(clean)) return;
+
+    unwatchTree(clean);
+    m_roots.remove(clean);
+
+    QSet<QString> remaining;
+    const QString prefix = clean + QLatin1Char('/');
+    for (const QString &p : std::as_const(m_pendingDirs)) {
+        if (p != clean && !p.startsWith(prefix)) remaining.insert(p);
+    }
+    m_pendingDirs = remaining;
+
+    QSqlQuery q;
+    q.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
+    q.addBindValue(clean);
+    if (!q.exec()) {
+        qWarning() << "[LibraryWatcher] removeRoot persist failed:" << q.lastError().text();
+    }
+}
+
 void LibraryWatcher::clearAll() {
     if (m_debounce->isActive()) m_debounce->stop();
     const QStringList watched = m_watcher->directories();

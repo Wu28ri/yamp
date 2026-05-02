@@ -22,9 +22,11 @@ void Settings::addFolder(const QUrl &folderUrl) {
 
 void Settings::removeFolder(int index) {
     if (index >= 0 && index < m_folders.size()) {
+        const QString folder = m_folders.at(index);
         m_folders.removeAt(index);
         saveSettings();
         emit musicFoldersChanged();
+        emit requestRemoveFolder(folder);
     }
 }
 

@@ -33,6 +33,9 @@ int main(int argc, char *argv[]) {
         }
     });
 
+    QObject::connect(&settings, &Settings::requestRemoveFolder,
+                     &backend, &PlayerBackend::removeFolder);
+
     QObject::connect(&settings, &Settings::requestClearDatabase,
                      &backend, &PlayerBackend::clearLibrary);
 

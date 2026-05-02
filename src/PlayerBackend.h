@@ -83,6 +83,7 @@ public:
     Q_INVOKABLE void openInFileManager(const QString &path);
 
     void clearLibrary();
+    void removeFolder(const QString &folder);
 
 signals:
     void metadataChanged();
