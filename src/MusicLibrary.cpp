@@ -3,6 +3,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
@@ -35,6 +36,16 @@ bool initialize() {
         qWarning() << "[MusicLibrary] failed to open DB:" << db.lastError().text();
         return false;
     }
+
+    // Apply performance pragmas. WAL + synchronous=NORMAL avoids the per-commit
+    // fsync stall that makes batched inserts crawl after the first few hundred
+    // rows. temp_store=MEMORY and a larger page cache help GROUP BY queries.
+    QSqlQuery pragma(db);
+    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+    pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
+    pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
+    pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
 
     QSqlQuery q(db);
     if (!q.exec(QStringLiteral(
@@ -181,6 +192,38 @@ void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArti
     }
 }
 
+void linkTrackToArtistsPrepared(qint64 trackId,
+                                const QString &rawArtists,
+                                QSqlQuery &upsertArtist,
+                                QSqlQuery &findArtistId,
+                                QSqlQuery &linkTrackArtist) {
+    if (trackId <= 0) return;
+    const QStringList names = splitArtists(rawArtists);
+
+    for (const QString &display : names) {
+        const QString norm = normalizeArtistName(display);
+        if (norm.isEmpty()) continue;
+
+        upsertArtist.bindValue(0, display);
+        upsertArtist.bindValue(1, norm);
+        if (!upsertArtist.exec()) {
+            qWarning() << "[MusicLibrary] upsert artist:" << upsertArtist.lastError().text();
+            continue;
+        }
+
+        findArtistId.bindValue(0, norm);
+        if (!findArtistId.exec() || !findArtistId.next()) continue;
+        const qint64 artistId = findArtistId.value(0).toLongLong();
+        findArtistId.finish();
+
+        linkTrackArtist.bindValue(0, trackId);
+        linkTrackArtist.bindValue(1, artistId);
+        if (!linkTrackArtist.exec()) {
+            qWarning() << "[MusicLibrary] link track-artist:" << linkTrackArtist.lastError().text();
+        }
+    }
+}
+
 }
 
 LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
@@ -204,8 +247,6 @@ void LibraryScanner::run() {
         return;
     }
 
-    constexpr int kBatchSize = 30;
-
     // Phase 1: enumerate files so we can report a meaningful progress total.
     QStringList allFiles;
     {
@@ -222,6 +263,13 @@ void LibraryScanner::run() {
         return;
     }
 
+    // Larger batches reduce the per-commit fsync overhead, and we additionally
+    // bound the wall-clock time per batch so progress still flows while large
+    // libraries are processed.
+    constexpr int  kBatchSize        = 250;
+    constexpr int  kBatchMaxMs       = 800;
+    constexpr int  kProgressEveryN   = 10;
+
     const QString connName = QStringLiteral("yamp_scan_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
     QList<Track> newTracks;
     {
@@ -234,36 +282,56 @@ void LibraryScanner::run() {
             return;
         }
 
-        QSqlQuery q(db);
-        q.prepare(QStringLiteral(
+        // Per-connection pragmas: WAL is a database-level setting and is
+        // already enabled, but synchronous and friends are connection scoped.
+        QSqlQuery pragma(db);
+        pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+        pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
+        pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
+
+        QSqlQuery insertTrack(db);
+        insertTrack.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
             "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
+        // Reused prepared queries for artist linking, avoiding re-prepare per
+        // track.
+        QSqlQuery upsertArtist(db);
+        upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
+        QSqlQuery findArtistId(db);
+        findArtistId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
+        QSqlQuery linkTrackArtist(db);
+        linkTrackArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
+
         if (!db.transaction()) {
             qWarning() << "[Scan] BEGIN failed:" << db.lastError().text();
         }
+
+        QElapsedTimer batchTimer;
+        batchTimer.start();
         int batchInTx = 0;
         int processed = 0;
+        const int total = allFiles.size();
 
         for (const QString &filePath : allFiles) {
             const QByteArray pathBytes = filePath.toUtf8();
             TagLib::FileRef f(pathBytes.constData());
 
             QFileInfo info(filePath);
-            QString title = info.fileName();
+            QString title  = info.fileName();
             QString artist = QStringLiteral("Unknown Artist");
-            QString album = QStringLiteral("Unknown Album");
+            QString album  = QStringLiteral("Unknown Album");
             QString techInfo;
             int duration = 0;
-            int trackNo = 0;
+            int trackNo  = 0;
             const qint64 fileSize = info.size();
 
             if (!f.isNull()) {
                 if (auto *tag = f.tag()) {
-                    const QString tTitle = QString::fromStdString(tag->title().to8Bit(true));
+                    const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
                     const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true));
-                    const QString tAlbum = QString::fromStdString(tag->album().to8Bit(true));
+                    const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true));
                     if (!tTitle.isEmpty())  title  = tTitle;
                     if (!tArtist.isEmpty()) artist = tArtist;
                     if (!tAlbum.isEmpty())  album  = tAlbum;
@@ -279,30 +347,36 @@ void LibraryScanner::run() {
 
             const QString searchText = (title + QLatin1Char(' ') + artist + QLatin1Char(' ') + album).toLower();
 
-            q.bindValue(0, title);
-            q.bindValue(1, artist);
-            q.bindValue(2, album);
-            q.bindValue(3, filePath);
-            q.bindValue(4, duration);
-            q.bindValue(5, searchText);
-            q.bindValue(6, trackNo);
-            q.bindValue(7, techInfo);
-            q.bindValue(8, fileSize);
+            insertTrack.bindValue(0, title);
+            insertTrack.bindValue(1, artist);
+            insertTrack.bindValue(2, album);
+            insertTrack.bindValue(3, filePath);
+            insertTrack.bindValue(4, duration);
+            insertTrack.bindValue(5, searchText);
+            insertTrack.bindValue(6, trackNo);
+            insertTrack.bindValue(7, techInfo);
+            insertTrack.bindValue(8, fileSize);
 
-            if (q.exec() && q.numRowsAffected() > 0) {
-                MusicLibrary::linkTrackToArtists(db, q.lastInsertId().toLongLong(), artist);
+            if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
+                MusicLibrary::linkTrackToArtistsPrepared(
+                    insertTrack.lastInsertId().toLongLong(),
+                    artist,
+                    upsertArtist, findArtistId, linkTrackArtist);
                 newTracks.append({filePath, title, artist, album, duration, techInfo, trackNo});
             }
 
             ++processed;
             ++batchInTx;
-            emit progress(processed, allFiles.size());
+            if (processed % kProgressEveryN == 0 || processed == total) {
+                emit progress(processed, total);
+            }
 
-            if (batchInTx >= kBatchSize) {
+            if (batchInTx >= kBatchSize || batchTimer.elapsed() >= kBatchMaxMs) {
                 db.commit();
                 emit batchReady();
                 db.transaction();
                 batchInTx = 0;
+                batchTimer.restart();
             }
         }
 

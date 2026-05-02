@@ -47,6 +47,17 @@ PlayerBackend::PlayerBackend(QObject *parent)
         refreshArtistModel();
     });
 
+    // Coalesce model refreshes during heavy scans so we don't re-run the
+    // album/artist GROUP BY queries on every committed batch.
+    m_scanRefreshTimer = new QTimer(this);
+    m_scanRefreshTimer->setSingleShot(true);
+    m_scanRefreshTimer->setInterval(750);
+    connect(m_scanRefreshTimer, &QTimer::timeout, this, [this]() {
+        m_trackModel->select();
+        refreshAlbumModel();
+        refreshArtistModel();
+    });
+
     m_player      = new QMediaPlayer(this);
     m_audioOutput = new QAudioOutput(this);
     m_player->setAudioOutput(m_audioOutput);
@@ -279,13 +290,12 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
             });
 
     connect(scanner, &LibraryScanner::batchReady, this, [this]() {
-        m_trackModel->select();
-        refreshAlbumModel();
-        refreshArtistModel();
+        if (!m_scanRefreshTimer->isActive()) m_scanRefreshTimer->start();
     });
 
     connect(scanner, &LibraryScanner::finished, this,
             [this, path, scanner, thread](const QList<Track> &newTracks) {
+                if (m_scanRefreshTimer->isActive()) m_scanRefreshTimer->stop();
                 for (const Track &t : newTracks) m_queue.addTrack(t);
                 m_queueModel->resetAll();
                 m_trackModel->select();

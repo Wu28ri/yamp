@@ -12,6 +12,7 @@
 #include <QObject>
 #include <QPair>
 #include <QString>
+#include <QTimer>
 #include <QUrl>
 
 #include <QtMultimedia/QAudioOutput>
@@ -141,4 +142,5 @@ private:
 
     // Aggregated scan progress: scanner pointer -> (processed, total).
     QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
+    QTimer *m_scanRefreshTimer = nullptr;
 };

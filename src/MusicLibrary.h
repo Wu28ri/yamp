@@ -40,4 +40,13 @@ QString normalizeArtistName(const QString &raw);
 QStringList splitArtists(const QString &raw);
 void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists);
 
+// Faster variant for hot loops: caller provides three prepared queries
+// (insert-artist, lookup-artist-id, link-track-artist) so we avoid
+// re-preparing on every track.
+void linkTrackToArtistsPrepared(qint64 trackId,
+                                const QString &rawArtists,
+                                QSqlQuery &upsertArtist,
+                                QSqlQuery &findArtistId,
+                                QSqlQuery &linkTrackArtist);
+
 }
