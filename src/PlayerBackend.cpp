@@ -47,8 +47,6 @@ PlayerBackend::PlayerBackend(QObject *parent)
         refreshArtistModel();
     });
 
-    // Coalesce model refreshes during heavy scans so we don't re-run the
-    // album/artist GROUP BY queries on every committed batch.
     m_scanRefreshTimer = new QTimer(this);
     m_scanRefreshTimer->setSingleShot(true);
     m_scanRefreshTimer->setInterval(750);

@@ -140,7 +140,6 @@ private:
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
 
-    // Aggregated scan progress: scanner pointer -> (processed, total).
     QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
     QTimer *m_scanRefreshTimer = nullptr;
 };

@@ -37,9 +37,6 @@ bool initialize() {
         return false;
     }
 
-    // Apply performance pragmas. WAL + synchronous=NORMAL avoids the per-commit
-    // fsync stall that makes batched inserts crawl after the first few hundred
-    // rows. temp_store=MEMORY and a larger page cache help GROUP BY queries.
     QSqlQuery pragma(db);
     pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
     pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
@@ -135,9 +132,6 @@ QStringList splitArtists(const QString &raw) {
     const QString trimmed = raw.trimmed();
     if (trimmed.isEmpty()) return result;
 
-    // Punctuation/word splitters are case-insensitive; the literal "x" splitter
-    // is case-sensitive so single-letter artist names like "Mr. X" are not torn
-    // apart while still allowing "Artist x Other" collabs (lowercase "x" only).
     static const QRegularExpression splitter(
         QStringLiteral(
             R"(\s*(?:[,;/\\&×]|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bpresents\b|\bwith\b)\s*)"
@@ -247,7 +241,6 @@ void LibraryScanner::run() {
         return;
     }
 
-    // Phase 1: enumerate files so we can report a meaningful progress total.
     QStringList allFiles;
     {
         QDirIterator it(m_rootPath,
@@ -263,9 +256,6 @@ void LibraryScanner::run() {
         return;
     }
 
-    // Larger batches reduce the per-commit fsync overhead, and we additionally
-    // bound the wall-clock time per batch so progress still flows while large
-    // libraries are processed.
     constexpr int  kBatchSize        = 250;
     constexpr int  kBatchMaxMs       = 800;
     constexpr int  kProgressEveryN   = 10;
@@ -282,8 +272,6 @@ void LibraryScanner::run() {
             return;
         }
 
-        // Per-connection pragmas: WAL is a database-level setting and is
-        // already enabled, but synchronous and friends are connection scoped.
         QSqlQuery pragma(db);
         pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
         pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
@@ -295,8 +283,6 @@ void LibraryScanner::run() {
             "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
-        // Reused prepared queries for artist linking, avoiding re-prepare per
-        // track.
         QSqlQuery upsertArtist(db);
         upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
         QSqlQuery findArtistId(db);

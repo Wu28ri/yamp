@@ -12,25 +12,17 @@ class LibraryWatcher : public QObject {
 public:
     explicit LibraryWatcher(QObject *parent = nullptr);
 
-    // Load persisted roots from DB, run a quick reconciliation pass, install watchers.
     void start();
 
-    // Add a new root (persisted). Performs initial reconciliation and starts watching.
     void addRoot(const QString &path);
 
-    // Remove a root: stops watching and drops it from m_roots and watch_roots in DB.
-    // Does not delete tracks from the library DB (caller's responsibility).
     void removeRoot(const QString &path);
 
-    // Detach all roots from the live watcher and clear m_roots / pending state.
-    // Does not touch watch_roots in DB (caller is expected to do that as part
-    // of a full library wipe).
     void clearAll();
 
     QStringList roots() const;
 
 signals:
-    // Emitted on the GUI thread after the DB has been mutated by the watcher.
     void libraryChanged();
 
 private slots:

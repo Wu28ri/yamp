@@ -262,9 +262,6 @@ void LibraryWatcher::onDirectoryChanged(const QString &dir) {
 void LibraryWatcher::removeRoot(const QString &path) {
     const QString clean = QDir(path).absolutePath();
 
-    // Always purge from the persistent table regardless of whether the live
-    // watcher state has it: if the in-memory copy was lost (e.g. the path was
-    // normalised differently on add) we still want the row gone.
     QSqlQuery q;
     q.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
     q.addBindValue(clean);

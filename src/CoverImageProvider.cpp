@@ -52,8 +52,6 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     if (source.isNull()) {
         source = CoverExtractor::loadCover(path);
         if (source.isNull()) {
-            // Cache a tiny transparent placeholder so we don't hit TagLib again
-            // for files that have no embedded artwork or sidecar image.
             source = QImage(1, 1, QImage::Format_RGBA8888);
             source.fill(Qt::transparent);
         } else if (source.width() > kSourceMaxEdge || source.height() > kSourceMaxEdge) {
