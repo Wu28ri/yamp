@@ -102,22 +102,29 @@ bool initialize() {
         "AND NOT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = OLD.artist_id); END"));
 
     QSqlQuery countQ(db);
-    bool needBackfill = false;
-    if (countQ.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM tracks), (SELECT COUNT(*) FROM track_artists)"))
-        && countQ.next()) {
-        const int tracksCount = countQ.value(0).toInt();
-        const int linksCount  = countQ.value(1).toInt();
-        needBackfill = tracksCount > 0 && linksCount == 0;
+    int userVersion = 0;
+    if (countQ.exec(QStringLiteral("PRAGMA user_version")) && countQ.next()) {
+        userVersion = countQ.value(0).toInt();
     }
-    if (needBackfill) {
-        db.transaction();
-        QSqlQuery iter(db);
-        if (iter.exec(QStringLiteral("SELECT id, artist FROM tracks"))) {
-            while (iter.next()) {
-                linkTrackToArtists(db, iter.value(0).toLongLong(), iter.value(1).toString());
-            }
+    if (userVersion < 1) {
+        bool needBackfill = false;
+        if (countQ.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM tracks), (SELECT COUNT(*) FROM track_artists)"))
+            && countQ.next()) {
+            const int tracksCount = countQ.value(0).toInt();
+            const int linksCount  = countQ.value(1).toInt();
+            needBackfill = tracksCount > 0 && linksCount == 0;
         }
-        db.commit();
+        if (needBackfill) {
+            db.transaction();
+            QSqlQuery iter(db);
+            if (iter.exec(QStringLiteral("SELECT id, artist FROM tracks"))) {
+                while (iter.next()) {
+                    linkTrackToArtists(db, iter.value(0).toLongLong(), iter.value(1).toString());
+                }
+            }
+            db.commit();
+        }
+        countQ.exec(QStringLiteral("PRAGMA user_version = 1"));
     }
 
     return true;
