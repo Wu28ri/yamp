@@ -8,7 +8,9 @@
 #include "TrackQueue.h"
 
 #include <QAbstractItemModel>
+#include <QByteArray>
 #include <QHash>
+#include <QMutex>
 #include <QObject>
 #include <QPair>
 #include <QString>
@@ -149,4 +151,7 @@ private:
     int     m_scanProgressCached = 0;
     int     m_scanTotalCached    = 0;
     QTimer *m_scanRefreshTimer = nullptr;
+
+    QMutex     m_coverWriteMutex;
+    QByteArray m_lastCoverHash;
 };

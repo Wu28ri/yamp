@@ -4,11 +4,13 @@
 #include "MprisAdaptor.h"
 #include "MusicLibrary.h"
 
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMutexLocker>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -235,12 +237,20 @@ void PlayerBackend::loadTrack(const Track &t) {
         const QByteArray data = CoverExtractor::embeddedPicture(trackPath);
         QString resolved;
         if (!data.isEmpty()) {
+            const QByteArray hash = QCryptographicHash::hash(data, QCryptographicHash::Md5);
             const QString ext = CoverExtractor::detectImageExtension(data);
             const QString out = tempCoverPathForExt(ext);
-            QFile f(out);
-            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                f.write(data);
-                f.close();
+
+            QMutexLocker locker(&m_coverWriteMutex);
+            if (hash != m_lastCoverHash || !QFileInfo::exists(out)) {
+                QFile f(out);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    f.write(data);
+                    f.close();
+                    m_lastCoverHash = hash;
+                    resolved = out;
+                }
+            } else {
                 resolved = out;
             }
         } else {
