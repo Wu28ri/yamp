@@ -182,7 +182,7 @@ void PlayerBackend::rebuildQueueFromCurrentFilter() {
         orderBy = colName + (m_sortOrder == Qt::AscendingOrder
                              ? QStringLiteral(" ASC") : QStringLiteral(" DESC"));
     }
-    m_queue.setTracks(queryTracks(m_filterClause, orderBy));
+    m_queue.setTracks(queryTracks(combinedFilter(), orderBy));
     m_queueModel->resetAll();
 }
 
@@ -317,66 +317,71 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     thread->start();
 }
 
+QString PlayerBackend::combinedFilter() const {
+    if (m_categoryFilter.isEmpty() && m_searchFilter.isEmpty()) return {};
+    if (m_categoryFilter.isEmpty()) return m_searchFilter;
+    if (m_searchFilter.isEmpty())   return m_categoryFilter;
+    return QStringLiteral("(%1) AND (%2)").arg(m_categoryFilter, m_searchFilter);
+}
+
+void PlayerBackend::applyFilter() {
+    m_trackModel->setFilter(combinedFilter());
+    m_trackModel->setSort(m_sortColumn, m_sortOrder);
+    m_trackModel->select();
+}
+
 void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
     if (albumName.isEmpty()) {
-        m_filterClause.clear();
-        m_trackModel->setFilter({});
+        m_categoryFilter.clear();
         m_sortColumn = TrackModel::TitleColumn;
         m_sortOrder  = Qt::AscendingOrder;
     } else {
         QString safeAlbum = albumName;
         safeAlbum.replace(QLatin1Char('\''), QLatin1String("''"));
         if (artistName.isEmpty()) {
-            m_filterClause = QStringLiteral("album = '%1'").arg(safeAlbum);
+            m_categoryFilter = QStringLiteral("album = '%1'").arg(safeAlbum);
         } else {
             QString safeArtist = artistName;
             safeArtist.replace(QLatin1Char('\''), QLatin1String("''"));
-            m_filterClause = QStringLiteral("album = '%1' AND artist = '%2'")
-                                 .arg(safeAlbum, safeArtist);
+            m_categoryFilter = QStringLiteral("album = '%1' AND artist = '%2'")
+                                   .arg(safeAlbum, safeArtist);
         }
-        m_trackModel->setFilter(m_filterClause);
         m_sortColumn = TrackModel::TrackNoColumn;
         m_sortOrder  = Qt::AscendingOrder;
     }
-    m_trackModel->setSort(m_sortColumn, m_sortOrder);
-    m_trackModel->select();
+    applyFilter();
 }
 
 void PlayerBackend::filterByArtist(const QString &artistName) {
     if (artistName.isEmpty()) {
-        m_filterClause.clear();
-        m_trackModel->setFilter({});
+        m_categoryFilter.clear();
         m_sortColumn = TrackModel::TitleColumn;
         m_sortOrder  = Qt::AscendingOrder;
     } else {
         QString norm = MusicLibrary::normalizeArtistName(artistName);
         norm.replace(QLatin1Char('\''), QLatin1String("''"));
-        m_filterClause = QStringLiteral(
+        m_categoryFilter = QStringLiteral(
             "id IN (SELECT track_id FROM track_artists ta "
             "JOIN artists a ON a.id = ta.artist_id "
             "WHERE a.name_norm = '%1')").arg(norm);
-        m_trackModel->setFilter(m_filterClause);
         m_sortColumn = TrackModel::AlbumColumn;
         m_sortOrder  = Qt::AscendingOrder;
     }
-    m_trackModel->setSort(m_sortColumn, m_sortOrder);
-    m_trackModel->select();
+    applyFilter();
 }
 
 void PlayerBackend::searchTracks(const QString &query) {
     if (query.isEmpty()) {
-        m_filterClause.clear();
-        m_trackModel->setFilter({});
+        m_searchFilter.clear();
     } else {
         QString safe = query.toLower();
         safe.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
         safe.replace(QLatin1Char('%'),  QLatin1String("\\%"));
         safe.replace(QLatin1Char('_'),  QLatin1String("\\_"));
         safe.replace(QLatin1Char('\''), QLatin1String("''"));
-        m_filterClause = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
-        m_trackModel->setFilter(m_filterClause);
+        m_searchFilter = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
     }
-    m_trackModel->select();
+    applyFilter();
 }
 
 void PlayerBackend::sortTracks(int column, bool ascending) {
@@ -492,7 +497,8 @@ void PlayerBackend::clearLibrary() {
     q.exec(QStringLiteral("DELETE FROM watch_roots"));
     db.commit();
 
-    m_filterClause.clear();
+    m_categoryFilter.clear();
+    m_searchFilter.clear();
     m_trackModel->setFilter(QString());
     refreshAllModels();
 

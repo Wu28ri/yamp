@@ -122,6 +122,8 @@ private:
     void refreshAllModels();
     void resetPlaybackState();
     void recomputeScanTotals();
+    void applyFilter();
+    QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
@@ -141,7 +143,8 @@ private:
     QString m_currentAlbum;
     QString m_currentTechInfo;
     QString m_currentCoverPath;
-    QString m_filterClause;
+    QString m_categoryFilter;
+    QString m_searchFilter;
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
     int           m_sortColumn = -1;
