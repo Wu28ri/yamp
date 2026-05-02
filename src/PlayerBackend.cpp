@@ -265,7 +265,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     scanner->moveToThread(thread);
 
     m_scanProgresses.insert(scanner, qMakePair(0, 0));
-    emit scanProgressChanged();
+    recomputeScanTotals();
 
     connect(thread, &QThread::started, scanner, &LibraryScanner::run);
 
@@ -274,7 +274,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
                 auto it = m_scanProgresses.find(scanner);
                 if (it == m_scanProgresses.end()) return;
                 it->second = total;
-                emit scanProgressChanged();
+                recomputeScanTotals();
             });
 
     connect(scanner, &LibraryScanner::progress, this,
@@ -283,7 +283,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
                 if (it == m_scanProgresses.end()) return;
                 it->first  = processed;
                 it->second = total;
-                emit scanProgressChanged();
+                recomputeScanTotals();
             });
 
     connect(scanner, &LibraryScanner::batchReady, this, [this]() {
@@ -298,7 +298,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
                 refreshAllModels();
                 if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
                 m_scanProgresses.remove(scanner);
-                emit scanProgressChanged();
+                recomputeScanTotals();
                 thread->quit();
             });
     connect(thread, &QThread::finished, scanner, &QObject::deleteLater);
@@ -452,20 +452,17 @@ void PlayerBackend::resetPlaybackState() {
     emit currentIndexChanged();
 }
 
-int PlayerBackend::scanProgress() const {
-    int sum = 0;
+void PlayerBackend::recomputeScanTotals() {
+    int progress = 0;
+    int total    = 0;
     for (auto it = m_scanProgresses.cbegin(); it != m_scanProgresses.cend(); ++it) {
-        sum += it.value().first;
+        progress += it.value().first;
+        total    += it.value().second;
     }
-    return sum;
-}
-
-int PlayerBackend::scanTotal() const {
-    int sum = 0;
-    for (auto it = m_scanProgresses.cbegin(); it != m_scanProgresses.cend(); ++it) {
-        sum += it.value().second;
-    }
-    return sum;
+    if (progress == m_scanProgressCached && total == m_scanTotalCached) return;
+    m_scanProgressCached = progress;
+    m_scanTotalCached    = total;
+    emit scanProgressChanged();
 }
 
 void PlayerBackend::clearLibrary() {

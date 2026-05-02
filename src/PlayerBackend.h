@@ -73,8 +73,8 @@ public:
     QAbstractItemModel* queueModel()  const { return m_queueModel; }
 
     bool scanInProgress() const { return !m_scanProgresses.isEmpty(); }
-    int  scanProgress()   const;
-    int  scanTotal()      const;
+    int  scanProgress()   const { return m_scanProgressCached; }
+    int  scanTotal()      const { return m_scanTotalCached; }
 
     void setMuted(bool muted);
     void setVolume(qreal v);
@@ -119,6 +119,7 @@ private:
     void refreshArtistModel();
     void refreshAllModels();
     void resetPlaybackState();
+    void recomputeScanTotals();
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
@@ -145,5 +146,7 @@ private:
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
     QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
+    int     m_scanProgressCached = 0;
+    int     m_scanTotalCached    = 0;
     QTimer *m_scanRefreshTimer = nullptr;
 };
