@@ -14,74 +14,14 @@
 #include <QSqlQuery>
 #include <QVariant>
 
-#include <taglib/fileref.h>
-#include <taglib/flacproperties.h>
-#include <taglib/tag.h>
-
 namespace {
 
 constexpr int kDebounceMs = 350;
 
-QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
-    const double khz = sampleRate / 1000.0;
-    QString prefix;
-    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))      prefix = QStringLiteral("FLAC | ");
-    else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive))  prefix = QStringLiteral("MP3 | ");
-    QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
-    if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
-    out += QStringLiteral(" | %1 kbps").arg(bitrate);
-    return out;
-}
-
-bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
-    QFileInfo info(filePath);
-    if (!info.exists() || !info.isFile()) return false;
-    fileSize = info.size();
-
-    const QByteArray pathBytes = filePath.toUtf8();
-    TagLib::FileRef f(pathBytes.constData());
-
-    QString title  = info.fileName();
-    QString artist = QStringLiteral("Unknown Artist");
-    QString album  = QStringLiteral("Unknown Album");
-    QString techInfo;
-    int duration = 0;
-    int trackNo  = 0;
-
-    if (!f.isNull()) {
-        if (auto *tag = f.tag()) {
-            const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
-            const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true));
-            const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true));
-            if (!tTitle.isEmpty())  title  = tTitle;
-            if (!tArtist.isEmpty()) artist = tArtist;
-            if (!tAlbum.isEmpty())  album  = tAlbum;
-            trackNo = tag->track();
-        }
-        if (auto *audio = f.audioProperties()) {
-            duration = audio->lengthInSeconds();
-            int bitDepth = 0;
-            if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
-                bitDepth = flac->bitsPerSample();
-            }
-            techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
-        }
-    }
-
-    t.path     = filePath;
-    t.title    = title;
-    t.artist   = artist;
-    t.album    = album;
-    t.duration = duration;
-    t.techInfo = techInfo;
-    t.trackNo  = trackNo;
-    return true;
-}
-
 bool insertTrackRow(const QString &path) {
     Track t;
     qint64 fileSize = 0;
-    if (!readTrackFromFile(path, t, fileSize)) return false;
+    if (!MusicLibrary::readTrackFromFile(path, t, fileSize)) return false;
 
     const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
 
@@ -374,7 +314,7 @@ void LibraryWatcher::initialReconcile(const QString &root) {
     for (const QString &add : additions) {
         Track t;
         qint64 sz = 0;
-        if (!readTrackFromFile(add, t, sz)) continue;
+        if (!MusicLibrary::readTrackFromFile(add, t, sz)) continue;
         const auto key = qMakePair(sz, t.duration);
         const auto it2 = removalIndex.find(key);
         if (it2 != removalIndex.end()) {
@@ -434,7 +374,7 @@ void LibraryWatcher::reconcileDirs(const QSet<QString> &dirs) {
     for (const QString &add : allAdditions) {
         Track t;
         qint64 sz = 0;
-        if (!readTrackFromFile(add, t, sz)) continue;
+        if (!MusicLibrary::readTrackFromFile(add, t, sz)) continue;
         const auto key = qMakePair(sz, t.duration);
         const auto it = removalIndex.find(key);
         if (it != removalIndex.end()) {

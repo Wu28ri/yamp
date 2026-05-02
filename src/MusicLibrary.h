@@ -22,8 +22,6 @@ signals:
     void finished(const QList<Track> &newTracks);
 
 private:
-    static QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth);
-
     QString m_rootPath;
 };
 
@@ -41,5 +39,9 @@ void linkTrackToArtistsPrepared(qint64 trackId,
                                 QSqlQuery &upsertArtist,
                                 QSqlQuery &findArtistId,
                                 QSqlQuery &linkTrackArtist);
+
+QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth);
+
+bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize);
 
 }

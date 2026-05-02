@@ -225,21 +225,66 @@ void linkTrackToArtistsPrepared(qint64 trackId,
     }
 }
 
-}
-
-LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
-    : QObject(parent), m_rootPath(std::move(rootPath)) {}
-
-QString LibraryScanner::makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
+QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
     const double khz = sampleRate / 1000.0;
     QString prefix;
-    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive)) prefix = QStringLiteral("FLAC | ");
+    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))     prefix = QStringLiteral("FLAC | ");
     else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive)) prefix = QStringLiteral("MP3 | ");
     QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
     if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
     out += QStringLiteral(" | %1 kbps").arg(bitrate);
     return out;
 }
+
+bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
+    QFileInfo info(filePath);
+    if (!info.exists() || !info.isFile()) return false;
+    fileSize = info.size();
+
+    const QByteArray pathBytes = filePath.toUtf8();
+    TagLib::FileRef f(pathBytes.constData());
+
+    QString title  = info.fileName();
+    QString artist = QStringLiteral("Unknown Artist");
+    QString album  = QStringLiteral("Unknown Album");
+    QString techInfo;
+    int duration = 0;
+    int trackNo  = 0;
+
+    if (!f.isNull()) {
+        if (auto *tag = f.tag()) {
+            const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
+            const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true));
+            const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true));
+            if (!tTitle.isEmpty())  title  = tTitle;
+            if (!tArtist.isEmpty()) artist = tArtist;
+            if (!tAlbum.isEmpty())  album  = tAlbum;
+            trackNo = tag->track();
+        }
+        if (auto *audio = f.audioProperties()) {
+            duration = audio->lengthInSeconds();
+            int bitDepth = 0;
+            if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
+                bitDepth = flac->bitsPerSample();
+            }
+            techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
+        }
+    }
+
+    t.path     = filePath;
+    t.title    = title;
+    t.artist   = artist;
+    t.album    = album;
+    t.duration = duration;
+    t.techInfo = techInfo;
+    t.trackNo  = trackNo;
+    return true;
+}
+
+}
+
+LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
+    : QObject(parent), m_rootPath(std::move(rootPath)) {}
 
 void LibraryScanner::run() {
     if (m_rootPath.isEmpty()) {
@@ -308,54 +353,31 @@ void LibraryScanner::run() {
         const int total = allFiles.size();
 
         for (const QString &filePath : allFiles) {
-            const QByteArray pathBytes = filePath.toUtf8();
-            TagLib::FileRef f(pathBytes.constData());
-
-            QFileInfo info(filePath);
-            QString title  = info.fileName();
-            QString artist = QStringLiteral("Unknown Artist");
-            QString album  = QStringLiteral("Unknown Album");
-            QString techInfo;
-            int duration = 0;
-            int trackNo  = 0;
-            const qint64 fileSize = info.size();
-
-            if (!f.isNull()) {
-                if (auto *tag = f.tag()) {
-                    const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
-                    const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true));
-                    const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true));
-                    if (!tTitle.isEmpty())  title  = tTitle;
-                    if (!tArtist.isEmpty()) artist = tArtist;
-                    if (!tAlbum.isEmpty())  album  = tAlbum;
-                    trackNo = tag->track();
-                }
-                if (auto *audio = f.audioProperties()) {
-                    duration = audio->lengthInSeconds();
-                    int bitDepth = 0;
-                    if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) bitDepth = flac->bitsPerSample();
-                    techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
-                }
+            Track t;
+            qint64 fileSize = 0;
+            if (!MusicLibrary::readTrackFromFile(filePath, t, fileSize)) {
+                ++processed;
+                continue;
             }
 
-            const QString searchText = (title + QLatin1Char(' ') + artist + QLatin1Char(' ') + album).toLower();
+            const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
 
-            insertTrack.bindValue(0, title);
-            insertTrack.bindValue(1, artist);
-            insertTrack.bindValue(2, album);
-            insertTrack.bindValue(3, filePath);
-            insertTrack.bindValue(4, duration);
+            insertTrack.bindValue(0, t.title);
+            insertTrack.bindValue(1, t.artist);
+            insertTrack.bindValue(2, t.album);
+            insertTrack.bindValue(3, t.path);
+            insertTrack.bindValue(4, t.duration);
             insertTrack.bindValue(5, searchText);
-            insertTrack.bindValue(6, trackNo);
-            insertTrack.bindValue(7, techInfo);
+            insertTrack.bindValue(6, t.trackNo);
+            insertTrack.bindValue(7, t.techInfo);
             insertTrack.bindValue(8, fileSize);
 
             if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
                 MusicLibrary::linkTrackToArtistsPrepared(
                     insertTrack.lastInsertId().toLongLong(),
-                    artist,
+                    t.artist,
                     upsertArtist, findArtistId, linkTrackArtist);
-                newTracks.append({filePath, title, artist, album, duration, techInfo, trackNo});
+                newTracks.append(t);
             }
 
             ++processed;
