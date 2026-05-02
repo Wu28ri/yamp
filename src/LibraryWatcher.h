@@ -16,6 +16,8 @@ public:
 
     void addRoot(const QString &path);
 
+    void registerScannedRoot(const QString &path);
+
     void removeRoot(const QString &path);
 
     void clearAll();

@@ -256,6 +256,31 @@ void LibraryWatcher::addRoot(const QString &path) {
     if (dbBefore != dbAfter) emit libraryChanged();
 }
 
+void LibraryWatcher::registerScannedRoot(const QString &path) {
+    const QString clean = QDir(path).absolutePath();
+    if (clean.isEmpty() || !QDir(clean).exists()) return;
+
+    for (const QString &existing : m_roots) {
+        if (clean == existing) return;
+        if (clean.startsWith(existing + QLatin1Char('/'))) return;
+    }
+    const QStringList currentRoots(m_roots.begin(), m_roots.end());
+    for (const QString &existing : currentRoots) {
+        if (existing.startsWith(clean + QLatin1Char('/'))) {
+            unwatchTree(existing);
+            m_roots.remove(existing);
+            QSqlQuery q;
+            q.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
+            q.addBindValue(existing);
+            q.exec();
+        }
+    }
+
+    m_roots.insert(clean);
+    persistRoot(clean);
+    watchTreeRecursive(clean);
+}
+
 void LibraryWatcher::onDirectoryChanged(const QString &dir) {
     m_pendingDirs.insert(dir);
     m_debounce->start();

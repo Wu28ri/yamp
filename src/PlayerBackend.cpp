@@ -306,7 +306,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
                 for (const Track &t : newTracks) m_queue.addTrack(t);
                 m_queueModel->resetAll();
                 refreshAllModels();
-                if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
+                if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(path);
                 m_scanProgresses.remove(scanner);
                 recomputeScanTotals();
                 thread->quit();
