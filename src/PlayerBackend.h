@@ -84,6 +84,7 @@ public:
 
     void clearLibrary();
     void removeFolder(const QString &folder);
+    void syncWithFolders(const QStringList &folders);
 
 signals:
     void metadataChanged();

@@ -455,3 +455,21 @@ void PlayerBackend::removeFolder(const QString &folder) {
     rebuildQueueFromCurrentFilter();
     emit currentQueuePositionChanged();
 }
+
+void PlayerBackend::syncWithFolders(const QStringList &folders) {
+    QSet<QString> desired;
+    for (const QString &raw : folders) {
+        const QString clean = QDir(raw).absolutePath();
+        if (!clean.isEmpty() && QDir(clean).exists()) desired.insert(clean);
+    }
+
+    const QStringList currentRoots = m_libraryWatcher->roots();
+    const QSet<QString> currentSet(currentRoots.begin(), currentRoots.end());
+
+    for (const QString &existing : currentSet) {
+        if (!desired.contains(existing)) removeFolder(existing);
+    }
+    for (const QString &want : desired) {
+        if (!currentSet.contains(want)) scanFolder(QUrl::fromLocalFile(want));
+    }
+}

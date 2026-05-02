@@ -27,17 +27,16 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), &settings);
 
-    QObject::connect(&settings, &Settings::requestRescanDatabase, &backend, [&backend](const QStringList &folders) {
-        for (const QString &folder : folders) {
-            backend.scanFolder(QUrl::fromLocalFile(folder));
-        }
-    });
+    QObject::connect(&settings, &Settings::requestRescanDatabase, &backend,
+                     [&backend](const QStringList &folders) { backend.syncWithFolders(folders); });
 
     QObject::connect(&settings, &Settings::requestRemoveFolder,
                      &backend, &PlayerBackend::removeFolder);
 
     QObject::connect(&settings, &Settings::requestClearDatabase,
                      &backend, &PlayerBackend::clearLibrary);
+
+    backend.syncWithFolders(settings.musicFolders());
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,
