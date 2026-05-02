@@ -82,6 +82,8 @@ public:
     Q_INVOKABLE void addPlayNext(const QString &path);
     Q_INVOKABLE void openInFileManager(const QString &path);
 
+    void clearLibrary();
+
 signals:
     void metadataChanged();
     void mutedChanged();

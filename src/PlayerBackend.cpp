@@ -373,3 +373,40 @@ void PlayerBackend::refreshAlbumModel() {
 void PlayerBackend::refreshArtistModel() {
     m_artistModel->refresh();
 }
+
+void PlayerBackend::clearLibrary() {
+    m_player->stop();
+    m_player->setSource(QUrl());
+
+    m_currentPath.clear();
+    m_currentTitle    = QStringLiteral("N/A");
+    m_currentArtist   = QStringLiteral("Unknown Artist");
+    m_currentAlbum    = QStringLiteral("Unknown Album");
+    m_currentTechInfo.clear();
+    m_currentCoverPath.clear();
+    m_currentIndex    = -1;
+
+    m_queue.setTracks({});
+    m_queueModel->resetAll();
+
+    m_libraryWatcher->clearAll();
+
+    QSqlDatabase db = QSqlDatabase::database();
+    db.transaction();
+    QSqlQuery q(db);
+    q.exec(QStringLiteral("DELETE FROM tracks"));
+    q.exec(QStringLiteral("DELETE FROM track_artists"));
+    q.exec(QStringLiteral("DELETE FROM artists"));
+    q.exec(QStringLiteral("DELETE FROM watch_roots"));
+    db.commit();
+
+    m_filterClause.clear();
+    m_trackModel->setFilter(QString());
+    m_trackModel->select();
+    refreshAlbumModel();
+    refreshArtistModel();
+
+    emit metadataChanged();
+    emit currentIndexChanged();
+    emit currentQueuePositionChanged();
+}

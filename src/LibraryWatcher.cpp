@@ -259,6 +259,14 @@ void LibraryWatcher::onDirectoryChanged(const QString &dir) {
     m_debounce->start();
 }
 
+void LibraryWatcher::clearAll() {
+    if (m_debounce->isActive()) m_debounce->stop();
+    const QStringList watched = m_watcher->directories();
+    if (!watched.isEmpty()) m_watcher->removePaths(watched);
+    m_roots.clear();
+    m_pendingDirs.clear();
+}
+
 void LibraryWatcher::flushPending() {
     if (m_pendingDirs.isEmpty()) return;
     const QSet<QString> pending = m_pendingDirs;

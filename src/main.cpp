@@ -6,7 +6,6 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
-#include <QSqlQuery>
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -34,15 +33,8 @@ int main(int argc, char *argv[]) {
         }
     });
 
-    QObject::connect(&settings, &Settings::requestClearDatabase, &backend, [&backend]() {
-        QSqlQuery q;
-        q.exec("DELETE FROM tracks");
-        q.exec("DELETE FROM track_artists");
-        q.exec("DELETE FROM artists");
-        q.exec("DELETE FROM albums");
-        q.exec("DELETE FROM watch_roots");
-        backend.searchTracks("");
-    });
+    QObject::connect(&settings, &Settings::requestClearDatabase,
+                     &backend, &PlayerBackend::clearLibrary);
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

@@ -18,6 +18,11 @@ public:
     // Add a new root (persisted). Performs initial reconciliation and starts watching.
     void addRoot(const QString &path);
 
+    // Detach all roots from the live watcher and clear m_roots / pending state.
+    // Does not touch watch_roots in DB (caller is expected to do that as part
+    // of a full library wipe).
+    void clearAll();
+
     QStringList roots() const;
 
 signals:
