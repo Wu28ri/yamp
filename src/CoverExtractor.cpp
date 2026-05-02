@@ -1,6 +1,7 @@
 #include "CoverExtractor.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 
 #include <taglib/attachedpictureframe.h>
@@ -48,20 +49,29 @@ QString sidecarImagePath(const QString &trackPath) {
     const QFileInfo info(trackPath);
     if (!info.exists()) return {};
 
-    const QDir dir = info.dir();
-    const QStringList nameFilters = {"*.jpg", "*.jpeg", "*.png", "*.webp", "*.bmp"};
-    const QStringList files = dir.entryList(nameFilters, QDir::Files);
-    if (files.isEmpty()) return {};
+    static const QStringList nameFilters = {
+        QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"),
+        QStringLiteral("*.png"), QStringLiteral("*.webp"),
+        QStringLiteral("*.bmp")
+    };
+    static const QStringList preferredKeywords = {
+        QStringLiteral("cover"), QStringLiteral("folder"),
+        QStringLiteral("front"), QStringLiteral("album")
+    };
 
-    static const QStringList preferredKeywords = {"cover", "folder", "front", "album"};
-    for (const QString &keyword : preferredKeywords) {
-        for (const QString &file : files) {
-            if (file.contains(keyword, Qt::CaseInsensitive)) {
-                return dir.absoluteFilePath(file);
-            }
+    const QString dirPath = info.absolutePath();
+    QString fallback;
+
+    QDirIterator it(dirPath, nameFilters, QDir::Files);
+    while (it.hasNext()) {
+        const QString full = it.next();
+        const QString fileName = it.fileName();
+        if (fallback.isEmpty()) fallback = full;
+        for (const QString &keyword : preferredKeywords) {
+            if (fileName.contains(keyword, Qt::CaseInsensitive)) return full;
         }
     }
-    return dir.absoluteFilePath(files.first());
+    return fallback;
 }
 
 QImage loadCover(const QString &trackPath) {
