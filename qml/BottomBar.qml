@@ -61,7 +61,7 @@ Rectangle {
             Image {
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectCrop
-                source: playerBackend.currentPath ? "image://cover/" + playerBackend.currentPath : ""
+                source: root.coverSource(playerBackend.currentPath)
                 sourceSize: Qt.size(60, 60)
                 asynchronous: true
             }

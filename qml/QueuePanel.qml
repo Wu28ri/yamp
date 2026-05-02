@@ -41,7 +41,7 @@ Rectangle {
                 Image {
                     anchors.fill: parent
                     fillMode: Image.PreserveAspectCrop
-                    source: playerBackend.currentPath ? "image://cover/" + playerBackend.currentPath : ""
+                    source: root.coverSource(playerBackend.currentPath)
                     sourceSize: Qt.size(52, 52)
                     asynchronous: true
                 }
@@ -212,7 +212,7 @@ Rectangle {
                                 color: sysPalette.base; radius: 4; clip: true
                                 Image {
                                     anchors.fill: parent
-                                    source: delegateRoot.path ? "image://cover/" + delegateRoot.path : ""
+                                    source: root.coverSource(delegateRoot.path)
                                     sourceSize: Qt.size(36, 36)
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true

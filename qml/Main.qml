@@ -15,6 +15,10 @@ Window {
     property string selectedAlbumPath: ""
     property string selectedArtist: ""
 
+    function coverSource(path) {
+        return path ? "image://cover/" + path : ""
+    }
+
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
     SettingsWindow {

@@ -64,7 +64,7 @@ GridView {
                 Image {
                     anchors.fill: parent
                     fillMode: Image.PreserveAspectCrop
-                    source: tile.path ? "image://cover/" + tile.path : ""
+                    source: root.coverSource(tile.path)
                     sourceSize: Qt.size(250, 250)
                     asynchronous: true
                     opacity: albumClickArea.pressed ? 0.8 : 1.0

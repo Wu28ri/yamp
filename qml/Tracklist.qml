@@ -216,7 +216,7 @@ ListView {
 
                 Image {
                     anchors.fill: parent
-                    source: "image://cover/" + trackItem.path
+                    source: root.coverSource(trackItem.path)
                     fillMode: Image.PreserveAspectCrop
                     sourceSize: Qt.size(40, 40)
                     asynchronous: true

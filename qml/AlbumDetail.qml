@@ -24,7 +24,7 @@ Item {
                 color: sysPalette.mid
                 Image {
                     anchors.fill: parent
-                    source: root.selectedAlbumPath ? "image://cover/" + root.selectedAlbumPath : ""
+                    source: root.coverSource(root.selectedAlbumPath)
                     sourceSize: Qt.size(220, 220)
                     fillMode: Image.PreserveAspectCrop
                 }
