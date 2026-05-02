@@ -52,12 +52,11 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     if (source.isNull()) {
         source = CoverExtractor::loadCover(path);
         if (source.isNull()) {
-            QImage placeholder(1, 1, QImage::Format_RGBA8888);
-            placeholder.fill(Qt::transparent);
-            if (size) *size = placeholder.size();
-            return placeholder;
-        }
-        if (source.width() > kSourceMaxEdge || source.height() > kSourceMaxEdge) {
+            // Cache a tiny transparent placeholder so we don't hit TagLib again
+            // for files that have no embedded artwork or sidecar image.
+            source = QImage(1, 1, QImage::Format_RGBA8888);
+            source.fill(Qt::transparent);
+        } else if (source.width() > kSourceMaxEdge || source.height() > kSourceMaxEdge) {
             source = source.scaled(kSourceMaxEdge, kSourceMaxEdge,
                                    Qt::KeepAspectRatio, Qt::SmoothTransformation);
         }
