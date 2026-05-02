@@ -256,15 +256,44 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     auto *scanner = new LibraryScanner(path);
     scanner->moveToThread(thread);
 
+    m_scanProgresses.insert(scanner, qMakePair(0, 0));
+    emit scanProgressChanged();
+
     connect(thread, &QThread::started, scanner, &LibraryScanner::run);
+
+    connect(scanner, &LibraryScanner::countDetermined, this,
+            [this, scanner](int total) {
+                auto it = m_scanProgresses.find(scanner);
+                if (it == m_scanProgresses.end()) return;
+                it->second = total;
+                emit scanProgressChanged();
+            });
+
+    connect(scanner, &LibraryScanner::progress, this,
+            [this, scanner](int processed, int total) {
+                auto it = m_scanProgresses.find(scanner);
+                if (it == m_scanProgresses.end()) return;
+                it->first  = processed;
+                it->second = total;
+                emit scanProgressChanged();
+            });
+
+    connect(scanner, &LibraryScanner::batchReady, this, [this]() {
+        m_trackModel->select();
+        refreshAlbumModel();
+        refreshArtistModel();
+    });
+
     connect(scanner, &LibraryScanner::finished, this,
-            [this, path, thread](const QList<Track> &newTracks) {
+            [this, path, scanner, thread](const QList<Track> &newTracks) {
                 for (const Track &t : newTracks) m_queue.addTrack(t);
                 m_queueModel->resetAll();
                 m_trackModel->select();
                 refreshAlbumModel();
                 refreshArtistModel();
                 if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
+                m_scanProgresses.remove(scanner);
+                emit scanProgressChanged();
                 thread->quit();
             });
     connect(thread, &QThread::finished, scanner, &QObject::deleteLater);
@@ -388,6 +417,22 @@ void PlayerBackend::refreshAlbumModel() {
 
 void PlayerBackend::refreshArtistModel() {
     m_artistModel->refresh();
+}
+
+int PlayerBackend::scanProgress() const {
+    int sum = 0;
+    for (auto it = m_scanProgresses.cbegin(); it != m_scanProgresses.cend(); ++it) {
+        sum += it.value().first;
+    }
+    return sum;
+}
+
+int PlayerBackend::scanTotal() const {
+    int sum = 0;
+    for (auto it = m_scanProgresses.cbegin(); it != m_scanProgresses.cend(); ++it) {
+        sum += it.value().second;
+    }
+    return sum;
 }
 
 void PlayerBackend::clearLibrary() {

@@ -199,6 +199,25 @@ QString LibraryScanner::makeTechInfo(const QString &filePath, int sampleRate, in
 
 void LibraryScanner::run() {
     if (m_rootPath.isEmpty()) {
+        emit countDetermined(0);
+        emit finished({});
+        return;
+    }
+
+    constexpr int kBatchSize = 30;
+
+    // Phase 1: enumerate files so we can report a meaningful progress total.
+    QStringList allFiles;
+    {
+        QDirIterator it(m_rootPath,
+                        {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
+                        QDir::Files,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) allFiles.append(it.next());
+    }
+    emit countDetermined(allFiles.size());
+
+    if (allFiles.isEmpty()) {
         emit finished({});
         return;
     }
@@ -215,33 +234,30 @@ void LibraryScanner::run() {
             return;
         }
 
-        if (!db.transaction()) {
-            qWarning() << "[Scan] BEGIN failed:" << db.lastError().text();
-        }
-
         QSqlQuery q(db);
         q.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
             "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
-        QDirIterator it(m_rootPath,
-                        {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
-                        QDir::Files,
-                        QDirIterator::Subdirectories);
+        if (!db.transaction()) {
+            qWarning() << "[Scan] BEGIN failed:" << db.lastError().text();
+        }
+        int batchInTx = 0;
+        int processed = 0;
 
-        while (it.hasNext()) {
-            const QString filePath = it.next();
+        for (const QString &filePath : allFiles) {
             const QByteArray pathBytes = filePath.toUtf8();
             TagLib::FileRef f(pathBytes.constData());
 
-            QString title = it.fileName();
+            QFileInfo info(filePath);
+            QString title = info.fileName();
             QString artist = QStringLiteral("Unknown Artist");
             QString album = QStringLiteral("Unknown Album");
             QString techInfo;
             int duration = 0;
             int trackNo = 0;
-            const qint64 fileSize = it.fileInfo().size();
+            const qint64 fileSize = info.size();
 
             if (!f.isNull()) {
                 if (auto *tag = f.tag()) {
@@ -277,9 +293,21 @@ void LibraryScanner::run() {
                 MusicLibrary::linkTrackToArtists(db, q.lastInsertId().toLongLong(), artist);
                 newTracks.append({filePath, title, artist, album, duration, techInfo, trackNo});
             }
+
+            ++processed;
+            ++batchInTx;
+            emit progress(processed, allFiles.size());
+
+            if (batchInTx >= kBatchSize) {
+                db.commit();
+                emit batchReady();
+                db.transaction();
+                batchInTx = 0;
+            }
         }
 
         db.commit();
+        emit batchReady();
         db.close();
     }
     QSqlDatabase::removeDatabase(connName);

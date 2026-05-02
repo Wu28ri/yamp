@@ -8,12 +8,16 @@
 #include "TrackQueue.h"
 
 #include <QAbstractItemModel>
+#include <QHash>
 #include <QObject>
+#include <QPair>
 #include <QString>
 #include <QUrl>
 
 #include <QtMultimedia/QAudioOutput>
 #include <QtMultimedia/QMediaPlayer>
+
+class LibraryScanner;
 
 class PlayerBackend : public QObject {
     Q_OBJECT
@@ -37,6 +41,10 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(QAbstractItemModel* albumModel  READ albumModel  CONSTANT)
     Q_PROPERTY(QAbstractItemModel* artistModel READ artistModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* queueModel  READ queueModel  CONSTANT)
+
+    Q_PROPERTY(bool scanInProgress READ scanInProgress NOTIFY scanProgressChanged)
+    Q_PROPERTY(int  scanProgress   READ scanProgress   NOTIFY scanProgressChanged)
+    Q_PROPERTY(int  scanTotal      READ scanTotal      NOTIFY scanProgressChanged)
 
 public:
     explicit PlayerBackend(QObject *parent = nullptr);
@@ -62,6 +70,10 @@ public:
     QAbstractItemModel* albumModel()  const { return m_albumModel; }
     QAbstractItemModel* artistModel() const { return m_artistModel; }
     QAbstractItemModel* queueModel()  const { return m_queueModel; }
+
+    bool scanInProgress() const { return !m_scanProgresses.isEmpty(); }
+    int  scanProgress()   const;
+    int  scanTotal()      const;
 
     void setMuted(bool muted);
     void setVolume(qreal v);
@@ -96,6 +108,7 @@ signals:
     void durationChanged();
     void currentIndexChanged();
     void currentQueuePositionChanged();
+    void scanProgressChanged();
 
 private:
     void initDatabase();
@@ -125,4 +138,7 @@ private:
     QString m_filterClause;
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
+
+    // Aggregated scan progress: scanner pointer -> (processed, total).
+    QHash<LibraryScanner*, QPair<int, int>> m_scanProgresses;
 };

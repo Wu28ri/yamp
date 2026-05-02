@@ -16,6 +16,13 @@ public:
     void run();
 
 signals:
+    // Total file count once enumeration finishes (phase 1).
+    void countDetermined(int totalFiles);
+    // Progress through phase 2 file processing.
+    void progress(int processed, int total);
+    // A batch of inserts has been committed; UI may now query DB and see them.
+    void batchReady();
+    // Scan finished, with the full list of newly inserted tracks.
     void finished(const QList<Track> &newTracks);
 
 private:
