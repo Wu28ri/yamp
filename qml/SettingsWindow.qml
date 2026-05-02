@@ -34,6 +34,9 @@ Window {
             TabButton {
                 text: "Library"
             }
+            TabButton {
+                text: "Performance"
+            }
         }
 
         StackLayout {
@@ -129,6 +132,117 @@ Window {
                         onClicked: appSettings.rescanDatabase()
                     }
                 }
+            }
+
+            ColumnLayout {
+                id: performanceTab
+                spacing: 18
+
+                Label {
+                    text: "Cover Art Cache"
+                    font.pixelSize: 16
+                    font.bold: true
+                    color: sysPalette.text
+                }
+
+                Label {
+                    text: "Lower values reduce memory usage at the cost of more disk reads while scrolling. Changing the resolution clears the in-memory cache."
+                    color: sysPalette.windowText
+                    opacity: 0.7
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Label {
+                        text: "Cover resolution"
+                        color: sysPalette.text
+                        Layout.preferredWidth: 180
+                    }
+
+                    ComboBox {
+                        id: edgeBox
+                        Layout.preferredWidth: 120
+                        model: [128, 192, 256, 384, 512, 768, 1024]
+                        function syncFromSettings() {
+                            const idx = model.indexOf(appSettings.coverMaxEdge)
+                            currentIndex = idx >= 0 ? idx : 3
+                        }
+                        Component.onCompleted: syncFromSettings()
+                        onActivated: appSettings.coverMaxEdge = model[currentIndex]
+                    }
+
+                    Label {
+                        text: edgeBox.model[edgeBox.currentIndex] + " px"
+                        color: sysPalette.windowText
+                        opacity: 0.6
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Label {
+                        text: "Source cache"
+                        color: sysPalette.text
+                        Layout.preferredWidth: 180
+                    }
+
+                    SpinBox {
+                        id: sourceBudgetBox
+                        Layout.preferredWidth: 120
+                        from: 4
+                        to: 1024
+                        stepSize: 4
+                        value: appSettings.coverSourceBudgetMb
+                        onValueModified: appSettings.coverSourceBudgetMb = value
+                    }
+
+                    Label {
+                        text: "MB"
+                        color: sysPalette.windowText
+                        opacity: 0.6
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Label {
+                        text: "Scaled cache"
+                        color: sysPalette.text
+                        Layout.preferredWidth: 180
+                    }
+
+                    SpinBox {
+                        id: scaledBudgetBox
+                        Layout.preferredWidth: 120
+                        from: 2
+                        to: 512
+                        stepSize: 2
+                        value: appSettings.coverScaledBudgetMb
+                        onValueModified: appSettings.coverScaledBudgetMb = value
+                    }
+
+                    Label {
+                        text: "MB"
+                        color: sysPalette.windowText
+                        opacity: 0.6
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                Item { Layout.fillHeight: true }
             }
         }
     }

@@ -14,6 +14,9 @@ class Settings : public QObject {
     Q_PROPERTY(int     sidebarWidth      READ sidebarWidth      WRITE setSidebarWidth      NOTIFY sidebarWidthChanged)
     Q_PROPERTY(int     queuePanelWidth   READ queuePanelWidth   WRITE setQueuePanelWidth   NOTIFY queuePanelWidthChanged)
     Q_PROPERTY(bool    queuePanelOpen    READ queuePanelOpen    WRITE setQueuePanelOpen    NOTIFY queuePanelOpenChanged)
+    Q_PROPERTY(int     coverMaxEdge        READ coverMaxEdge        WRITE setCoverMaxEdge        NOTIFY coverMaxEdgeChanged)
+    Q_PROPERTY(int     coverSourceBudgetMb READ coverSourceBudgetMb WRITE setCoverSourceBudgetMb NOTIFY coverSourceBudgetMbChanged)
+    Q_PROPERTY(int     coverScaledBudgetMb READ coverScaledBudgetMb WRITE setCoverScaledBudgetMb NOTIFY coverScaledBudgetMbChanged)
 
 public:
     explicit Settings(QObject *parent = nullptr);
@@ -27,6 +30,9 @@ public:
     int     sidebarWidth()      const { return m_sidebarWidth; }
     int     queuePanelWidth()   const { return m_queuePanelWidth; }
     bool    queuePanelOpen()    const { return m_queuePanelOpen; }
+    int     coverMaxEdge()        const { return m_coverMaxEdge; }
+    int     coverSourceBudgetMb() const { return m_coverSourceBudgetMb; }
+    int     coverScaledBudgetMb() const { return m_coverScaledBudgetMb; }
 
     void setVolume(qreal v);
     void setShuffle(bool s);
@@ -35,6 +41,9 @@ public:
     void setSidebarWidth(int w);
     void setQueuePanelWidth(int w);
     void setQueuePanelOpen(bool open);
+    void setCoverMaxEdge(int edge);
+    void setCoverSourceBudgetMb(int mb);
+    void setCoverScaledBudgetMb(int mb);
 
 public slots:
     void addFolder(const QUrl &folderUrl);
@@ -54,6 +63,9 @@ signals:
     void sidebarWidthChanged();
     void queuePanelWidthChanged();
     void queuePanelOpenChanged();
+    void coverMaxEdgeChanged();
+    void coverSourceBudgetMbChanged();
+    void coverScaledBudgetMbChanged();
 
 private:
     QStringList m_folders;
@@ -66,6 +78,9 @@ private:
     int     m_sidebarWidth      = 250;
     int     m_queuePanelWidth   = 320;
     bool    m_queuePanelOpen    = false;
+    int     m_coverMaxEdge        = 384;
+    int     m_coverSourceBudgetMb = 48;
+    int     m_coverScaledBudgetMb = 16;
 
     void loadSettings();
     void saveFolders();

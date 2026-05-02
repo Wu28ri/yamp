@@ -87,15 +87,39 @@ void Settings::setQueuePanelOpen(bool open) {
     emit queuePanelOpenChanged();
 }
 
+void Settings::setCoverMaxEdge(int edge) {
+    if (edge <= 0 || m_coverMaxEdge == edge) return;
+    m_coverMaxEdge = edge;
+    m_settings.setValue("coverMaxEdge", edge);
+    emit coverMaxEdgeChanged();
+}
+
+void Settings::setCoverSourceBudgetMb(int mb) {
+    if (mb <= 0 || m_coverSourceBudgetMb == mb) return;
+    m_coverSourceBudgetMb = mb;
+    m_settings.setValue("coverSourceBudgetMb", mb);
+    emit coverSourceBudgetMbChanged();
+}
+
+void Settings::setCoverScaledBudgetMb(int mb) {
+    if (mb <= 0 || m_coverScaledBudgetMb == mb) return;
+    m_coverScaledBudgetMb = mb;
+    m_settings.setValue("coverScaledBudgetMb", mb);
+    emit coverScaledBudgetMbChanged();
+}
+
 void Settings::loadSettings() {
-    m_folders           = m_settings.value("musicFolders", QStringList()).toStringList();
-    m_volume            = m_settings.value("volume",            1.0).toReal();
-    m_shuffle           = m_settings.value("shuffle",           false).toBool();
-    m_lastTrackPath     = m_settings.value("lastTrackPath",     QString()).toString();
-    m_lastTrackPosition = m_settings.value("lastTrackPosition", 0).toLongLong();
-    m_sidebarWidth      = m_settings.value("sidebarWidth",      250).toInt();
-    m_queuePanelWidth   = m_settings.value("queuePanelWidth",   320).toInt();
-    m_queuePanelOpen    = m_settings.value("queuePanelOpen",    false).toBool();
+    m_folders             = m_settings.value("musicFolders", QStringList()).toStringList();
+    m_volume              = m_settings.value("volume",              1.0).toReal();
+    m_shuffle             = m_settings.value("shuffle",             false).toBool();
+    m_lastTrackPath       = m_settings.value("lastTrackPath",       QString()).toString();
+    m_lastTrackPosition   = m_settings.value("lastTrackPosition",   0).toLongLong();
+    m_sidebarWidth        = m_settings.value("sidebarWidth",        250).toInt();
+    m_queuePanelWidth     = m_settings.value("queuePanelWidth",     320).toInt();
+    m_queuePanelOpen      = m_settings.value("queuePanelOpen",      false).toBool();
+    m_coverMaxEdge        = m_settings.value("coverMaxEdge",        384).toInt();
+    m_coverSourceBudgetMb = m_settings.value("coverSourceBudgetMb", 48).toInt();
+    m_coverScaledBudgetMb = m_settings.value("coverScaledBudgetMb", 16).toInt();
 }
 
 void Settings::saveFolders() {

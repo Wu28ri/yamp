@@ -77,7 +77,22 @@ int main(int argc, char *argv[]) {
                      []() { QCoreApplication::exit(-1); },
                      Qt::QueuedConnection);
 
-    engine.addImageProvider(QStringLiteral("cover"), new CoverImageProvider);
+    auto *coverProvider = new CoverImageProvider;
+    coverProvider->setMaxEdge(settings.coverMaxEdge());
+    coverProvider->setSourceBudgetKb(settings.coverSourceBudgetMb() * 1024);
+    coverProvider->setScaledBudgetKb(settings.coverScaledBudgetMb() * 1024);
+    engine.addImageProvider(QStringLiteral("cover"), coverProvider);
+
+    QObject::connect(&settings, &Settings::coverMaxEdgeChanged, &settings, [coverProvider, &settings]() {
+        coverProvider->setMaxEdge(settings.coverMaxEdge());
+    });
+    QObject::connect(&settings, &Settings::coverSourceBudgetMbChanged, &settings, [coverProvider, &settings]() {
+        coverProvider->setSourceBudgetKb(settings.coverSourceBudgetMb() * 1024);
+    });
+    QObject::connect(&settings, &Settings::coverScaledBudgetMbChanged, &settings, [coverProvider, &settings]() {
+        coverProvider->setScaledBudgetKb(settings.coverScaledBudgetMb() * 1024);
+    });
+
     engine.loadFromModule(QStringLiteral("yamp"), QStringLiteral("Main"));
 
     return app.exec();
