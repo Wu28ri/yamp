@@ -35,23 +35,6 @@ GridView {
         }
     }
 
-    function colorForName(name) {
-        if (!name) return Qt.hsla(0.6, 0.35, 0.5, 1.0)
-        let h = 0
-        for (let i = 0; i < name.length; ++i) {
-            h = (h * 31 + name.charCodeAt(i)) >>> 0
-        }
-        const hue = (h % 360) / 360.0
-        return Qt.hsla(hue, 0.45, 0.5, 1.0)
-    }
-
-    function initialsForName(name) {
-        if (!name) return "?"
-        const parts = name.trim().split(/\s+/)
-        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase()
-        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    }
-
     delegate: Item {
         id: tile
         width: artistsGrid.cellWidth
@@ -72,7 +55,7 @@ GridView {
                 Layout.preferredHeight: width
                 Layout.alignment: Qt.AlignHCenter
                 radius: width / 2
-                color: artistsGrid.colorForName(tile.artist)
+                color: root.colorForName(tile.artist)
 
                 scale: artistClickArea.containsMouse ? 1.03 : 1.0
                 Behavior on scale { NumberAnimation { duration: 150 } }
@@ -80,7 +63,7 @@ GridView {
 
                 Text {
                     anchors.centerIn: parent
-                    text: artistsGrid.initialsForName(tile.artist)
+                    text: root.initialsForName(tile.artist)
                     color: "white"
                     font.pixelSize: Math.round(parent.width * 0.32)
                     font.bold: true

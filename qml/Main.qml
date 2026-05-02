@@ -19,6 +19,23 @@ Window {
         return path ? "image://cover/" + encodeURI(path) : ""
     }
 
+    function colorForName(name) {
+        if (!name) return Qt.hsla(0.6, 0.35, 0.5, 1.0)
+        let h = 0
+        for (let i = 0; i < name.length; ++i) {
+            h = (h * 31 + name.charCodeAt(i)) >>> 0
+        }
+        const hue = (h % 360) / 360.0
+        return Qt.hsla(hue, 0.45, 0.5, 1.0)
+    }
+
+    function initialsForName(name) {
+        if (!name) return "?"
+        const parts = name.trim().split(/\s+/)
+        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase()
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    }
+
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
     SettingsWindow {

@@ -8,23 +8,6 @@ Item {
 
     Component.onCompleted: playerBackend.filterByArtist(root.selectedArtist)
 
-    function colorForName(name) {
-        if (!name) return Qt.hsla(0.6, 0.35, 0.5, 1.0)
-        let h = 0
-        for (let i = 0; i < name.length; ++i) {
-            h = (h * 31 + name.charCodeAt(i)) >>> 0
-        }
-        const hue = (h % 360) / 360.0
-        return Qt.hsla(hue, 0.45, 0.5, 1.0)
-    }
-
-    function initialsForName(name) {
-        if (!name) return "?"
-        const parts = name.trim().split(/\s+/)
-        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase()
-        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -38,11 +21,11 @@ Item {
             Rectangle {
                 width: 220; height: 220
                 radius: width / 2
-                color: artistDetailRoot.colorForName(root.selectedArtist)
+                color: root.colorForName(root.selectedArtist)
 
                 Text {
                     anchors.centerIn: parent
-                    text: artistDetailRoot.initialsForName(root.selectedArtist)
+                    text: root.initialsForName(root.selectedArtist)
                     color: "white"
                     font.pixelSize: 80
                     font.bold: true
