@@ -100,8 +100,12 @@ void PlayerBackend::setMuted(bool muted) {
 }
 
 void PlayerBackend::setVolume(qreal v) {
-    if (qFuzzyCompare(m_audioOutput->volume(), static_cast<float>(v))) return;
-    m_audioOutput->setVolume(v);
+    const float curr = m_audioOutput->volume();
+    const float next = static_cast<float>(v);
+    const bool same = (qFuzzyIsNull(curr) && qFuzzyIsNull(next))
+                       || qFuzzyCompare(curr, next);
+    if (same) return;
+    m_audioOutput->setVolume(next);
     emit volumeChanged();
 }
 
