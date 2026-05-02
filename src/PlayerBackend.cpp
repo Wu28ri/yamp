@@ -19,11 +19,17 @@
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 
+namespace {
+const QString kDefaultTitle  = QStringLiteral("N/A");
+const QString kDefaultArtist = QStringLiteral("Unknown Artist");
+const QString kDefaultAlbum  = QStringLiteral("Unknown Album");
+}
+
 PlayerBackend::PlayerBackend(QObject *parent)
     : QObject(parent),
-      m_currentTitle(QStringLiteral("N/A")),
-      m_currentArtist(QStringLiteral("Unknown Artist")),
-      m_currentAlbum(QStringLiteral("Unknown Album")) {
+      m_currentTitle(kDefaultTitle),
+      m_currentArtist(kDefaultArtist),
+      m_currentAlbum(kDefaultAlbum) {
 
     initDatabase();
 
@@ -41,20 +47,14 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_queueModel = new QueueModel(&m_queue, this);
 
     m_libraryWatcher = new LibraryWatcher(this);
-    connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this, [this]() {
-        m_trackModel->select();
-        refreshAlbumModel();
-        refreshArtistModel();
-    });
+    connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this,
+            &PlayerBackend::refreshAllModels);
 
     m_scanRefreshTimer = new QTimer(this);
     m_scanRefreshTimer->setSingleShot(true);
     m_scanRefreshTimer->setInterval(750);
-    connect(m_scanRefreshTimer, &QTimer::timeout, this, [this]() {
-        m_trackModel->select();
-        refreshAlbumModel();
-        refreshArtistModel();
-    });
+    connect(m_scanRefreshTimer, &QTimer::timeout, this,
+            &PlayerBackend::refreshAllModels);
 
     m_player      = new QMediaPlayer(this);
     m_audioOutput = new QAudioOutput(this);
@@ -296,9 +296,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
                 if (m_scanRefreshTimer->isActive()) m_scanRefreshTimer->stop();
                 for (const Track &t : newTracks) m_queue.addTrack(t);
                 m_queueModel->resetAll();
-                m_trackModel->select();
-                refreshAlbumModel();
-                refreshArtistModel();
+                refreshAllModels();
                 if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
                 m_scanProgresses.remove(scanner);
                 emit scanProgressChanged();
@@ -427,6 +425,26 @@ void PlayerBackend::refreshArtistModel() {
     m_artistModel->refresh();
 }
 
+void PlayerBackend::refreshAllModels() {
+    m_trackModel->select();
+    refreshAlbumModel();
+    refreshArtistModel();
+}
+
+void PlayerBackend::resetPlaybackState() {
+    m_player->stop();
+    m_player->setSource(QUrl());
+    m_currentPath.clear();
+    m_currentTitle    = kDefaultTitle;
+    m_currentArtist   = kDefaultArtist;
+    m_currentAlbum    = kDefaultAlbum;
+    m_currentTechInfo.clear();
+    m_currentCoverPath.clear();
+    m_currentIndex    = -1;
+    emit metadataChanged();
+    emit currentIndexChanged();
+}
+
 int PlayerBackend::scanProgress() const {
     int sum = 0;
     for (auto it = m_scanProgresses.cbegin(); it != m_scanProgresses.cend(); ++it) {
@@ -444,16 +462,7 @@ int PlayerBackend::scanTotal() const {
 }
 
 void PlayerBackend::clearLibrary() {
-    m_player->stop();
-    m_player->setSource(QUrl());
-
-    m_currentPath.clear();
-    m_currentTitle    = QStringLiteral("N/A");
-    m_currentArtist   = QStringLiteral("Unknown Artist");
-    m_currentAlbum    = QStringLiteral("Unknown Album");
-    m_currentTechInfo.clear();
-    m_currentCoverPath.clear();
-    m_currentIndex    = -1;
+    resetPlaybackState();
 
     m_queue.setTracks({});
     m_queueModel->resetAll();
@@ -471,12 +480,8 @@ void PlayerBackend::clearLibrary() {
 
     m_filterClause.clear();
     m_trackModel->setFilter(QString());
-    m_trackModel->select();
-    refreshAlbumModel();
-    refreshArtistModel();
+    refreshAllModels();
 
-    emit metadataChanged();
-    emit currentIndexChanged();
     emit currentQueuePositionChanged();
 }
 
@@ -504,22 +509,10 @@ void PlayerBackend::removeFolder(const QString &folder) {
     const bool currentInRemoved = !m_currentPath.isEmpty() &&
                                   (m_currentPath == clean || m_currentPath.startsWith(prefix));
     if (currentInRemoved) {
-        m_player->stop();
-        m_player->setSource(QUrl());
-        m_currentPath.clear();
-        m_currentTitle    = QStringLiteral("N/A");
-        m_currentArtist   = QStringLiteral("Unknown Artist");
-        m_currentAlbum    = QStringLiteral("Unknown Album");
-        m_currentTechInfo.clear();
-        m_currentCoverPath.clear();
-        m_currentIndex    = -1;
-        emit metadataChanged();
-        emit currentIndexChanged();
+        resetPlaybackState();
     }
 
-    m_trackModel->select();
-    refreshAlbumModel();
-    refreshArtistModel();
+    refreshAllModels();
 
     rebuildQueueFromCurrentFilter();
     emit currentQueuePositionChanged();

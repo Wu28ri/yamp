@@ -117,6 +117,8 @@ private:
     void rebuildQueueFromCurrentFilter();
     void refreshAlbumModel();
     void refreshArtistModel();
+    void refreshAllModels();
+    void resetPlaybackState();
     QList<Track> queryTracks(const QString &whereClause = {});
     static QString tempCoverPathForExt(const QString &ext);
     void setupMpris();
