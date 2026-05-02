@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QSqlTableModel>
 
 class TrackModel : public QSqlTableModel {
@@ -38,4 +39,8 @@ public:
 
 private:
     static int columnForRole(int role);
+    void ensurePathIndex();
+
+    QHash<QString, int> m_pathRowCache;
+    bool m_pathCacheValid = false;
 };
