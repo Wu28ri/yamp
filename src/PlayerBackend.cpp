@@ -310,8 +310,11 @@ void PlayerBackend::searchTracks(const QString &query) {
         m_trackModel->setFilter({});
     } else {
         QString safe = query.toLower();
+        safe.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+        safe.replace(QLatin1Char('%'),  QLatin1String("\\%"));
+        safe.replace(QLatin1Char('_'),  QLatin1String("\\_"));
         safe.replace(QLatin1Char('\''), QLatin1String("''"));
-        m_filterClause = QStringLiteral("search_text LIKE '%%%1%%'").arg(safe);
+        m_filterClause = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
         m_trackModel->setFilter(m_filterClause);
     }
     m_trackModel->select();
