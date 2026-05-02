@@ -16,7 +16,7 @@ Window {
     property string selectedArtist: ""
 
     function coverSource(path) {
-        return path ? "image://cover/" + path : ""
+        return path ? "image://cover/" + encodeURI(path) : ""
     }
 
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
