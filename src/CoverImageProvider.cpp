@@ -49,11 +49,13 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         if (auto *entry = m_sources.object(sourceKey)) source = entry->image;
     }
 
+    bool isPlaceholder = false;
     if (source.isNull()) {
         source = CoverExtractor::loadCover(path);
         if (source.isNull()) {
             source = QImage(1, 1, QImage::Format_RGBA8888);
             source.fill(Qt::transparent);
+            isPlaceholder = true;
         } else if (source.width() > kSourceMaxEdge || source.height() > kSourceMaxEdge) {
             source = source.scaled(kSourceMaxEdge, kSourceMaxEdge,
                                    Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -61,17 +63,19 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         const int kb = qMax(1, static_cast<int>(source.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
         m_sources.insert(sourceKey, new Entry{source, kb}, kb);
+    } else {
+        isPlaceholder = (source.width() == 1 && source.height() == 1);
     }
 
     QImage out = source;
-    if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
+    if (!isPlaceholder && reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
         out = source.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
 
     if (size) *size = out.size();
 
-    const int kb = qMax(1, static_cast<int>(out.sizeInBytes() / 1024));
-    {
+    if (!isPlaceholder) {
+        const int kb = qMax(1, static_cast<int>(out.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
         m_scaled.insert(scaledKey, new Entry{out, kb}, kb);
     }
