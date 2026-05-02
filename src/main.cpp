@@ -6,6 +6,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QTimer>
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -23,6 +24,9 @@ int main(int argc, char *argv[]) {
     PlayerBackend backend;
     Settings settings;
 
+    backend.setVolume(settings.volume());
+    backend.setShuffle(settings.shuffle());
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), &settings);
@@ -35,6 +39,37 @@ int main(int argc, char *argv[]) {
 
     QObject::connect(&settings, &Settings::requestClearDatabase,
                      &backend, &PlayerBackend::clearLibrary);
+
+    QObject::connect(&backend, &PlayerBackend::volumeChanged, &settings,
+                     [&]() { settings.setVolume(backend.volume()); });
+
+    QObject::connect(&backend, &PlayerBackend::shuffleChanged, &settings,
+                     [&]() { settings.setShuffle(backend.shuffle()); });
+
+    auto *positionSaveTimer = new QTimer(&app);
+    positionSaveTimer->setSingleShot(true);
+    positionSaveTimer->setInterval(2000);
+    QObject::connect(positionSaveTimer, &QTimer::timeout, &settings, [&]() {
+        if (!backend.currentPath().isEmpty()) {
+            settings.setLastTrackPath(backend.currentPath());
+            settings.setLastTrackPosition(backend.position());
+        }
+    });
+    QObject::connect(&backend, &PlayerBackend::positionChanged, positionSaveTimer,
+                     [positionSaveTimer]() {
+                         if (!positionSaveTimer->isActive()) positionSaveTimer->start();
+                     });
+    QObject::connect(&backend, &PlayerBackend::metadataChanged, &settings, [&]() {
+        if (!backend.currentPath().isEmpty()) {
+            settings.setLastTrackPath(backend.currentPath());
+        }
+    });
+    QObject::connect(&app, &QGuiApplication::aboutToQuit, &settings, [&]() {
+        if (!backend.currentPath().isEmpty()) {
+            settings.setLastTrackPath(backend.currentPath());
+            settings.setLastTrackPosition(backend.position());
+        }
+    });
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

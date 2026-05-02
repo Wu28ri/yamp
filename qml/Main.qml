@@ -59,10 +59,21 @@ Window {
             }
 
             SideBar {
-                SplitView.preferredWidth: 250
+                id: sideBar
+                SplitView.preferredWidth: appSettings.sidebarWidth
                 SplitView.minimumWidth: 150
                 SplitView.maximumWidth: 400
                 onSettingsClicked: settingsWindow.show()
+
+                onWidthChanged: sidebarSaveTimer.restart()
+            }
+
+            Timer {
+                id: sidebarSaveTimer
+                interval: 400
+                onTriggered: {
+                    if (sideBar.width >= 50) appSettings.sidebarWidth = sideBar.width
+                }
             }
 
             Loader {
@@ -79,9 +90,23 @@ Window {
 
             QueuePanel {
                 id: queuePanel
-                SplitView.preferredWidth: opened ? 320 : 0
+                SplitView.preferredWidth: opened ? appSettings.queuePanelWidth : 0
                 SplitView.minimumWidth: opened ? 200 : 0
                 SplitView.maximumWidth: 600
+                opened: appSettings.queuePanelOpen
+
+                onWidthChanged: if (opened) queueSaveTimer.restart()
+                onOpenedChanged: appSettings.queuePanelOpen = opened
+            }
+
+            Timer {
+                id: queueSaveTimer
+                interval: 400
+                onTriggered: {
+                    if (queuePanel.opened && queuePanel.width >= 100) {
+                        appSettings.queuePanelWidth = queuePanel.width
+                    }
+                }
             }
         }
 
