@@ -16,12 +16,15 @@ MprisRootAdaptor::MprisRootAdaptor(PlayerBackend *backend)
 MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
     : QDBusAbstractAdaptor(backend), m_backend(backend) {
 
-    auto pushMetadata = [this] {
+    m_metadataTimer = new QTimer(this);
+    m_metadataTimer->setSingleShot(true);
+    m_metadataTimer->setInterval(50);
+    connect(m_metadataTimer, &QTimer::timeout, this, [this]() {
         emitProperties({{QStringLiteral("Metadata"), metadata()}});
-    };
+    });
 
-    connect(m_backend, &PlayerBackend::metadataChanged, this, pushMetadata);
-    connect(m_backend, &PlayerBackend::durationChanged, this, pushMetadata);
+    connect(m_backend, &PlayerBackend::metadataChanged, this, &MprisPlayerAdaptor::scheduleMetadataPush);
+    connect(m_backend, &PlayerBackend::durationChanged, this, &MprisPlayerAdaptor::scheduleMetadataPush);
 
     connect(m_backend, &PlayerBackend::playbackStateChanged, this, [this]() {
         emitProperties({{QStringLiteral("PlaybackStatus"), playbackStatus()}});
@@ -30,6 +33,10 @@ MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
     connect(m_backend, &PlayerBackend::volumeChanged, this, [this]() {
         emitProperties({{QStringLiteral("Volume"), volume()}});
     });
+}
+
+void MprisPlayerAdaptor::scheduleMetadataPush() {
+    if (!m_metadataTimer->isActive()) m_metadataTimer->start();
 }
 
 void MprisPlayerAdaptor::emitProperties(const QVariantMap &props) {

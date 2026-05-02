@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDBusAbstractAdaptor>
 #include <QStringList>
+#include <QTimer>
 #include <QVariantMap>
 #include <QtDBus/QDBusObjectPath>
 
@@ -90,6 +91,8 @@ signals:
 
 private:
     void emitProperties(const QVariantMap &props);
+    void scheduleMetadataPush();
 
     PlayerBackend *m_backend;
+    QTimer *m_metadataTimer = nullptr;
 };
