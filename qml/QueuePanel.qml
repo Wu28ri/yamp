@@ -84,8 +84,6 @@ Rectangle {
             model: playerBackend.queueModel
 
             property bool ignoreNextScroll: false
-            property int  dragSourceIndex: -1
-            property int  dragTargetIndex: -1
 
             Connections {
                 target: playerBackend
@@ -124,35 +122,21 @@ Rectangle {
 
                     property bool wasDragged: false
 
-                    onPressed: {
-                        wasDragged = false
-                        queueList.dragSourceIndex = delegateRoot.index
-                        queueList.dragTargetIndex = delegateRoot.index
-                    }
+                    onPressed: wasDragged = false
                     onPositionChanged: {
                         if (drag.active) {
                             wasDragged = true
                             const mappedY = contentItem.mapToItem(queueList.contentItem, 0, contentItem.height / 2).y
                             const targetIndex = queueList.indexAt(0, mappedY)
-                            if (targetIndex !== -1) {
-                                queueList.dragTargetIndex = targetIndex
+                            if (targetIndex !== -1 && targetIndex !== delegateRoot.index) {
+                                playerBackend.queueModel.move(delegateRoot.index, targetIndex)
                             }
                         }
                     }
                     onReleased: {
                         if (drag.active) {
-                            const from = queueList.dragSourceIndex
-                            const to   = queueList.dragTargetIndex
                             contentItem.Drag.drop()
                             contentItem.y = 0
-                            queueList.dragSourceIndex = -1
-                            queueList.dragTargetIndex = -1
-                            if (from !== -1 && to !== -1 && from !== to) {
-                                playerBackend.queueModel.move(from, to)
-                            }
-                        } else {
-                            queueList.dragSourceIndex = -1
-                            queueList.dragTargetIndex = -1
                         }
                     }
                     onClicked: {
@@ -246,19 +230,6 @@ Rectangle {
                             }
                         }
                     }
-                }
-
-                Rectangle {
-                    id: dropIndicator
-                    visible: queueList.dragSourceIndex !== -1
-                             && queueList.dragSourceIndex !== delegateRoot.index
-                             && queueList.dragTargetIndex === delegateRoot.index
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: 2
-                    y: queueList.dragSourceIndex < delegateRoot.index ? parent.height - height : 0
-                    color: sysPalette.highlight
-                    z: 50
                 }
             }
         }
