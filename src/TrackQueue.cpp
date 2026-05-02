@@ -25,18 +25,22 @@ void TrackQueue::setTracks(const QList<Track> &tracks) {
         if (identical) return;
     }
     m_tracks = tracks;
+    rebuildPathIndex();
     rebuildPlayOrder();
 }
 
 void TrackQueue::addTrack(const Track &track) {
     m_tracks.append(track);
-    m_playOrder.push_back(static_cast<int>(m_tracks.size()) - 1);
+    const int newId = static_cast<int>(m_tracks.size()) - 1;
+    if (!track.path.isEmpty()) m_pathToGlobalId.insert(track.path, newId);
+    m_playOrder.push_back(newId);
     if (m_currentIndex == -1) m_currentIndex = 0;
 }
 
 void TrackQueue::insertNext(const Track &track) {
     m_tracks.append(track);
     const int newTrackId = static_cast<int>(m_tracks.size()) - 1;
+    if (!track.path.isEmpty()) m_pathToGlobalId.insert(track.path, newTrackId);
 
     if (m_currentIndex >= 0 && m_currentIndex < static_cast<int>(m_playOrder.size())) {
         m_playOrder.insert(m_playOrder.begin() + m_currentIndex + 1, newTrackId);
@@ -90,6 +94,15 @@ void TrackQueue::rebuildPlayOrder() {
     m_currentIndex = m_playOrder.empty() ? -1 : 0;
 }
 
+void TrackQueue::rebuildPathIndex() {
+    m_pathToGlobalId.clear();
+    m_pathToGlobalId.reserve(m_tracks.size());
+    for (int i = 0; i < m_tracks.size(); ++i) {
+        const QString &p = m_tracks[i].path;
+        if (!p.isEmpty()) m_pathToGlobalId.insert(p, i);
+    }
+}
+
 void TrackQueue::setShuffle(bool enabled) {
     if (m_shuffle == enabled) return;
     m_shuffle = enabled;
@@ -107,11 +120,9 @@ void TrackQueue::jumpToPosition(int pos) {
 }
 
 void TrackQueue::setIndexByPath(const QString &path) {
-    int globalId = -1;
-    for (int i = 0; i < m_tracks.size(); ++i) {
-        if (m_tracks[i].path == path) { globalId = i; break; }
-    }
-    if (globalId == -1) return;
+    const auto it = m_pathToGlobalId.constFind(path);
+    if (it == m_pathToGlobalId.constEnd()) return;
+    const int globalId = it.value();
 
     m_playOrder.clear();
     m_playOrder.reserve(m_tracks.size());

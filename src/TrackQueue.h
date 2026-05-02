@@ -2,6 +2,7 @@
 
 #include "Track.h"
 
+#include <QHash>
 #include <QList>
 #include <vector>
 
@@ -39,9 +40,11 @@ public:
 
 private:
     void rebuildPlayOrder();
+    void rebuildPathIndex();
 
     QList<Track> m_tracks;
     std::vector<int> m_playOrder;
+    QHash<QString, int> m_pathToGlobalId;
     int m_currentIndex = -1;
     bool m_shuffle = false;
     RepeatMode m_repeatMode = NoRepeat;
