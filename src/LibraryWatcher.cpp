@@ -51,6 +51,68 @@ bool insertTrackRow(const QString &path) {
     return false;
 }
 
+int insertTrackRowsBatch(const QStringList &paths) {
+    if (paths.isEmpty()) return 0;
+    QSqlDatabase db = QSqlDatabase::database();
+
+    QSqlQuery insertTrack(db);
+    insertTrack.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO tracks "
+        "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+
+    QSqlQuery upsertArtist(db);
+    upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
+    QSqlQuery findArtistId(db);
+    findArtistId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
+    QSqlQuery linkTrackArtist(db);
+    linkTrackArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
+
+    db.transaction();
+    int inserted = 0;
+    for (const QString &path : paths) {
+        Track t;
+        qint64 fileSize = 0;
+        if (!MusicLibrary::readTrackFromFile(path, t, fileSize)) continue;
+
+        const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
+        insertTrack.bindValue(0, t.title);
+        insertTrack.bindValue(1, t.artist);
+        insertTrack.bindValue(2, t.album);
+        insertTrack.bindValue(3, t.path);
+        insertTrack.bindValue(4, t.duration);
+        insertTrack.bindValue(5, searchText);
+        insertTrack.bindValue(6, t.trackNo);
+        insertTrack.bindValue(7, t.techInfo);
+        insertTrack.bindValue(8, fileSize);
+        if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
+            MusicLibrary::linkTrackToArtistsPrepared(
+                insertTrack.lastInsertId().toLongLong(),
+                t.artist,
+                upsertArtist, findArtistId, linkTrackArtist);
+            ++inserted;
+        }
+    }
+    db.commit();
+    return inserted;
+}
+
+int deleteTrackRowsBatch(const QStringList &paths) {
+    if (paths.isEmpty()) return 0;
+    QSqlDatabase db = QSqlDatabase::database();
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
+
+    db.transaction();
+    int removed = 0;
+    for (const QString &p : paths) {
+        del.addBindValue(p);
+        if (del.exec()) removed += del.numRowsAffected();
+    }
+    db.commit();
+    return removed;
+}
+
 bool deleteTrackRow(const QString &path) {
     QSqlQuery q;
     q.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
@@ -326,10 +388,12 @@ void LibraryWatcher::initialReconcile(const QString &root) {
         }
     }
 
+    QStringList toDelete;
     for (const QString &p : removals) {
-        if (!matchedRemovals.contains(p)) deleteTrackRow(p);
+        if (!matchedRemovals.contains(p)) toDelete.append(p);
     }
-    for (const QString &p : unmatchedAdditions) insertTrackRow(p);
+    if (!toDelete.isEmpty()) deleteTrackRowsBatch(toDelete);
+    if (!unmatchedAdditions.isEmpty()) insertTrackRowsBatch(unmatchedAdditions);
 }
 
 void LibraryWatcher::reconcileDirs(const QSet<QString> &dirs) {
@@ -387,13 +451,15 @@ void LibraryWatcher::reconcileDirs(const QSet<QString> &dirs) {
     }
 
     bool changed = !matchedRemovals.isEmpty();
+    QStringList toDelete;
     for (const QString &p : allRemovals) {
-        if (!matchedRemovals.contains(p)) {
-            if (deleteTrackRow(p)) changed = true;
-        }
+        if (!matchedRemovals.contains(p)) toDelete.append(p);
     }
-    for (const QString &p : unmatchedAdditions) {
-        if (insertTrackRow(p)) changed = true;
+    if (!toDelete.isEmpty()) {
+        if (deleteTrackRowsBatch(toDelete) > 0) changed = true;
+    }
+    if (!unmatchedAdditions.isEmpty()) {
+        if (insertTrackRowsBatch(unmatchedAdditions) > 0) changed = true;
     }
 
     if (changed) emit libraryChanged();
