@@ -4,8 +4,13 @@ AlbumModel::AlbumModel(QObject *parent) : QSqlQueryModel(parent) {}
 
 QVariant AlbumModel::data(const QModelIndex &index, int role) const {
     if (role < Qt::UserRole) return QSqlQueryModel::data(index, role);
-    const int column = role - AlbumRole;
-    if (column < 0 || column >= columnCount()) return {};
+    int column = -1;
+    switch (role) {
+    case AlbumRole:  column = 0; break;
+    case ArtistRole: column = 1; break;
+    case PathRole:   column = 2; break;
+    default:         return {};
+    }
     return QSqlQueryModel::data(this->index(index.row(), column), Qt::DisplayRole);
 }
 
