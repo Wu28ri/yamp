@@ -124,8 +124,13 @@ QStringList splitArtists(const QString &raw) {
     const QString trimmed = raw.trimmed();
     if (trimmed.isEmpty()) return result;
 
+    // Punctuation/word splitters are case-insensitive; the literal "x" splitter
+    // is case-sensitive so single-letter artist names like "Mr. X" are not torn
+    // apart while still allowing "Artist x Other" collabs (lowercase "x" only).
     static const QRegularExpression splitter(
-        QStringLiteral(R"(\s*(?:,|;|/|\\|&|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bx\b|×|\bpresents\b|\bwith\b)\s*)"),
+        QStringLiteral(
+            R"(\s*(?:[,;/\\&×]|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bpresents\b|\bwith\b)\s*)"
+            R"(|(?-i:\s+x\s+))"),
         QRegularExpression::CaseInsensitiveOption);
 
     const QStringList parts = trimmed.split(splitter, Qt::SkipEmptyParts);
