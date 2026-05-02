@@ -256,17 +256,18 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     scanner->moveToThread(thread);
 
     connect(thread, &QThread::started, scanner, &LibraryScanner::run);
-    connect(scanner, &LibraryScanner::finished, this, [this, path, scanner, thread](const QList<Track> &newTracks) {
-        for (const Track &t : newTracks) m_queue.addTrack(t);
-        m_queueModel->resetAll();
-        m_trackModel->select();
-        refreshAlbumModel();
-        refreshArtistModel();
-        if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
-        thread->quit();
-        scanner->deleteLater();
-    });
-    connect(thread, &QThread::finished, thread, &QThread::deleteLater);
+    connect(scanner, &LibraryScanner::finished, this,
+            [this, path, thread](const QList<Track> &newTracks) {
+                for (const Track &t : newTracks) m_queue.addTrack(t);
+                m_queueModel->resetAll();
+                m_trackModel->select();
+                refreshAlbumModel();
+                refreshArtistModel();
+                if (m_libraryWatcher) m_libraryWatcher->addRoot(path);
+                thread->quit();
+            });
+    connect(thread, &QThread::finished, scanner, &QObject::deleteLater);
+    connect(thread, &QThread::finished, thread,  &QObject::deleteLater);
 
     thread->start();
 }
