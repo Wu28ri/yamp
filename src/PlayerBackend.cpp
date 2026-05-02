@@ -222,7 +222,8 @@ void PlayerBackend::loadTrack(const Track &t) {
     emit metadataChanged();
 
     const QString trackPath = t.path;
-    QThreadPool::globalInstance()->start([this, trackPath]() {
+    const quint64 gen = ++m_coverGen;
+    QThreadPool::globalInstance()->start([this, trackPath, gen]() {
         const QByteArray data = CoverExtractor::embeddedPicture(trackPath);
         QString resolved;
         if (!data.isEmpty()) {
@@ -238,11 +239,11 @@ void PlayerBackend::loadTrack(const Track &t) {
             resolved = CoverExtractor::sidecarImagePath(trackPath);
         }
 
-        QMetaObject::invokeMethod(this, [this, trackPath, resolved]() {
-            if (m_currentPath == trackPath) {
-                m_currentCoverPath = resolved;
-                emit metadataChanged();
-            }
+        QMetaObject::invokeMethod(this, [this, trackPath, resolved, gen]() {
+            if (gen != m_coverGen) return;
+            if (m_currentPath != trackPath) return;
+            m_currentCoverPath = resolved;
+            emit metadataChanged();
         }, Qt::QueuedConnection);
     });
 }

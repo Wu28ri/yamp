@@ -124,4 +124,5 @@ private:
     QString m_currentCoverPath;
     QString m_filterClause;
     int     m_currentIndex = -1;
+    quint64 m_coverGen     = 0;
 };
