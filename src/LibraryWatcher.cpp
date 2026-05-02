@@ -18,39 +18,6 @@ namespace {
 
 constexpr int kDebounceMs = 350;
 
-bool insertTrackRow(const QString &path) {
-    Track t;
-    qint64 fileSize = 0;
-    if (!MusicLibrary::readTrackFromFile(path, t, fileSize)) return false;
-
-    const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
-
-    QSqlQuery q;
-    q.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO tracks "
-        "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
-    q.addBindValue(t.title);
-    q.addBindValue(t.artist);
-    q.addBindValue(t.album);
-    q.addBindValue(t.path);
-    q.addBindValue(t.duration);
-    q.addBindValue(searchText);
-    q.addBindValue(t.trackNo);
-    q.addBindValue(t.techInfo);
-    q.addBindValue(fileSize);
-    if (!q.exec()) {
-        qWarning() << "[LibraryWatcher] insert failed:" << q.lastError().text() << path;
-        return false;
-    }
-    if (q.numRowsAffected() > 0) {
-        QSqlDatabase db = QSqlDatabase::database();
-        MusicLibrary::linkTrackToArtists(db, q.lastInsertId().toLongLong(), t.artist);
-        return true;
-    }
-    return false;
-}
-
 int insertTrackRowsBatch(const QStringList &paths) {
     if (paths.isEmpty()) return 0;
     QSqlDatabase db = QSqlDatabase::database();
@@ -111,17 +78,6 @@ int deleteTrackRowsBatch(const QStringList &paths) {
     }
     db.commit();
     return removed;
-}
-
-bool deleteTrackRow(const QString &path) {
-    QSqlQuery q;
-    q.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
-    q.addBindValue(path);
-    if (!q.exec()) {
-        qWarning() << "[LibraryWatcher] delete failed:" << q.lastError().text() << path;
-        return false;
-    }
-    return q.numRowsAffected() > 0;
 }
 
 bool updateTrackPath(const QString &oldPath, const QString &newPath) {
@@ -226,13 +182,13 @@ void LibraryWatcher::start() {
     if (anyChange) emit libraryChanged();
 }
 
-void LibraryWatcher::addRoot(const QString &path) {
+QString LibraryWatcher::attachRoot(const QString &path) {
     const QString clean = QDir(path).absolutePath();
-    if (clean.isEmpty() || !QDir(clean).exists()) return;
+    if (clean.isEmpty() || !QDir(clean).exists()) return {};
 
     for (const QString &existing : m_roots) {
-        if (clean == existing) return;
-        if (clean.startsWith(existing + QLatin1Char('/'))) return;
+        if (clean == existing) return {};
+        if (clean.startsWith(existing + QLatin1Char('/'))) return {};
     }
     const QStringList currentRoots(m_roots.begin(), m_roots.end());
     for (const QString &existing : currentRoots) {
@@ -248,6 +204,12 @@ void LibraryWatcher::addRoot(const QString &path) {
 
     m_roots.insert(clean);
     persistRoot(clean);
+    return clean;
+}
+
+void LibraryWatcher::addRoot(const QString &path) {
+    const QString clean = attachRoot(path);
+    if (clean.isEmpty()) return;
 
     const QStringList dbBefore = dbPathsUnder(clean);
     initialReconcile(clean);
@@ -257,27 +219,8 @@ void LibraryWatcher::addRoot(const QString &path) {
 }
 
 void LibraryWatcher::registerScannedRoot(const QString &path) {
-    const QString clean = QDir(path).absolutePath();
-    if (clean.isEmpty() || !QDir(clean).exists()) return;
-
-    for (const QString &existing : m_roots) {
-        if (clean == existing) return;
-        if (clean.startsWith(existing + QLatin1Char('/'))) return;
-    }
-    const QStringList currentRoots(m_roots.begin(), m_roots.end());
-    for (const QString &existing : currentRoots) {
-        if (existing.startsWith(clean + QLatin1Char('/'))) {
-            unwatchTree(existing);
-            m_roots.remove(existing);
-            QSqlQuery q;
-            q.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
-            q.addBindValue(existing);
-            q.exec();
-        }
-    }
-
-    m_roots.insert(clean);
-    persistRoot(clean);
+    const QString clean = attachRoot(path);
+    if (clean.isEmpty()) return;
     watchTreeRecursive(clean);
 }
 

@@ -18,6 +18,21 @@
 #include <taglib/flacproperties.h>
 #include <taglib/tag.h>
 
+namespace {
+
+QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
+    const double khz = sampleRate / 1000.0;
+    QString prefix;
+    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))     prefix = QStringLiteral("FLAC | ");
+    else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive)) prefix = QStringLiteral("MP3 | ");
+    QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
+    if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
+    out += QStringLiteral(" | %1 kbps").arg(bitrate);
+    return out;
+}
+
+}
+
 namespace MusicLibrary {
 
 QString databasePath() {
@@ -223,17 +238,6 @@ void linkTrackToArtistsPrepared(qint64 trackId,
             qWarning() << "[MusicLibrary] link track-artist:" << linkTrackArtist.lastError().text();
         }
     }
-}
-
-QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
-    const double khz = sampleRate / 1000.0;
-    QString prefix;
-    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))     prefix = QStringLiteral("FLAC | ");
-    else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive)) prefix = QStringLiteral("MP3 | ");
-    QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
-    if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
-    out += QStringLiteral(" | %1 kbps").arg(bitrate);
-    return out;
 }
 
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {

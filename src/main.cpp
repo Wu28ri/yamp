@@ -6,7 +6,6 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
-#include <QTimer>
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -45,31 +44,6 @@ int main(int argc, char *argv[]) {
 
     QObject::connect(&backend, &PlayerBackend::shuffleChanged, &settings,
                      [&]() { settings.setShuffle(backend.shuffle()); });
-
-    auto *positionSaveTimer = new QTimer(&app);
-    positionSaveTimer->setSingleShot(true);
-    positionSaveTimer->setInterval(2000);
-    QObject::connect(positionSaveTimer, &QTimer::timeout, &settings, [&]() {
-        if (!backend.currentPath().isEmpty()) {
-            settings.setLastTrackPath(backend.currentPath());
-            settings.setLastTrackPosition(backend.position());
-        }
-    });
-    QObject::connect(&backend, &PlayerBackend::positionChanged, positionSaveTimer,
-                     [positionSaveTimer]() {
-                         if (!positionSaveTimer->isActive()) positionSaveTimer->start();
-                     });
-    QObject::connect(&backend, &PlayerBackend::metadataChanged, &settings, [&]() {
-        if (!backend.currentPath().isEmpty()) {
-            settings.setLastTrackPath(backend.currentPath());
-        }
-    });
-    QObject::connect(&app, &QGuiApplication::aboutToQuit, &settings, [&]() {
-        if (!backend.currentPath().isEmpty()) {
-            settings.setLastTrackPath(backend.currentPath());
-            settings.setLastTrackPosition(backend.position());
-        }
-    });
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

@@ -40,8 +40,6 @@ void linkTrackToArtistsPrepared(qint64 trackId,
                                 QSqlQuery &findArtistId,
                                 QSqlQuery &linkTrackArtist);
 
-QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth);
-
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize);
 
 }

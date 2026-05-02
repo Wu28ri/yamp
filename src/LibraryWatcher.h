@@ -34,6 +34,7 @@ private slots:
 private:
     void persistRoot(const QString &root);
     QStringList loadRoots();
+    QString attachRoot(const QString &path);
 
     void watchTreeRecursive(const QString &root);
     void unwatchTree(const QString &root);

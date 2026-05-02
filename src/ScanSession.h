@@ -14,7 +14,6 @@ class ScanSession : public QObject {
 public:
     explicit ScanSession(const QString &path, QObject *parent = nullptr);
 
-    QString rootPath() const { return m_rootPath; }
     int processed() const { return m_processed; }
     int total() const { return m_total; }
 
