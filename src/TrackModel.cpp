@@ -1,11 +1,6 @@
 #include "TrackModel.h"
 
-TrackModel::TrackModel(QObject *parent) : QSqlTableModel(parent) {
-    connect(this, &QAbstractItemModel::modelReset, this, [this]() {
-        m_pathCacheValid = false;
-        m_pathRowCache.clear();
-    });
-}
+TrackModel::TrackModel(QObject *parent) : QSqlTableModel(parent) {}
 
 int TrackModel::columnForRole(int role) {
     switch (role) {
@@ -46,23 +41,4 @@ QString TrackModel::pathForRow(int row) {
     while (canFetchMore()) fetchMore();
     if (row >= rowCount()) return {};
     return QSqlTableModel::data(index(row, PathColumn), Qt::DisplayRole).toString();
-}
-
-void TrackModel::ensurePathIndex() {
-    if (m_pathCacheValid) return;
-    while (canFetchMore()) fetchMore();
-    const int rows = rowCount();
-    m_pathRowCache.clear();
-    m_pathRowCache.reserve(rows);
-    for (int i = 0; i < rows; ++i) {
-        const QString path = QSqlTableModel::data(index(i, PathColumn), Qt::DisplayRole).toString();
-        if (!path.isEmpty()) m_pathRowCache.insert(path, i);
-    }
-    m_pathCacheValid = true;
-}
-
-int TrackModel::rowForPath(const QString &path) {
-    if (path.isEmpty()) return -1;
-    ensurePathIndex();
-    return m_pathRowCache.value(path, -1);
 }

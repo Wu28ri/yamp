@@ -453,7 +453,30 @@ void PlayerBackend::sortTracks(int column, bool ascending) {
 }
 
 int PlayerBackend::getRowForPath(const QString &path) {
-    return m_trackModel->rowForPath(path);
+    if (path.isEmpty()) return -1;
+
+    QString colName = sortColumnName(m_sortColumn);
+    if (colName.isEmpty()) colName = QStringLiteral("id");
+    const QString order = m_sortOrder == Qt::AscendingOrder
+                              ? QStringLiteral("ASC") : QStringLiteral("DESC");
+    const QString filter = combinedFilter();
+
+    QString sql = QStringLiteral(
+        "WITH ranked AS (SELECT path, "
+        "ROW_NUMBER() OVER (ORDER BY %1 %2, id ASC) - 1 AS rn "
+        "FROM tracks").arg(colName, order);
+    if (!filter.isEmpty()) sql += QStringLiteral(" WHERE ") + filter;
+    sql += QStringLiteral(") SELECT rn FROM ranked WHERE path = ?");
+
+    QSqlQuery q;
+    q.prepare(sql);
+    q.addBindValue(path);
+    if (!q.exec()) {
+        qWarning() << "[getRowForPath] SQL error:" << q.lastError().text();
+        return -1;
+    }
+    if (!q.next()) return -1;
+    return q.value(0).toInt();
 }
 
 void PlayerBackend::addPlayNext(const QString &path) {
