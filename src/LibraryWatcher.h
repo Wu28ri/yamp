@@ -40,10 +40,10 @@ private:
     void unwatchTree(const QString &root);
 
     void initialReconcile(const QString &root);
-    void reconcileDirs(const QSet<QString> &dirs);
 
     QFileSystemWatcher *m_watcher = nullptr;
     QTimer *m_debounce = nullptr;
     QSet<QString> m_pendingDirs;
     QSet<QString> m_roots;
+    bool m_reconcileRunning = false;
 };
