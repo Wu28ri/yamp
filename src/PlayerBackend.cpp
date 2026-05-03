@@ -162,15 +162,15 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
         return out;
     }
     while (q.next()) {
-        out.append({
-            q.value(0).toString(),
-            q.value(1).toString(),
-            q.value(2).toString(),
-            q.value(3).toString(),
-            q.value(4).toInt(),
-            q.value(5).toString(),
-            q.value(6).toInt(),
-        });
+        Track t;
+        t.path     = q.value(0).toString();
+        t.title    = q.value(1).toString();
+        t.artist   = q.value(2).toString();
+        t.album    = q.value(3).toString();
+        t.duration = q.value(4).toInt();
+        t.techInfo = q.value(5).toString();
+        t.trackNo  = q.value(6).toInt();
+        out.append(t);
     }
     return out;
 }
@@ -326,8 +326,10 @@ void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artis
         } else {
             QString safeArtist = artistName;
             safeArtist.replace(QLatin1Char('\''), QLatin1String("''"));
-            m_categoryFilter = QStringLiteral("album = '%1' AND artist = '%2'")
-                                   .arg(safeAlbum, safeArtist);
+            m_categoryFilter = QStringLiteral(
+                "album = '%1' AND "
+                "COALESCE(NULLIF(album_artist, ''), artist) = '%2'")
+                .arg(safeAlbum, safeArtist);
         }
         m_sortColumn = TrackModel::TrackNoColumn;
         m_sortOrder  = Qt::AscendingOrder;
@@ -393,15 +395,15 @@ void PlayerBackend::addPlayNext(const QString &path) {
         qWarning() << "[addPlayNext] track not in DB:" << path;
         return;
     }
-    m_queueModel->insertTrack({
-        path,
-        q.value(0).toString(),
-        q.value(1).toString(),
-        q.value(2).toString(),
-        q.value(3).toInt(),
-        q.value(4).toString(),
-        q.value(5).toInt(),
-    });
+    Track t;
+    t.path     = path;
+    t.title    = q.value(0).toString();
+    t.artist   = q.value(1).toString();
+    t.album    = q.value(2).toString();
+    t.duration = q.value(3).toInt();
+    t.techInfo = q.value(4).toString();
+    t.trackNo  = q.value(5).toInt();
+    m_queueModel->insertTrack(t);
 }
 
 void PlayerBackend::openInFileManager(const QString &path) {

@@ -24,8 +24,11 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
 
 void AlbumModel::refresh() {
     setQuery(QStringLiteral(
-        "SELECT album, artist, MIN(path) AS path "
+        "SELECT album, "
+        "COALESCE(NULLIF(album_artist, ''), artist) AS artist, "
+        "MIN(path) AS path "
         "FROM tracks "
-        "GROUP BY album, artist "
+        "GROUP BY album COLLATE NOCASE, "
+        "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE "
         "ORDER BY album COLLATE NOCASE, artist COLLATE NOCASE"));
 }

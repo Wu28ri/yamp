@@ -6,6 +6,7 @@ struct Track {
     QString path;
     QString title;
     QString artist;
+    QString albumArtist;
     QString album;
     int duration = 0;
     QString techInfo;

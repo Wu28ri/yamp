@@ -17,6 +17,7 @@
 #include <taglib/fileref.h>
 #include <taglib/flacproperties.h>
 #include <taglib/tag.h>
+#include <taglib/tpropertymap.h>
 
 namespace {
 
@@ -66,15 +67,19 @@ bool initialize() {
             "title TEXT, artist TEXT, album TEXT, "
             "path TEXT UNIQUE, duration INTEGER, "
             "search_text TEXT, track_no INTEGER, "
-            "tech_info TEXT, file_size INTEGER DEFAULT 0)"))) {
+            "tech_info TEXT, file_size INTEGER DEFAULT 0, "
+            "album_artist TEXT)"))) {
         qWarning() << "[MusicLibrary] schema tracks:" << q.lastError().text();
         return false;
     }
 
     bool hasFileSize = false;
+    bool hasAlbumArtist = false;
     if (q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
         while (q.next()) {
-            if (q.value(1).toString() == QLatin1String("file_size")) { hasFileSize = true; break; }
+            const QString col = q.value(1).toString();
+            if (col == QLatin1String("file_size"))    hasFileSize = true;
+            if (col == QLatin1String("album_artist")) hasAlbumArtist = true;
         }
     }
     if (!hasFileSize) {
@@ -83,6 +88,15 @@ bool initialize() {
             qWarning() << "[MusicLibrary] add file_size:" << alterQ.lastError().text();
         }
     }
+    if (!hasAlbumArtist) {
+        QSqlQuery alterQ(db);
+        if (!alterQ.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN album_artist TEXT"))) {
+            qWarning() << "[MusicLibrary] add album_artist:" << alterQ.lastError().text();
+        }
+    }
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
+        "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"));
 
     QSqlQuery wq(db);
     if (!wq.exec(QStringLiteral(
@@ -141,6 +155,27 @@ bool initialize() {
         }
         countQ.exec(QStringLiteral("PRAGMA user_version = 1"));
     }
+    if (userVersion < 2) {
+        db.transaction();
+        QSqlQuery iter(db);
+        QSqlQuery upd(db);
+        upd.prepare(QStringLiteral("UPDATE tracks SET album_artist = ? WHERE id = ?"));
+        if (iter.exec(QStringLiteral(
+                "SELECT id, artist FROM tracks "
+                "WHERE album_artist IS NULL OR album_artist = ''"))) {
+            while (iter.next()) {
+                const qint64 id = iter.value(0).toLongLong();
+                const QString artist = iter.value(1).toString();
+                upd.bindValue(0, pickAlbumArtist(QString(), artist));
+                upd.bindValue(1, id);
+                if (!upd.exec()) {
+                    qWarning() << "[MusicLibrary] backfill album_artist:" << upd.lastError().text();
+                }
+            }
+        }
+        db.commit();
+        countQ.exec(QStringLiteral("PRAGMA user_version = 2"));
+    }
 
     return true;
 }
@@ -172,6 +207,18 @@ QStringList splitArtists(const QString &raw) {
     }
     if (result.isEmpty()) result.append(trimmed);
     return result;
+}
+
+QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist) {
+    const QString tag = albumArtistTag.trimmed();
+    if (!tag.isEmpty()) {
+        const QStringList tagParts = splitArtists(tag);
+        if (!tagParts.isEmpty()) return tagParts.first();
+        return tag;
+    }
+    const QStringList parts = splitArtists(artist);
+    if (!parts.isEmpty()) return parts.first();
+    return artist.trimmed();
 }
 
 void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists) {
@@ -251,6 +298,7 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
     QString title  = info.fileName();
     QString artist = QStringLiteral("Unknown Artist");
     QString album  = QStringLiteral("Unknown Album");
+    QString albumArtistTag;
     QString techInfo;
     int duration = 0;
     int trackNo  = 0;
@@ -265,6 +313,17 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
             if (!tAlbum.isEmpty())  album  = tAlbum;
             trackNo = tag->track();
         }
+        if (auto *file = f.file()) {
+            const TagLib::PropertyMap props = file->properties();
+            const auto pickProp = [&props](const char *key) -> QString {
+                const auto it = props.find(key);
+                if (it == props.end() || it->second.isEmpty()) return {};
+                return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
+            };
+            albumArtistTag = pickProp("ALBUMARTIST");
+            if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
+            if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
+        }
         if (auto *audio = f.audioProperties()) {
             duration = audio->lengthInSeconds();
             int bitDepth = 0;
@@ -275,13 +334,14 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
         }
     }
 
-    t.path     = filePath;
-    t.title    = title;
-    t.artist   = artist;
-    t.album    = album;
-    t.duration = duration;
-    t.techInfo = techInfo;
-    t.trackNo  = trackNo;
+    t.path        = filePath;
+    t.title       = title;
+    t.artist      = artist;
+    t.albumArtist = pickAlbumArtist(albumArtistTag, artist);
+    t.album       = album;
+    t.duration    = duration;
+    t.techInfo    = techInfo;
+    t.trackNo     = trackNo;
     return true;
 }
 
@@ -336,8 +396,8 @@ void LibraryScanner::run() {
         QSqlQuery insertTrack(db);
         insertTrack.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
-            "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+            "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size, album_artist) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
         QSqlQuery upsertArtist(db);
         upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
@@ -375,6 +435,7 @@ void LibraryScanner::run() {
             insertTrack.bindValue(6, t.trackNo);
             insertTrack.bindValue(7, t.techInfo);
             insertTrack.bindValue(8, fileSize);
+            insertTrack.bindValue(9, t.albumArtist);
 
             if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
                 MusicLibrary::linkTrackToArtistsPrepared(

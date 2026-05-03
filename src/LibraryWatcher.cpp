@@ -25,8 +25,8 @@ int insertTrackRowsBatch(const QStringList &paths) {
     QSqlQuery insertTrack(db);
     insertTrack.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO tracks "
-        "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size, album_artist) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
     QSqlQuery upsertArtist(db);
     upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
@@ -52,6 +52,7 @@ int insertTrackRowsBatch(const QStringList &paths) {
         insertTrack.bindValue(6, t.trackNo);
         insertTrack.bindValue(7, t.techInfo);
         insertTrack.bindValue(8, fileSize);
+        insertTrack.bindValue(9, t.albumArtist);
         if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
             MusicLibrary::linkTrackToArtistsPrepared(
                 insertTrack.lastInsertId().toLongLong(),

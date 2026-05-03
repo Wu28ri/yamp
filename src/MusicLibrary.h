@@ -32,6 +32,7 @@ bool initialize();
 
 QString normalizeArtistName(const QString &raw);
 QStringList splitArtists(const QString &raw);
+QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist);
 void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists);
 
 void linkTrackToArtistsPrepared(qint64 trackId,
