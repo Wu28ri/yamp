@@ -10,7 +10,6 @@
 #include <QAbstractItemModel>
 #include <QByteArray>
 #include <QHash>
-#include <QMutex>
 #include <QObject>
 #include <QPair>
 #include <QString>
@@ -125,7 +124,10 @@ private:
     void applyFilter();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
-    static QString tempCoverPathForExt(const QString &ext);
+    static QString coverCacheDir();
+    static QString coverPathForHash(const QByteArray &hash, const QString &ext);
+    static bool writeCoverAtomic(const QString &targetPath, const QByteArray &data);
+    static void pruneCoverCache(int keepCount);
     void setupMpris();
 
     QMediaPlayer   *m_player        = nullptr;
@@ -154,7 +156,4 @@ private:
     int     m_scanProgressCached = 0;
     int     m_scanTotalCached    = 0;
     QTimer *m_scanRefreshTimer = nullptr;
-
-    QMutex     m_coverWriteMutex;
-    QByteArray m_lastCoverHash;
 };

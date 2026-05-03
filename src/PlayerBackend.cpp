@@ -5,16 +5,17 @@
 #include "MusicLibrary.h"
 #include "ScanSession.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QMutexLocker>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QThread>
 #include <QThreadPool>
 #include <QUrl>
 
@@ -206,10 +207,56 @@ void PlayerBackend::playFromQueue(int position) {
 void PlayerBackend::playNext()     { loadTrack(m_queue.next()); }
 void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
 
-QString PlayerBackend::tempCoverPathForExt(const QString &ext) {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+QString PlayerBackend::coverCacheDir() {
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+                        + QStringLiteral("/covers");
     QDir().mkpath(dir);
-    return dir + QStringLiteral("/current_art.") + ext;
+    return dir;
+}
+
+QString PlayerBackend::coverPathForHash(const QByteArray &hash, const QString &ext) {
+    return coverCacheDir() + QLatin1Char('/')
+           + QString::fromLatin1(hash.toHex()) + QLatin1Char('.') + ext;
+}
+
+bool PlayerBackend::writeCoverAtomic(const QString &targetPath, const QByteArray &data) {
+    if (QFileInfo::exists(targetPath)) return true;
+    const QString tmpPath = targetPath + QStringLiteral(".tmp.")
+                            + QString::number(QCoreApplication::applicationPid())
+                            + QLatin1Char('.')
+                            + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    {
+        QFile tmp(tmpPath);
+        if (!tmp.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+        if (tmp.write(data) != data.size()) {
+            tmp.close();
+            QFile::remove(tmpPath);
+            return false;
+        }
+        tmp.flush();
+        tmp.close();
+    }
+    if (QFileInfo::exists(targetPath)) {
+        QFile::remove(tmpPath);
+        return true;
+    }
+    if (!QFile::rename(tmpPath, targetPath)) {
+        QFile::remove(tmpPath);
+        return false;
+    }
+    return true;
+}
+
+void PlayerBackend::pruneCoverCache(int keepCount) {
+    const QString dir = coverCacheDir();
+    QDir d(dir);
+    const auto entries = d.entryInfoList(
+        QDir::Files | QDir::NoDotAndDotDot,
+        QDir::Time | QDir::Reversed);
+    if (entries.size() <= keepCount) return;
+    for (int i = 0; i < entries.size() - keepCount; ++i) {
+        QFile::remove(entries[i].absoluteFilePath());
+    }
 }
 
 void PlayerBackend::loadTrack(const Track &t) {
@@ -239,19 +286,10 @@ void PlayerBackend::loadTrack(const Track &t) {
         if (!data.isEmpty()) {
             const QByteArray hash = QCryptographicHash::hash(data, QCryptographicHash::Md5);
             const QString ext = CoverExtractor::detectImageExtension(data);
-            const QString out = tempCoverPathForExt(ext);
-
-            QMutexLocker locker(&m_coverWriteMutex);
-            if (hash != m_lastCoverHash || !QFileInfo::exists(out)) {
-                QFile f(out);
-                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-                    f.write(data);
-                    f.close();
-                    m_lastCoverHash = hash;
-                    resolved = out;
-                }
-            } else {
+            const QString out = coverPathForHash(hash, ext);
+            if (writeCoverAtomic(out, data)) {
                 resolved = out;
+                pruneCoverCache(256);
             }
         } else {
             resolved = CoverExtractor::sidecarImagePath(trackPath);
