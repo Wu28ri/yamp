@@ -122,6 +122,7 @@ private:
     void resetPlaybackState();
     void recomputeScanTotals();
     void applyFilter();
+    void skipBrokenTrack();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
     static QString coverCacheDir();
@@ -149,6 +150,7 @@ private:
     QString m_searchFilter;
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
+    int     m_consecutiveInvalid = 0;
     int           m_sortColumn = -1;
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 

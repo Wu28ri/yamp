@@ -81,7 +81,30 @@ PlayerBackend::PlayerBackend(QObject *parent)
     connect(m_player, &QMediaPlayer::playbackStateChanged, this, &PlayerBackend::playbackStateChanged);
     connect(m_player, &QMediaPlayer::mediaStatusChanged,   this,
             [this](QMediaPlayer::MediaStatus status) {
-                if (status == QMediaPlayer::EndOfMedia) playNext();
+                switch (status) {
+                case QMediaPlayer::LoadedMedia:
+                case QMediaPlayer::BufferedMedia:
+                    m_consecutiveInvalid = 0;
+                    break;
+                case QMediaPlayer::EndOfMedia:
+                    playNext();
+                    break;
+                case QMediaPlayer::InvalidMedia:
+                    skipBrokenTrack();
+                    break;
+                default:
+                    break;
+                }
+            });
+    connect(m_player, &QMediaPlayer::errorOccurred, this,
+            [this](QMediaPlayer::Error error, const QString &errorString) {
+                if (error == QMediaPlayer::NoError) return;
+                qWarning() << "[PlayerBackend] media error:" << error << errorString
+                           << "path:" << m_currentPath;
+                if (error == QMediaPlayer::ResourceError ||
+                    error == QMediaPlayer::FormatError) {
+                    skipBrokenTrack();
+                }
             });
 
     m_libraryWatcher->start();
@@ -206,6 +229,21 @@ void PlayerBackend::playFromQueue(int position) {
 
 void PlayerBackend::playNext()     { loadTrack(m_queue.next()); }
 void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
+
+void PlayerBackend::skipBrokenTrack() {
+    const int queueSize = m_queue.count();
+    if (queueSize <= 0) {
+        resetPlaybackState();
+        return;
+    }
+    if (++m_consecutiveInvalid >= queueSize) {
+        qWarning() << "[PlayerBackend] all queue items unplayable, stopping";
+        m_consecutiveInvalid = 0;
+        resetPlaybackState();
+        return;
+    }
+    playNext();
+}
 
 QString PlayerBackend::coverCacheDir() {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
