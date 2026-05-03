@@ -1,4 +1,5 @@
 #include "MprisAdaptor.h"
+#include "MusicLibrary.h"
 #include "PlayerBackend.h"
 
 #include <QDateTime>
@@ -61,7 +62,10 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
     dict.insert(QStringLiteral("mpris:length"),
                 static_cast<qlonglong>(m_backend->duration()) * 1000);
     dict.insert(QStringLiteral("xesam:title"),  m_backend->currentTitle());
-    dict.insert(QStringLiteral("xesam:artist"), QStringList{m_backend->currentArtist()});
+    QStringList artists = MusicLibrary::splitArtists(m_backend->currentArtist());
+    if (artists.isEmpty()) artists.append(m_backend->currentArtist());
+    dict.insert(QStringLiteral("xesam:artist"), artists);
+    dict.insert(QStringLiteral("xesam:albumArtist"), artists);
     dict.insert(QStringLiteral("xesam:album"),  m_backend->currentAlbum());
 
     const QString art = m_backend->currentCoverPath();
