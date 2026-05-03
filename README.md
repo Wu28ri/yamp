@@ -10,6 +10,7 @@ A performance-oriented, ultra-lightweight music player built with C++, Qt 6, and
 ![YAMP](Preview2.png)
 ![YAMP](preview3.png)
 ![YAMP](preview4.png)
+![YAMP](preview5.png)
 
 
 
