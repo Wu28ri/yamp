@@ -53,7 +53,21 @@ void TrackQueue::insertNext(const Track &track) {
 void TrackQueue::removeTrack(int position) {
     if (position < 0 || position >= static_cast<int>(m_playOrder.size())) return;
 
+    const int globalId = m_playOrder[position];
     m_playOrder.erase(m_playOrder.begin() + position);
+
+    if (globalId >= 0 && globalId < m_tracks.size()) {
+        const QString path = m_tracks[globalId].path;
+        m_tracks.removeAt(globalId);
+        if (!path.isEmpty()) m_pathToGlobalId.remove(path);
+
+        for (int &id : m_playOrder) {
+            if (id > globalId) --id;
+        }
+        for (auto it = m_pathToGlobalId.begin(); it != m_pathToGlobalId.end(); ++it) {
+            if (it.value() > globalId) --it.value();
+        }
+    }
 
     if (m_playOrder.empty()) {
         m_currentIndex = -1;
@@ -61,7 +75,8 @@ void TrackQueue::removeTrack(int position) {
     }
     if (position < m_currentIndex) {
         --m_currentIndex;
-    } else if (position == m_currentIndex && m_currentIndex >= static_cast<int>(m_playOrder.size())) {
+    } else if (position == m_currentIndex
+               && m_currentIndex >= static_cast<int>(m_playOrder.size())) {
         m_currentIndex = static_cast<int>(m_playOrder.size()) - 1;
     }
 }
