@@ -60,18 +60,28 @@ QString sidecarImagePath(const QString &trackPath) {
     };
 
     const QString dirPath = info.absolutePath();
-    QString fallback;
+    QString preferredBest;
+    qint64 preferredBestSize = -1;
+    QString fallbackBest;
+    qint64 fallbackBestSize = -1;
 
     QDirIterator it(dirPath, nameFilters, QDir::Files);
     while (it.hasNext()) {
         const QString full = it.next();
-        const QString fileName = it.fileName();
-        if (fallback.isEmpty()) fallback = full;
+        const QFileInfo fi(full);
+        const QString fileName = fi.fileName();
+        const qint64 sz = fi.size();
+        bool isPreferred = false;
         for (const QString &keyword : preferredKeywords) {
-            if (fileName.contains(keyword, Qt::CaseInsensitive)) return full;
+            if (fileName.contains(keyword, Qt::CaseInsensitive)) { isPreferred = true; break; }
+        }
+        if (isPreferred) {
+            if (sz > preferredBestSize) { preferredBestSize = sz; preferredBest = full; }
+        } else {
+            if (sz > fallbackBestSize)  { fallbackBestSize  = sz; fallbackBest  = full; }
         }
     }
-    return fallback;
+    return preferredBest.isEmpty() ? fallbackBest : preferredBest;
 }
 
 QImage loadCover(const QString &trackPath) {
