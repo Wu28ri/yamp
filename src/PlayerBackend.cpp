@@ -37,6 +37,21 @@ QString sortColumnName(int col) {
     default:                         return {};
     }
 }
+
+QString sqlQuote(const QString &raw) {
+    QString out = raw;
+    out.replace(QLatin1Char('\''), QLatin1String("''"));
+    return QLatin1Char('\'') + out + QLatin1Char('\'');
+}
+
+QString sqlLikeEscape(const QString &raw) {
+    QString out = raw;
+    out.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
+    out.replace(QLatin1Char('%'),  QLatin1String("\\%"));
+    out.replace(QLatin1Char('_'),  QLatin1String("\\_"));
+    out.replace(QLatin1Char('\''), QLatin1String("''"));
+    return out;
+}
 }
 
 PlayerBackend::PlayerBackend(QObject *parent)
@@ -395,17 +410,13 @@ void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artis
         m_sortColumn = TrackModel::TitleColumn;
         m_sortOrder  = Qt::AscendingOrder;
     } else {
-        QString safeAlbum = albumName;
-        safeAlbum.replace(QLatin1Char('\''), QLatin1String("''"));
         if (artistName.isEmpty()) {
-            m_categoryFilter = QStringLiteral("album = '%1'").arg(safeAlbum);
+            m_categoryFilter = QStringLiteral("album = %1").arg(sqlQuote(albumName));
         } else {
-            QString safeArtist = artistName;
-            safeArtist.replace(QLatin1Char('\''), QLatin1String("''"));
             m_categoryFilter = QStringLiteral(
-                "album = '%1' AND "
-                "COALESCE(NULLIF(album_artist, ''), artist) = '%2'")
-                .arg(safeAlbum, safeArtist);
+                "album = %1 AND "
+                "COALESCE(NULLIF(album_artist, ''), artist) = %2")
+                .arg(sqlQuote(albumName), sqlQuote(artistName));
         }
         m_sortColumn = TrackModel::TrackNoColumn;
         m_sortOrder  = Qt::AscendingOrder;
@@ -419,12 +430,11 @@ void PlayerBackend::filterByArtist(const QString &artistName) {
         m_sortColumn = TrackModel::TitleColumn;
         m_sortOrder  = Qt::AscendingOrder;
     } else {
-        QString norm = MusicLibrary::normalizeArtistName(artistName);
-        norm.replace(QLatin1Char('\''), QLatin1String("''"));
+        const QString norm = MusicLibrary::normalizeArtistName(artistName);
         m_categoryFilter = QStringLiteral(
             "id IN (SELECT track_id FROM track_artists ta "
             "JOIN artists a ON a.id = ta.artist_id "
-            "WHERE a.name_norm = '%1')").arg(norm);
+            "WHERE a.name_norm = %1)").arg(sqlQuote(norm));
         m_sortColumn = TrackModel::AlbumColumn;
         m_sortOrder  = Qt::AscendingOrder;
     }
@@ -435,11 +445,7 @@ void PlayerBackend::searchTracks(const QString &query) {
     if (query.isEmpty()) {
         m_searchFilter.clear();
     } else {
-        QString safe = query.toLower();
-        safe.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-        safe.replace(QLatin1Char('%'),  QLatin1String("\\%"));
-        safe.replace(QLatin1Char('_'),  QLatin1String("\\_"));
-        safe.replace(QLatin1Char('\''), QLatin1String("''"));
+        const QString safe = sqlLikeEscape(query.toLower());
         m_searchFilter = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
     }
     applyFilter();
