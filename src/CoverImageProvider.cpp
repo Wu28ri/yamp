@@ -72,12 +72,15 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     }
 
     QImage source;
+    bool isPlaceholder = false;
     {
         QMutexLocker locker(&m_mutex);
-        if (auto *entry = m_sources.object(sourceKey)) source = entry->image;
+        if (auto *entry = m_sources.object(sourceKey)) {
+            source = entry->image;
+            isPlaceholder = entry->placeholder;
+        }
     }
 
-    bool isPlaceholder = false;
     if (source.isNull()) {
         source = CoverExtractor::loadCover(path);
         if (source.isNull()) {
@@ -90,9 +93,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
         const int kb = qMax(1, static_cast<int>(source.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
-        m_sources.insert(sourceKey, new Entry{source, kb}, kb);
-    } else {
-        isPlaceholder = (source.width() == 1 && source.height() == 1);
+        m_sources.insert(sourceKey, new Entry{source, kb, isPlaceholder}, kb);
     }
 
     QImage out = source;
@@ -105,7 +106,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     if (!isPlaceholder) {
         const int kb = qMax(1, static_cast<int>(out.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
-        m_scaled.insert(scaledKey, new Entry{out, kb}, kb);
+        m_scaled.insert(scaledKey, new Entry{out, kb, false}, kb);
     }
     return out;
 }

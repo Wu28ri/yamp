@@ -18,6 +18,7 @@ private:
     struct Entry {
         QImage image;
         int    kb = 0;
+        bool   placeholder = false;
     };
 
     QCache<QString, Entry> m_sources;
