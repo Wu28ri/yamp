@@ -125,10 +125,6 @@ bool initialize() {
     q.exec(QStringLiteral(
         "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
         "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"));
-    q.exec(QStringLiteral(
-        "CREATE TRIGGER IF NOT EXISTS ta_after_delete AFTER DELETE ON track_artists "
-        "BEGIN DELETE FROM artists WHERE id = OLD.artist_id "
-        "AND NOT EXISTS (SELECT 1 FROM track_artists WHERE artist_id = OLD.artist_id); END"));
 
     QSqlQuery countQ(db);
     int userVersion = 0;
@@ -176,6 +172,11 @@ bool initialize() {
         db.commit();
         countQ.exec(QStringLiteral("PRAGMA user_version = 2"));
     }
+    if (userVersion < 3) {
+        QSqlQuery dropQ(db);
+        dropQ.exec(QStringLiteral("DROP TRIGGER IF EXISTS ta_after_delete"));
+        countQ.exec(QStringLiteral("PRAGMA user_version = 3"));
+    }
 
     return true;
 }
@@ -219,6 +220,17 @@ QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist) {
     const QStringList parts = splitArtists(artist);
     if (!parts.isEmpty()) return parts.first();
     return artist.trimmed();
+}
+
+int pruneOrphanArtists(QSqlDatabase &db) {
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral(
+            "DELETE FROM artists WHERE id NOT IN "
+            "(SELECT DISTINCT artist_id FROM track_artists)"))) {
+        qWarning() << "[MusicLibrary] pruneOrphanArtists:" << q.lastError().text();
+        return 0;
+    }
+    return q.numRowsAffected();
 }
 
 void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists) {

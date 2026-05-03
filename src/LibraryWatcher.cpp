@@ -79,6 +79,7 @@ int deleteTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
         if (del.exec()) removed += del.numRowsAffected();
     }
     db.commit();
+    if (removed > 0) MusicLibrary::pruneOrphanArtists(db);
     return removed;
 }
 

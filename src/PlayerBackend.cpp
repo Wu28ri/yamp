@@ -613,6 +613,7 @@ void PlayerBackend::removeFolder(const QString &folder) {
             qWarning() << "[removeFolder] delete tracks failed:" << del.lastError().text();
         }
         db.commit();
+        MusicLibrary::pruneOrphanArtists(db);
     }
 
     const QString prefix = clean + QLatin1Char('/');
