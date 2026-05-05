@@ -8,9 +8,9 @@
 
 A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and QML.
 
-[![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
-[![AUR version](https://img.shields.io/aur/version/yamp-git?style=flat-square&label=AUR)](https://aur.archlinux.org/packages/yamp-git)
-[![Made with Qt](https://img.shields.io/badge/Qt-6.8+-41CD52?style=flat-square&logo=qt&logoColor=white)](https://www.qt.io/)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![AUR version](https://img.shields.io/aur/version/yamp-git?label=AUR)](https://aur.archlinux.org/packages/yamp-git)
+[![Made with Qt](https://img.shields.io/badge/Qt-6.8+-41CD52?logo=qt&logoColor=white)](https://www.qt.io/)
 
 </div>
 
