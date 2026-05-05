@@ -39,6 +39,7 @@ A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and 
 - **Fast media scanning** — SQLite-backed library handles thousands of tracks instantly.
 - **MPRIS support** — full integration with system media controllers and lock screens.
 - **Modern stack** — built on Qt 6.8+, QtMultimedia and TagLib.
+- **Replay Gain** — full support of replay gain via tags.
 
 ## Installation
 
