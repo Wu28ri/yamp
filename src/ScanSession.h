@@ -13,6 +13,7 @@ class ScanSession : public QObject {
     Q_OBJECT
 public:
     explicit ScanSession(const QString &path, QObject *parent = nullptr);
+    ~ScanSession() override;
 
     int processed() const { return m_processed; }
     int total() const { return m_total; }

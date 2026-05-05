@@ -7,6 +7,13 @@
 ScanSession::ScanSession(const QString &path, QObject *parent)
     : QObject(parent), m_rootPath(path) {}
 
+ScanSession::~ScanSession() {
+    if (m_thread && m_thread->isRunning()) {
+        m_thread->quit();
+        m_thread->wait();
+    }
+}
+
 void ScanSession::start() {
     m_thread  = new QThread(this);
     m_scanner = new LibraryScanner(m_rootPath);
