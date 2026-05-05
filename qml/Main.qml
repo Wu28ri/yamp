@@ -10,6 +10,10 @@ Window {
     title: "YAMP"
     color: sysPalette.window
 
+    Component.onCompleted: {
+        Qt.application.font.hintingPreference = Font.PreferFullHinting
+    }
+
     property string currentView: "tracks"
     property string selectedAlbum: ""
     property string selectedAlbumPath: ""

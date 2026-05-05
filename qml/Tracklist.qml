@@ -240,6 +240,7 @@ ListView {
                 color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.windowText
                 opacity: 0.7
                 font.pixelSize: 13
+                renderType: Text.NativeRendering
             }
 
             Rectangle {
@@ -264,21 +265,28 @@ ListView {
                 anchors.left: coverContainer.right; anchors.leftMargin: 15
                 anchors.right: albumTxt.left;       anchors.rightMargin: 15
                 anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
 
                 Text {
                     width: parent.width
+                    height: 18
                     text: trackItem.title
                     elide: Text.ElideRight
                     color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.text
                     font.bold: true; font.pixelSize: 14
+                    renderType: Text.NativeRendering
+                    verticalAlignment: Text.AlignVCenter
                 }
                 Text {
                     width: parent.width
+                    height: 16
                     text: trackItem.artist
                     elide: Text.ElideRight
                     color: sysPalette.windowText
                     opacity: 0.6
                     font.pixelSize: 12
+                    renderType: Text.NativeRendering
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
 
@@ -292,6 +300,7 @@ ListView {
                 color: sysPalette.windowText
                 opacity: 0.5
                 font.pixelSize: 13
+                renderType: Text.NativeRendering
             }
 
             Text {
@@ -309,6 +318,7 @@ ListView {
                 color: sysPalette.windowText
                 opacity: 0.6
                 font.pixelSize: 13
+                renderType: Text.NativeRendering
             }
         }
     }

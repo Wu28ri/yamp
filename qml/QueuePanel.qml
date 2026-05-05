@@ -52,17 +52,23 @@ Rectangle {
                 spacing: 2
                 Text {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 18
                     text: playerBackend.currentTitle
                     color: sysPalette.text
                     font.bold: true; font.pixelSize: 14
+                    renderType: Text.NativeRendering
                     elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
                 }
                 Text {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 16
                     text: playerBackend.currentArtist
                     color: sysPalette.windowText
                     opacity: 0.6; font.pixelSize: 12
+                    renderType: Text.NativeRendering
                     elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
         }
@@ -212,17 +218,23 @@ Rectangle {
                                 spacing: 0
                                 Text {
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: 16
                                     text: delegateRoot.title
                                     color: delegateRoot.isCurrent ? sysPalette.highlight : sysPalette.text
                                     font.bold: true; font.pixelSize: 12
+                                    renderType: Text.NativeRendering
                                     elide: Text.ElideRight
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                                 Text {
                                     Layout.fillWidth: true
+                                    Layout.preferredHeight: 14
                                     text: delegateRoot.artist
                                     color: sysPalette.windowText
                                     opacity: 0.6; font.pixelSize: 10
+                                    renderType: Text.NativeRendering
                                     elide: Text.ElideRight
+                                    verticalAlignment: Text.AlignVCenter
                                 }
                             }
 

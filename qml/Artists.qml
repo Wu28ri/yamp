@@ -7,7 +7,10 @@ GridView {
     anchors.fill: parent
     clip: true
     reuseItems: true
-    cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 200)))
+    cellWidth: {
+        const cols = Math.max(1, Math.floor(width / 200))
+        return Math.floor(width / cols)
+    }
     cellHeight: 280
     cacheBuffer: 600
     model: playerBackend.artistModel
@@ -50,34 +53,42 @@ GridView {
             anchors.margins: 10
             spacing: 8
 
-            Rectangle {
-                id: avatar
-                Layout.preferredWidth: Math.floor(parent.width * 0.9)
-                Layout.preferredHeight: width
+            Item {
+                Layout.preferredWidth: Math.floor((tile.width - 20) * 0.9)
+                Layout.preferredHeight: Layout.preferredWidth
                 Layout.alignment: Qt.AlignHCenter
-                radius: width / 2
-                color: root.colorForName(tile.artist)
 
-                scale: artistClickArea.containsMouse ? 1.03 : 1.0
-                Behavior on scale { NumberAnimation { duration: 150 } }
-                opacity: artistClickArea.pressed ? 0.85 : 1.0
-
-                Text {
+                Rectangle {
+                    id: avatar
                     anchors.centerIn: parent
-                    text: root.initialsForName(tile.artist)
-                    color: "white"
-                    font.pixelSize: Math.round(parent.width * 0.32)
-                    font.bold: true
-                }
+                    width: parent.width
+                    height: parent.height
+                    radius: width / 2
+                    color: root.colorForName(tile.artist)
 
-                MouseArea {
-                    id: artistClickArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.selectedArtist = tile.artist
-                        root.currentView    = "artistDetail"
+                    transformOrigin: Item.Center
+                    scale: artistClickArea.containsMouse ? 1.03 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 150 } }
+                    opacity: artistClickArea.pressed ? 0.85 : 1.0
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: root.initialsForName(tile.artist)
+                        color: "white"
+                        font.pixelSize: Math.round(parent.width * 0.32)
+                        font.bold: true
+                        renderType: Text.NativeRendering
+                    }
+
+                    MouseArea {
+                        id: artistClickArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.selectedArtist = tile.artist
+                            root.currentView    = "artistDetail"
+                        }
                     }
                 }
             }
@@ -85,15 +96,19 @@ GridView {
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 5
+                Layout.preferredHeight: 18
                 text: tile.artist || "Unknown Artist"
                 color: sysPalette.text
                 font.bold: true
                 font.pixelSize: 14
+                renderType: Text.NativeRendering
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 5
+                Layout.preferredHeight: 16
                 text: {
                     const a = tile.albumCount
                     const t = tile.trackCount
@@ -102,8 +117,10 @@ GridView {
                 }
                 color: sysPalette.windowText
                 font.pixelSize: 12
+                renderType: Text.NativeRendering
                 opacity: 0.7
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
 
             Item { Layout.fillHeight: true }

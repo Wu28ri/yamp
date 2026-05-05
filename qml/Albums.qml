@@ -7,7 +7,10 @@ GridView {
     anchors.fill: parent
     clip: true
     reuseItems: true
-    cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 200)))
+    cellWidth: {
+        const cols = Math.max(1, Math.floor(width / 200))
+        return Math.floor(width / cols)
+    }
     cellHeight: 280
     cacheBuffer: 600
     model: playerBackend.albumModel
@@ -50,37 +53,44 @@ GridView {
             anchors.margins: 10
             spacing: 8
 
-            Rectangle {
-                id: coverContainer
-                Layout.preferredWidth: Math.floor(parent.width * 0.9)
-                Layout.preferredHeight: width
+            Item {
+                Layout.preferredWidth: Math.floor((tile.width - 20) * 0.9)
+                Layout.preferredHeight: Layout.preferredWidth
                 Layout.alignment: Qt.AlignHCenter
-                color: sysPalette.mid
-                radius: 8
-                clip: true
 
-                scale: albumClickArea.containsMouse ? 1.03 : 1.0
-                Behavior on scale { NumberAnimation { duration: 150 } }
+                Rectangle {
+                    id: coverContainer
+                    anchors.centerIn: parent
+                    width: parent.width
+                    height: parent.height
+                    color: sysPalette.mid
+                    radius: 8
+                    clip: true
 
-                Image {
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectCrop
-                    source: root.coverSource(tile.path)
-                    sourceSize: Qt.size(250, 250)
-                    asynchronous: true
-                    opacity: albumClickArea.pressed ? 0.8 : 1.0
-                }
+                    transformOrigin: Item.Center
+                    scale: albumClickArea.containsMouse ? 1.03 : 1.0
+                    Behavior on scale { NumberAnimation { duration: 150 } }
 
-                MouseArea {
-                    id: albumClickArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                        root.selectedAlbum     = tile.album
-                        root.selectedAlbumPath = tile.path
-                        root.selectedArtist    = tile.artist
-                        root.currentView       = "albumDetail"
+                    Image {
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectCrop
+                        source: root.coverSource(tile.path)
+                        sourceSize: Qt.size(250, 250)
+                        asynchronous: true
+                        opacity: albumClickArea.pressed ? 0.8 : 1.0
+                    }
+
+                    MouseArea {
+                        id: albumClickArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.selectedAlbum     = tile.album
+                            root.selectedAlbumPath = tile.path
+                            root.selectedArtist    = tile.artist
+                            root.currentView       = "albumDetail"
+                        }
                     }
                 }
             }
@@ -88,20 +98,26 @@ GridView {
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 5
+                Layout.preferredHeight: 18
                 text: tile.album || "Album"
                 color: sysPalette.text
                 font.bold: true
                 font.pixelSize: 14
+                renderType: Text.NativeRendering
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
             Text {
                 Layout.fillWidth: true
                 Layout.leftMargin: 5
+                Layout.preferredHeight: 16
                 text: tile.artist || "Artist"
                 color: sysPalette.windowText
                 font.pixelSize: 12
+                renderType: Text.NativeRendering
                 opacity: 0.7
                 elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
 
             Item { Layout.fillHeight: true }
