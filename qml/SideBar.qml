@@ -8,6 +8,12 @@ Rectangle {
 
     signal settingsClicked()
 
+    function clearSearch() {
+        searchField.text = ""
+        playerBackend.searchTracks("")
+        playerBackend.searchAlbums("")
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 10
@@ -24,8 +30,7 @@ Rectangle {
                     if (searchField.visible) {
                         searchField.forceActiveFocus()
                     } else {
-                        searchField.text = ""
-                        playerBackend.searchTracks("")
+                        clearSearch()
                     }
                 }
             }
@@ -33,7 +38,10 @@ Rectangle {
             TextField {
                 id: searchField
                 Layout.fillWidth: true
-                placeholderText: "Find track..."
+                placeholderText: {
+                    if (root.currentView === "albums") return "Find album..."
+                    return "Find track..."
+                }
                 visible: false
                 color: sysPalette.text
 
@@ -42,7 +50,13 @@ Rectangle {
                     radius: 4
                 }
 
-                onTextEdited: playerBackend.searchTracks(text)
+                onTextEdited: {
+                    if (root.currentView === "albums") {
+                        playerBackend.searchAlbums(text)
+                    } else {
+                        playerBackend.searchTracks(text)
+                    }
+                }
             }
         }
 
@@ -52,6 +66,7 @@ Rectangle {
             icon.name: "go-home"
             display: AbstractButton.TextBesideIcon
             onClicked: {
+                clearSearch()
                 playerBackend.filterByAlbum("")
                 root.currentView = "tracks"
             }
@@ -62,7 +77,10 @@ Rectangle {
             text: "Albums"
             icon.name: "media-optical-audio"
             display: AbstractButton.TextBesideIcon
-            onClicked: root.currentView = "albums"
+            onClicked: {
+                clearSearch()
+                root.currentView = "albums"
+            }
         }
 
         ToolButton {
@@ -70,7 +88,10 @@ Rectangle {
             text: "Artists"
             icon.name: "system-users"
             display: AbstractButton.TextBesideIcon
-            onClicked: root.currentView = "artists"
+            onClicked: {
+                clearSearch()
+                root.currentView = "artists"
+            }
         }
 
         Item { Layout.fillHeight: true }
