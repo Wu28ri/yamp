@@ -735,4 +735,6 @@ void PlayerBackend::syncWithFolders(const QStringList &folders) {
     for (const QString &want : desired) {
         if (!currentSet.contains(want)) scanFolder(QUrl::fromLocalFile(want));
     }
+
+    m_libraryWatcher->rescanAll();
 }

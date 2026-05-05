@@ -170,11 +170,24 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db, const QSet<QString> &dir
     QStringList allRemovals;
     QStringList allAdditions;
 
-    for (const QString &dir : dirs) {
+    QSet<QString> visited;
+    QStringList queue;
+    queue.reserve(dirs.size());
+    for (const QString &d : dirs) queue.append(d);
+
+    while (!queue.isEmpty()) {
+        const QString dir = queue.takeFirst();
+        if (visited.contains(dir)) continue;
+        visited.insert(dir);
+
         QDir qdir(dir);
         if (qdir.exists()) {
             const auto subs = qdir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-            for (const auto &s : subs) result.newSubdirsToWatch.append(s.absoluteFilePath());
+            for (const auto &s : subs) {
+                const QString subPath = s.absoluteFilePath();
+                result.newSubdirsToWatch.append(subPath);
+                if (!visited.contains(subPath)) queue.append(subPath);
+            }
         }
 
         const QStringList diskFiles = listAudioFilesIn(dir);
@@ -332,6 +345,15 @@ void LibraryWatcher::clearAll() {
     if (!watched.isEmpty()) m_watcher->removePaths(watched);
     m_roots.clear();
     m_pendingDirs.clear();
+}
+
+void LibraryWatcher::rescanAll() {
+    const QStringList current = roots();
+    for (const QString &r : current) {
+        if (!QDir(r).exists()) continue;
+        watchTreeRecursive(r);
+        initialReconcileAsync(r);
+    }
 }
 
 void LibraryWatcher::flushPending() {

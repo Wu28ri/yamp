@@ -22,6 +22,8 @@ public:
 
     void clearAll();
 
+    void rescanAll();
+
     QStringList roots() const;
 
 signals:
