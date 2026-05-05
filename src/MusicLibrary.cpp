@@ -97,6 +97,16 @@ bool initialize() {
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
         "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist COLLATE NOCASE)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks(duration)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_track_no ON tracks(track_no)"));
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"));
 
     QSqlQuery wq(db);
     if (!wq.exec(QStringLiteral(
