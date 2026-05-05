@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <title>YAMP</title>
+  <rect width="512" height="512" rx="113" ry="113" fill="#1f1f28"/>
+  <path d="M 166 141 L 256 256 L 346 141 M 256 256 L 256 384"
+        stroke="#C9A6FF"
+        stroke-width="41"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        fill="none"/>
+</svg>
