@@ -13,6 +13,15 @@ ListView {
 
     property bool ignoreNextScroll: false
 
+    Timer {
+        id: scrollDebounce
+        interval: 80
+        onTriggered: {
+            const realIdx = playerBackend.getRowForPath(playerBackend.currentPath)
+            if (realIdx !== -1) listView.positionViewAtIndex(realIdx, ListView.Center)
+        }
+    }
+
     readonly property real colNum:   50
     readonly property real colCover: 60
     readonly property real colAlbum: 200
@@ -25,10 +34,7 @@ ListView {
                 listView.ignoreNextScroll = false
                 return
             }
-            const realIdx = playerBackend.getRowForPath(playerBackend.currentPath)
-            if (realIdx !== -1) {
-                Qt.callLater(listView.positionViewAtIndex, realIdx, ListView.Center)
-            }
+            scrollDebounce.restart()
         }
     }
 
