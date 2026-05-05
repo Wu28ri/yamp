@@ -1,10 +1,9 @@
 #include "PwVolumeController.h"
 
-#include <QDebug>
 #include <QHash>
 #include <QPointer>
+#include <QSet>
 
-#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <new>
@@ -18,8 +17,6 @@
 
 namespace {
 
-// pavucontrol uses cubic mapping for display; this keeps our slider position
-// in agreement with what the system mixer shows.
 constexpr double kCurve = 3.0;
 
 double userToLinear(double v) {
@@ -46,6 +43,13 @@ struct NodeEntry {
     PwVolumeControllerPrivate *parent = nullptr;
 };
 
+struct ClientCheck {
+    uint32_t id = 0;
+    pw_proxy *proxy = nullptr;
+    spa_hook listener {};
+    PwVolumeControllerPrivate *parent = nullptr;
+};
+
 struct PwVolumeControllerPrivate {
     PwVolumeController *q = nullptr;
 
@@ -56,13 +60,15 @@ struct PwVolumeControllerPrivate {
     spa_hook        registryListener {};
 
     QString pidStr;
+
+    QSet<uint32_t> ourClientIds;
+    QHash<uint32_t, ClientCheck*> clientChecks;
+    QHash<uint32_t, uint32_t> pendingNodes;
     QHash<uint32_t, NodeEntry*> nodes;
 
-    // Desired state (linear 0..1 channelVolumes)
     double targetVolumeLinear = 1.0;
     bool   targetMuted = false;
 
-    // Last reported state from PW
     double reportedVolumeLinear = -1.0;
     bool   reportedMuted = false;
 
@@ -74,6 +80,14 @@ struct PwVolumeControllerPrivate {
     static void onNodeParam(void *object, int seq, uint32_t id, uint32_t index,
                             uint32_t next, const spa_pod *param);
     static void onProxyRemoved(void *object);
+
+    static void onClientInfo(void *object, const pw_client_info *info);
+
+    void handleNodeGlobal(uint32_t id, const spa_dict *props);
+    void rescanPendingNodes();
+
+    void requestClientCheck(uint32_t clientId);
+    void destroyClientCheck(ClientCheck *c);
 
     void bindNode(uint32_t id);
     void unbindNode(uint32_t id);
@@ -88,42 +102,128 @@ struct PwVolumeControllerPrivate {
 
 static const struct pw_registry_events kRegistryEvents = {
     PW_VERSION_REGISTRY_EVENTS,
-    /* global        */ PwVolumeControllerPrivate::onGlobal,
-    /* global_remove */ PwVolumeControllerPrivate::onGlobalRemove,
+    PwVolumeControllerPrivate::onGlobal,
+    PwVolumeControllerPrivate::onGlobalRemove,
 };
 
 static const struct pw_node_events kNodeEvents = {
     PW_VERSION_NODE_EVENTS,
-    /* info  */ PwVolumeControllerPrivate::onNodeInfo,
-    /* param */ PwVolumeControllerPrivate::onNodeParam,
+    PwVolumeControllerPrivate::onNodeInfo,
+    PwVolumeControllerPrivate::onNodeParam,
+};
+
+static const struct pw_client_events kClientEvents = {
+    PW_VERSION_CLIENT_EVENTS,
+    PwVolumeControllerPrivate::onClientInfo,
+    nullptr,
 };
 
 static const struct pw_proxy_events kProxyEvents = {
     PW_VERSION_PROXY_EVENTS,
-    /* destroy */ nullptr,
-    /* bound   */ nullptr,
-    /* removed */ PwVolumeControllerPrivate::onProxyRemoved,
+    nullptr,
+    nullptr,
+    PwVolumeControllerPrivate::onProxyRemoved,
 };
 
 void PwVolumeControllerPrivate::onGlobal(void *data, uint32_t id, uint32_t /*permissions*/,
                                          const char *type, uint32_t /*version*/,
                                          const spa_dict *props) {
     auto *d = static_cast<PwVolumeControllerPrivate*>(data);
-    if (!type || strcmp(type, PW_TYPE_INTERFACE_Node) != 0) return;
-    if (!props) return;
+    if (!type || !props) return;
 
-    const char *pidProp    = spa_dict_lookup(props, PW_KEY_APP_PROCESS_ID);
-    const char *mediaClass = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
-    if (!pidProp || !mediaClass) return;
-    if (d->pidStr != QString::fromUtf8(pidProp)) return;
-    if (strcmp(mediaClass, "Stream/Output/Audio") != 0) return;
-
-    d->bindNode(id);
+    if (strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {
+        d->handleNodeGlobal(id, props);
+    }
 }
 
 void PwVolumeControllerPrivate::onGlobalRemove(void *data, uint32_t id) {
     auto *d = static_cast<PwVolumeControllerPrivate*>(data);
+    d->ourClientIds.remove(id);
+    d->pendingNodes.remove(id);
     if (d->nodes.contains(id)) d->unbindNode(id);
+    if (auto it = d->clientChecks.find(id); it != d->clientChecks.end()) {
+        ClientCheck *c = it.value();
+        d->clientChecks.erase(it);
+        d->destroyClientCheck(c);
+    }
+}
+
+void PwVolumeControllerPrivate::handleNodeGlobal(uint32_t id, const spa_dict *props) {
+    const char *mediaClass = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+    if (!mediaClass || strcmp(mediaClass, "Stream/Output/Audio") != 0) return;
+
+    const char *clientIdProp = spa_dict_lookup(props, PW_KEY_CLIENT_ID);
+    uint32_t clientId = 0;
+    if (clientIdProp) {
+        clientId = static_cast<uint32_t>(QString::fromUtf8(clientIdProp).toUInt());
+    }
+
+    pendingNodes.insert(id, clientId);
+
+    if (clientId == 0) return;
+    if (ourClientIds.contains(clientId)) {
+        bindNode(id);
+    } else {
+        requestClientCheck(clientId);
+    }
+}
+
+void PwVolumeControllerPrivate::requestClientCheck(uint32_t clientId) {
+    if (clientChecks.contains(clientId)) return;
+
+    auto *proxy = static_cast<pw_proxy*>(
+        pw_registry_bind(registry, clientId, PW_TYPE_INTERFACE_Client,
+                         PW_VERSION_CLIENT, sizeof(ClientCheck)));
+    if (!proxy) return;
+
+    auto *c = static_cast<ClientCheck*>(pw_proxy_get_user_data(proxy));
+    new (c) ClientCheck();
+    c->id     = clientId;
+    c->proxy  = proxy;
+    c->parent = this;
+
+    pw_client_add_listener(reinterpret_cast<pw_client*>(proxy),
+                           &c->listener, &kClientEvents, c);
+    clientChecks.insert(clientId, c);
+}
+
+void PwVolumeControllerPrivate::destroyClientCheck(ClientCheck *c) {
+    if (!c) return;
+    spa_hook_remove(&c->listener);
+    if (c->proxy) pw_proxy_destroy(c->proxy);
+    c->~ClientCheck();
+}
+
+void PwVolumeControllerPrivate::onClientInfo(void *object, const pw_client_info *info) {
+    auto *c = static_cast<ClientCheck*>(object);
+    if (!c || !c->parent || !info || !info->props) return;
+
+    const char *pidProp = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_ID);
+    const bool match = pidProp && c->parent->pidStr == QString::fromUtf8(pidProp);
+
+    if (match) {
+        c->parent->ourClientIds.insert(c->id);
+        c->parent->rescanPendingNodes();
+    } else {
+        const uint32_t cid = c->id;
+        auto *parent = c->parent;
+        auto it = parent->clientChecks.find(cid);
+        if (it != parent->clientChecks.end()) {
+            parent->clientChecks.erase(it);
+            parent->destroyClientCheck(c);
+        }
+    }
+}
+
+void PwVolumeControllerPrivate::rescanPendingNodes() {
+    for (auto it = pendingNodes.constBegin(); it != pendingNodes.constEnd(); ++it) {
+        const uint32_t nodeId   = it.key();
+        const uint32_t clientId = it.value();
+        if (clientId == 0) continue;
+        if (!ourClientIds.contains(clientId)) continue;
+        if (nodes.contains(nodeId)) continue;
+        bindNode(nodeId);
+    }
 }
 
 void PwVolumeControllerPrivate::bindNode(uint32_t id) {
@@ -220,7 +320,6 @@ void PwVolumeControllerPrivate::onNodeParam(void *object, int /*seq*/, uint32_t 
 }
 
 void PwVolumeControllerPrivate::onProxyRemoved(void *object) {
-    // The registry sends us a global_remove right before this; nothing to do.
     Q_UNUSED(object);
 }
 
@@ -280,38 +379,45 @@ PwVolumeController::PwVolumeController(QObject *parent)
 
     d->loop = pw_thread_loop_new("yamp-pw-vol", nullptr);
     if (!d->loop) {
-        qWarning() << "[PwVolumeController] pw_thread_loop_new failed";
+        qWarning("[PwVolumeController] pw_thread_loop_new failed");
         return;
     }
 
     pw_thread_loop_lock(d->loop);
     d->context = pw_context_new(pw_thread_loop_get_loop(d->loop), nullptr, 0);
     if (!d->context) {
-        qWarning() << "[PwVolumeController] pw_context_new failed";
+        qWarning("[PwVolumeController] pw_context_new failed");
         pw_thread_loop_unlock(d->loop);
         return;
     }
     d->core = pw_context_connect(d->context, nullptr, 0);
     if (!d->core) {
-        qWarning() << "[PwVolumeController] pw_context_connect failed";
+        qWarning("[PwVolumeController] pw_context_connect failed");
         pw_thread_loop_unlock(d->loop);
         return;
     }
     d->registry = pw_core_get_registry(d->core, PW_VERSION_REGISTRY, 0);
+    if (!d->registry) {
+        qWarning("[PwVolumeController] pw_core_get_registry failed");
+        pw_thread_loop_unlock(d->loop);
+        return;
+    }
     spa_zero(d->registryListener);
     pw_registry_add_listener(d->registry, &d->registryListener, &kRegistryEvents, d);
     pw_thread_loop_unlock(d->loop);
 
     if (pw_thread_loop_start(d->loop) < 0) {
-        qWarning() << "[PwVolumeController] pw_thread_loop_start failed";
+        qWarning("[PwVolumeController] pw_thread_loop_start failed");
     }
 }
 
 PwVolumeController::~PwVolumeController() {
     if (d->loop) {
         pw_thread_loop_lock(d->loop);
-        for (auto *e : std::as_const(d->nodes)) d->destroyNode(e);
+        for (auto *e : std::as_const(d->nodes))         d->destroyNode(e);
+        for (auto *c : std::as_const(d->clientChecks))  d->destroyClientCheck(c);
         d->nodes.clear();
+        d->clientChecks.clear();
         if (d->registry) {
             pw_proxy_destroy(reinterpret_cast<pw_proxy*>(d->registry));
             d->registry = nullptr;

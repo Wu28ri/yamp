@@ -89,9 +89,6 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_audioOutput = new QAudioOutput(this);
     m_player->setAudioOutput(m_audioOutput);
 
-    // Volume/mute is now controlled at the PipeWire stream level (the per-app
-    // slider in pavucontrol/wireplumber). Keep QAudioOutput's internal gain at
-    // unity so the only attenuation comes from the system mixer.
     m_audioOutput->setVolume(1.0);
     m_audioOutput->setMuted(false);
 

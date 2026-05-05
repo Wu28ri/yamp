@@ -10,8 +10,6 @@ public:
     explicit PwVolumeController(QObject *parent = nullptr);
     ~PwVolumeController() override;
 
-    // user-facing 0.0..1.0 values (cubic-mapped to linear internally,
-    // matching the curve pavucontrol uses for display)
     double volume() const;
     bool   isMuted() const;
 
