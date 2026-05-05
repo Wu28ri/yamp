@@ -17,8 +17,9 @@ Rectangle {
         height: 20
         z: 10
         from: 0
-        to: Math.max(playerBackend.duration, 1)
+        to: playerBackend.duration > 0 ? playerBackend.duration : 1
         value: playerBackend.position
+        live: false
         onMoved: playerBackend.position = value
 
         background: Rectangle {
