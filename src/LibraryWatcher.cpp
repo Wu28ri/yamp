@@ -75,7 +75,7 @@ int deleteTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
     db.transaction();
     int removed = 0;
     for (const QString &p : paths) {
-        del.addBindValue(p);
+        del.bindValue(0, p);
         if (del.exec()) removed += del.numRowsAffected();
     }
     db.commit();
