@@ -1,5 +1,8 @@
 #include "TrackModel.h"
 
+#include <QSqlError>
+#include <QSqlQuery>
+
 TrackModel::TrackModel(QObject *parent) : QSqlTableModel(parent) {}
 
 int TrackModel::columnForRole(int role) {
@@ -38,7 +41,14 @@ QHash<int, QByteArray> TrackModel::roleNames() const {
 
 QString TrackModel::pathForRow(int row) {
     if (row < 0) return {};
-    while (canFetchMore()) fetchMore();
-    if (row >= rowCount()) return {};
-    return QSqlTableModel::data(index(row, PathColumn), Qt::DisplayRole).toString();
+    QString sql = QStringLiteral("SELECT path FROM %1").arg(tableName());
+    const QString f = filter();
+    if (!f.isEmpty()) sql += QStringLiteral(" WHERE ") + f;
+    const QString o = orderByClause();
+    if (!o.isEmpty()) sql += QLatin1Char(' ') + o;
+    sql += QStringLiteral(" LIMIT 1 OFFSET ") + QString::number(row);
+    QSqlQuery q(database());
+    q.setForwardOnly(true);
+    if (!q.exec(sql) || !q.next()) return {};
+    return q.value(0).toString();
 }
