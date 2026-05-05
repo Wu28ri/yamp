@@ -61,7 +61,9 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
                               + QLatin1Char('|') + QString::number(maxEdge);
     const int reqW = requestedSize.width();
     const int reqH = requestedSize.height();
-    const QString scaledKey = sourceKey + QLatin1Char('@') + QString::number(reqW);
+    const QString scaledKey = sourceKey + QLatin1Char('@')
+                              + QString::number(reqW) + QLatin1Char('x')
+                              + QString::number(reqH);
 
     {
         QMutexLocker locker(&m_mutex);
