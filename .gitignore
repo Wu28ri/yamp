@@ -82,3 +82,9 @@ CMakeLists.txt.user*
 .uic/
 /build*/
 /.qtcreator/
+
+# Profiler output
+heaptrack.*
+massif.out.*
+callgrind.out.*
+perf.data*
