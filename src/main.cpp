@@ -57,13 +57,13 @@ int main(int argc, char *argv[]) {
     coverProvider->setScaledBudgetKb(settings.coverScaledBudgetMb() * 1024);
     engine.addImageProvider(QStringLiteral("cover"), coverProvider);
 
-    QObject::connect(&settings, &Settings::coverMaxEdgeChanged, &settings, [coverProvider, &settings]() {
+    QObject::connect(&settings, &Settings::coverMaxEdgeChanged, &engine, [coverProvider, &settings]() {
         coverProvider->setMaxEdge(settings.coverMaxEdge());
     });
-    QObject::connect(&settings, &Settings::coverSourceBudgetMbChanged, &settings, [coverProvider, &settings]() {
+    QObject::connect(&settings, &Settings::coverSourceBudgetMbChanged, &engine, [coverProvider, &settings]() {
         coverProvider->setSourceBudgetKb(settings.coverSourceBudgetMb() * 1024);
     });
-    QObject::connect(&settings, &Settings::coverScaledBudgetMbChanged, &settings, [coverProvider, &settings]() {
+    QObject::connect(&settings, &Settings::coverScaledBudgetMbChanged, &engine, [coverProvider, &settings]() {
         coverProvider->setScaledBudgetKb(settings.coverScaledBudgetMb() * 1024);
     });
 
