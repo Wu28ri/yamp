@@ -95,4 +95,6 @@ private:
 
     PlayerBackend *m_backend;
     QTimer *m_metadataTimer = nullptr;
+    mutable QString     m_cachedArtist;
+    mutable QStringList m_cachedArtistList;
 };

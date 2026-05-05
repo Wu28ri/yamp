@@ -62,8 +62,13 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
     dict.insert(QStringLiteral("mpris:length"),
                 static_cast<qlonglong>(m_backend->duration()) * 1000);
     dict.insert(QStringLiteral("xesam:title"),  m_backend->currentTitle());
-    QStringList artists = MusicLibrary::splitArtists(m_backend->currentArtist());
-    if (artists.isEmpty()) artists.append(m_backend->currentArtist());
+    const QString cur = m_backend->currentArtist();
+    if (cur != m_cachedArtist) {
+        m_cachedArtist = cur;
+        m_cachedArtistList = MusicLibrary::splitArtists(cur);
+        if (m_cachedArtistList.isEmpty()) m_cachedArtistList.append(cur);
+    }
+    const QStringList &artists = m_cachedArtistList;
     dict.insert(QStringLiteral("xesam:artist"), artists);
     dict.insert(QStringLiteral("xesam:albumArtist"), artists);
     dict.insert(QStringLiteral("xesam:album"),  m_backend->currentAlbum());
