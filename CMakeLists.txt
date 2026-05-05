@@ -9,7 +9,7 @@ set(QT_QML_GENERATE_QMLLS_INI ON)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib)
-pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+pkg_check_modules(LIBPULSE REQUIRED IMPORTED_TARGET libpulse)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Multimedia Sql DBus)
 
@@ -58,8 +58,8 @@ qt_add_qml_module(appyamp
         src/ScanSession.cpp
         src/PlayerBackend.h
         src/PlayerBackend.cpp
-        src/PwVolumeController.h
-        src/PwVolumeController.cpp
+        src/PaVolumeController.h
+        src/PaVolumeController.cpp
         src/MprisAdaptor.h
         src/MprisAdaptor.cpp
         src/settings.h
@@ -80,7 +80,7 @@ target_link_libraries(appyamp
         Qt6::Sql
         Qt6::DBus
         PkgConfig::TAGLIB
-        PkgConfig::PIPEWIRE
+        PkgConfig::LIBPULSE
 )
 
 include(GNUInstallDirs)

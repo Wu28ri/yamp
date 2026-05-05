@@ -2,13 +2,13 @@
 
 #include <QObject>
 
-struct PwVolumeControllerPrivate;
+struct PaVolumeControllerPrivate;
 
-class PwVolumeController : public QObject {
+class PaVolumeController : public QObject {
     Q_OBJECT
 public:
-    explicit PwVolumeController(QObject *parent = nullptr);
-    ~PwVolumeController() override;
+    explicit PaVolumeController(QObject *parent = nullptr);
+    ~PaVolumeController() override;
 
     double volume() const;
     bool   isMuted() const;
@@ -21,5 +21,5 @@ signals:
     void mutedChanged();
 
 private:
-    PwVolumeControllerPrivate *d;
+    PaVolumeControllerPrivate *d;
 };

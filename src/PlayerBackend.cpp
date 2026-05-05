@@ -92,10 +92,10 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_audioOutput->setVolume(1.0);
     m_audioOutput->setMuted(false);
 
-    m_pwVolume = new PwVolumeController(this);
-    connect(m_pwVolume, &PwVolumeController::volumeChanged,
+    m_paVolume = new PaVolumeController(this);
+    connect(m_paVolume, &PaVolumeController::volumeChanged,
             this, &PlayerBackend::volumeChanged);
-    connect(m_pwVolume, &PwVolumeController::mutedChanged,
+    connect(m_paVolume, &PaVolumeController::mutedChanged,
             this, &PlayerBackend::mutedChanged);
 
     setupMpris();
@@ -168,11 +168,11 @@ void PlayerBackend::setupMpris() {
 }
 
 void PlayerBackend::setMuted(bool muted) {
-    m_pwVolume->setMuted(muted);
+    m_paVolume->setMuted(muted);
 }
 
 void PlayerBackend::setVolume(qreal v) {
-    m_pwVolume->setVolume(v);
+    m_paVolume->setVolume(v);
 }
 
 void PlayerBackend::setShuffle(bool enabled) {
