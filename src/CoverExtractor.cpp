@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 
 #include <taglib/attachedpictureframe.h>
@@ -85,16 +86,42 @@ QString sidecarImagePath(const QString &trackPath) {
 }
 
 QImage loadCover(const QString &trackPath) {
-    QImage image;
+    return loadCoverWithBytes(trackPath).image;
+}
 
-    const QByteArray data = embeddedPicture(trackPath);
-    if (!data.isEmpty()) image.loadFromData(data);
+CoverData loadCoverWithBytes(const QString &trackPath) {
+    CoverData result;
 
-    if (image.isNull()) {
-        const QString sidecar = sidecarImagePath(trackPath);
-        if (!sidecar.isEmpty()) image.load(sidecar);
+    QByteArray data = embeddedPicture(trackPath);
+    if (!data.isEmpty()) {
+        QImage image;
+        if (image.loadFromData(data)) {
+            result.image = std::move(image);
+            result.bytes = std::move(data);
+            return result;
+        }
     }
-    return image;
+
+    const QString sidecar = sidecarImagePath(trackPath);
+    if (!sidecar.isEmpty()) {
+        QFile file(sidecar);
+        if (file.open(QIODevice::ReadOnly)) {
+            QByteArray raw = file.readAll();
+            QImage image;
+            if (!raw.isEmpty() && image.loadFromData(raw)) {
+                result.image = std::move(image);
+                result.bytes = std::move(raw);
+                result.fromSidecar = true;
+                return result;
+            }
+        }
+        QImage image;
+        if (image.load(sidecar)) {
+            result.image = std::move(image);
+            result.fromSidecar = true;
+        }
+    }
+    return result;
 }
 
 QString detectImageExtension(const QByteArray &data) {
