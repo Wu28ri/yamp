@@ -13,7 +13,6 @@ struct Track {
     QString techInfo;
     int trackNo = 0;
 
-    // ReplayGain values. NaN means "tag not present".
     double rgTrackGainDb = std::numeric_limits<double>::quiet_NaN();
     double rgAlbumGainDb = std::numeric_limits<double>::quiet_NaN();
     double rgTrackPeak   = std::numeric_limits<double>::quiet_NaN();

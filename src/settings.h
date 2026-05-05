@@ -21,7 +21,6 @@ class Settings : public QObject {
     Q_PROPERTY(bool    replayGainClipProtect READ replayGainClipProtect WRITE setReplayGainClipProtect NOTIFY replayGainClipProtectChanged)
 
 public:
-    // Mirrors PlayerBackend::ReplayGainMode.
     enum ReplayGainMode { RgModeTrack = 0, RgModeAlbum = 1 };
     Q_ENUM(ReplayGainMode)
 

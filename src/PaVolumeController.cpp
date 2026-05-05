@@ -24,7 +24,7 @@ double paToUser(pa_volume_t v) {
     return linear;
 }
 
-} // namespace
+}
 
 struct PaVolumeControllerPrivate {
     PaVolumeController *q = nullptr;
@@ -112,7 +112,7 @@ void PaVolumeControllerPrivate::requestClientInfo(uint32_t clientId) {
     }
 }
 
-void PaVolumeControllerPrivate::onClientInfo(pa_context * /*c*/,
+void PaVolumeControllerPrivate::onClientInfo(pa_context *,
                                              const pa_client_info *info,
                                              int eol, void *ud) {
     if (eol > 0 || !info || !info->proplist) return;
@@ -134,9 +134,6 @@ void PaVolumeControllerPrivate::onSinkInputInfo(pa_context *c,
     if (eol > 0 || !info) return;
     auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
 
-    // First, try matching by the sink-input's own application.process.id.
-    // On native PulseAudio this is usually set; on PipeWire-pulse compat it
-    // often isn't, so we fall back to looking up the owning client below.
     bool ours = false;
     if (info->proplist) {
         const char *pid = pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_PROCESS_ID);

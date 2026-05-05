@@ -35,12 +35,9 @@ QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int b
     return out;
 }
 
-// Parse "-7.24 dB" / "-7.24" / "-7,24 dB" / "+3.0dB" into a double.
-// Returns NaN on failure.
 double parseReplayGainDb(const QString &raw) {
     if (raw.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
     QString s = raw.trimmed();
-    // Drop trailing "dB"/"db" with optional spaces.
     static const QRegularExpression dbSuffix(
         QStringLiteral(R"(\s*dB\s*$)"),
         QRegularExpression::CaseInsensitiveOption);
@@ -62,7 +59,6 @@ double parseReplayGainPeak(const QString &raw) {
     return ok ? v : std::numeric_limits<double>::quiet_NaN();
 }
 
-// Case-insensitive property lookup that also accepts the R128 variants.
 QString pickPropertyCI(const TagLib::PropertyMap &props, std::initializer_list<const char*> keys) {
     for (const char *k : keys) {
         for (auto it = props.begin(); it != props.end(); ++it) {
@@ -261,9 +257,6 @@ bool initialize() {
         countQ.exec(QStringLiteral("PRAGMA user_version = 3"));
     }
     if (userVersion < 4) {
-        // Schema v4: ReplayGain columns are present (either fresh CREATE TABLE
-        // or via the ALTER TABLE statements above). Existing rows stay NULL
-        // until the next library scan populates them.
         countQ.exec(QStringLiteral("PRAGMA user_version = 4"));
     }
 
@@ -431,11 +424,6 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
 
-            // ReplayGain keys. TagLib's PropertyMap unifies:
-            //  * Vorbis comments (FLAC/Ogg): REPLAYGAIN_TRACK_GAIN, etc.
-            //  * ID3v2 TXXX frames: exposed with the TXXX description as key.
-            //  * APEv2: REPLAYGAIN_TRACK_GAIN, etc.
-            // We do a case-insensitive lookup to be safe across tools.
             rgTrackGain = parseReplayGainDb(
                 pickPropertyCI(props, {"REPLAYGAIN_TRACK_GAIN"}));
             rgAlbumGain = parseReplayGainDb(

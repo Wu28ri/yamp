@@ -214,12 +214,6 @@ void PlayerBackend::setReplayGainClipProtect(bool enabled) {
 }
 
 void PlayerBackend::applyReplayGainToOutput() {
-    // Gain of 0 dB = linear factor 1.0. QAudioOutput::setVolume() takes a
-    // linear 0..1 value applied in software before the sink. Anything over
-    // 1.0 would clip, so we never push the output above unity here; a
-    // positive ReplayGain (rare, ~quiet masters) will effectively be
-    // capped unless the user's preamp explicitly asks for boost and no
-    // peak protection kicks in.
     if (!m_audioOutput) return;
 
     double gainDb = 0.0;
@@ -241,18 +235,12 @@ void PlayerBackend::applyReplayGainToOutput() {
         const double peak = (m_rgMode == RgModeAlbum && !std::isnan(m_currentTrack.rgAlbumPeak))
                                 ? m_currentTrack.rgAlbumPeak
                                 : m_currentTrack.rgTrackPeak;
-        // peak is stored as a sample-amplitude ratio (0..1+). If peak * linear
-        // would exceed 1.0 we scale the gain down so the loudest sample sits
-        // at full scale.
         if (!std::isnan(peak) && peak > 0.0) {
             const double maxLinear = 1.0 / peak;
             if (linear > maxLinear) linear = maxLinear;
         }
     }
 
-    // QAudioOutput is a software mixer on top of the system mixer. We keep it
-    // in the 0..1 range to avoid clipping within Qt itself; the user-facing
-    // volume is still driven by PulseAudio through PaVolumeController.
     if (linear < 0.0) linear = 0.0;
     if (linear > 1.0) linear = 1.0;
     m_audioOutput->setVolume(linear);

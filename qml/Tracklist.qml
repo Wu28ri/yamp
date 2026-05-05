@@ -12,15 +12,45 @@ ListView {
     cacheBuffer: 2000
 
     property bool ignoreNextScroll: false
+    property int  pendingScrollIdx: -1
 
     Timer {
         id: scrollDebounce
         interval: 80
         onTriggered: {
             const realIdx = playerBackend.getRowForPath(playerBackend.currentPath)
-            if (realIdx !== -1) {
-                playerBackend.trackModel.ensureFetchedTo(realIdx)
-                listView.positionViewAtIndex(realIdx, ListView.Center)
+            if (realIdx < 0) return
+            playerBackend.trackModel.ensureFetchedTo(realIdx)
+            listView.pendingScrollIdx = realIdx
+            scrollApply.attempts = 0
+            scrollApply.restart()
+        }
+    }
+
+    Timer {
+        id: scrollApply
+        interval: 16
+        repeat: true
+        property int attempts: 0
+        onTriggered: {
+            const idx = listView.pendingScrollIdx
+            if (idx < 0) { stop(); return }
+
+            if (idx >= listView.count) {
+                playerBackend.trackModel.ensureFetchedTo(idx)
+                if (++attempts > 30) { stop(); listView.pendingScrollIdx = -1 }
+                return
+            }
+
+            listView.forceLayout()
+            listView.positionViewAtIndex(idx, ListView.Center)
+            listView.forceLayout()
+
+            const hit = listView.indexAt(listView.width / 2,
+                                         listView.contentY + listView.height / 2)
+            if (hit === idx || ++attempts > 30) {
+                listView.pendingScrollIdx = -1
+                stop()
             }
         }
     }
