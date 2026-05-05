@@ -1,64 +1,74 @@
-# YAMP — Yet Another Music Player
+<div align="center">
 
-A performance-oriented, ultra-lightweight music player built with C++, Qt 6, and QML.
+<img src="icons/yamp-256.png" width="120" height="120" alt="YAMP" />
 
-![License](https://img.shields.io/badge/license-GPLv3-blue.svg)
+# YAMP
 
+**Yet Another Music Player**
 
+A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and QML.
 
-![YAMP](preview1.png)
-![YAMP](Preview2.png)
-![YAMP](preview3.png)
-![YAMP](preview4.png)
-![YAMP](preview5.png)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg?style=flat-square)](LICENSE)
+[![AUR version](https://img.shields.io/aur/version/yamp-git?style=flat-square&label=AUR)](https://aur.archlinux.org/packages/yamp-git)
+[![Made with Qt](https://img.shields.io/badge/Qt-6.8+-41CD52?style=flat-square&logo=qt&logoColor=white)](https://www.qt.io/)
 
+</div>
 
+---
 
-## ⚠️ Project Status: Experimental Early Access
-This project is currently in a **very early stage of development**. 
-- It is functional for daily use but may contain bugs.
-- Active development is ongoing.
-- Features are subject to change.
+> **⚠️ Project status — experimental early access**
+>
+> Functional for daily use, but may contain bugs. Active development is ongoing and features are subject to change.
 
-## Key Features
-- **Fast Media Scanning:** SQLite-backed library management for handling thousands of tracks instantly.
-- **MPRIS Support:** Full integration with system media controllers and lock screens.
-- **Modern Stack:** Built using Qt 6.8+, QtMultimedia, and TagLib.
+## Screenshots
 
-## Prerequisites
-To build YAMP, you need the following packages installed:
+<p align="center">
+  <img src="preview1.png" width="49%" />
+  <img src="Preview2.png" width="49%" />
+</p>
+<p align="center">
+  <img src="preview3.png" width="49%" />
+  <img src="preview4.png" width="49%" />
+</p>
+<p align="center">
+  <img src="preview5.png" width="98%" />
+</p>
 
-```bash for arch based
-sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative qt6-multimedia taglib
-```
-Installation
+## Features
 
-YAMP is now in the AUR. Install via any AUR helper.
+- **Fast media scanning** — SQLite-backed library handles thousands of tracks instantly.
+- **MPRIS support** — full integration with system media controllers and lock screens.
+- **Modern stack** — built on Qt 6.8+, QtMultimedia and TagLib.
 
-```Bash
+## Installation
+
+### Arch Linux — AUR
+
+YAMP is in the AUR. Install via any helper:
+
+```bash
 yay -S yamp-git
 ```
-without helpers
 
-Clone the repository:
-```Bash
-    git clone https://github.com/Wu28ri/yamp.git
-    cd yamp
-```
-  Build and install using makepkg:
-```Bash
+### From source — `makepkg`
+
+```bash
+sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative qt6-multimedia taglib
+git clone https://github.com/Wu28ri/yamp.git
+cd yamp
 makepkg -si
 ```
-Manual Build (CMake)
-```Bash
 
+### Manual build — CMake
+
+```bash
 git clone https://github.com/Wu28ri/yamp.git
 cd yamp
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-# To run without installing:
 ./build/appyamp
 ```
-License
 
-This project is licensed under the GPLv3 License. See the LICENSE file for details.
+## License
+
+YAMP is released under the GPLv3 license. See [LICENSE](LICENSE) for details.
