@@ -238,9 +238,7 @@ QStringList LibraryWatcher::roots() const {
 }
 
 void LibraryWatcher::start() {
-    QSqlDatabase db = QSqlDatabase::database();
     const QStringList loaded = loadRoots();
-    bool anyChange = false;
     for (const QString &raw : loaded) {
         const QString r = QDir(raw).absolutePath();
         if (!QDir(r).exists()) continue;
@@ -248,13 +246,8 @@ void LibraryWatcher::start() {
         m_roots.insert(r);
 
         watchTreeRecursive(r);
-
-        const QStringList dbBefore = dbPathsUnder(db, r);
-        initialReconcile(r);
-        const QStringList dbAfter = dbPathsUnder(db, r);
-        if (dbBefore != dbAfter) anyChange = true;
+        initialReconcileAsync(r);
     }
-    if (anyChange) emit libraryChanged();
 }
 
 QString LibraryWatcher::attachRoot(const QString &path) {
@@ -286,12 +279,8 @@ void LibraryWatcher::addRoot(const QString &path) {
     const QString clean = attachRoot(path);
     if (clean.isEmpty()) return;
 
-    QSqlDatabase db = QSqlDatabase::database();
-    const QStringList dbBefore = dbPathsUnder(db, clean);
-    initialReconcile(clean);
     watchTreeRecursive(clean);
-    const QStringList dbAfter = dbPathsUnder(db, clean);
-    if (dbBefore != dbAfter) emit libraryChanged();
+    initialReconcileAsync(clean);
 }
 
 void LibraryWatcher::registerScannedRoot(const QString &path) {
@@ -427,58 +416,88 @@ void LibraryWatcher::unwatchTree(const QString &root) {
     if (!toRemove.isEmpty()) m_watcher->removePaths(toRemove);
 }
 
-void LibraryWatcher::initialReconcile(const QString &root) {
-    QSet<QString> diskFiles;
-    QDirIterator it(root,
-                    {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
-                    QDir::Files | QDir::NoSymLinks,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext()) diskFiles.insert(it.next());
+void LibraryWatcher::initialReconcileAsync(const QString &root) {
+    QThreadPool::globalInstance()->start([this, root]() {
+        const QString connName = QStringLiteral("yamp_lw_init_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        bool changed = false;
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
+            db.setDatabaseName(MusicLibrary::databasePath());
+            if (!db.open()) {
+                qWarning() << "[LibraryWatcher] initial reconcile open DB:" << db.lastError().text();
+            } else {
+                QSqlQuery pragma(db);
+                pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
+                pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
+                pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
+                pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
 
-    QSqlDatabase db = QSqlDatabase::database();
-    const QStringList dbList = dbPathsUnder(db, root);
-    const QSet<QString> dbFiles(dbList.begin(), dbList.end());
+                QSet<QString> diskFiles;
+                QDirIterator it(root,
+                                {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
+                                QDir::Files | QDir::NoSymLinks,
+                                QDirIterator::Subdirectories);
+                while (it.hasNext()) diskFiles.insert(it.next());
 
-    QStringList removals;
-    for (const QString &p : dbFiles) if (!diskFiles.contains(p)) removals.append(p);
+                const QStringList dbList = dbPathsUnder(db, root);
+                const QSet<QString> dbFiles(dbList.begin(), dbList.end());
 
-    QStringList additions;
-    for (const QString &p : diskFiles) if (!dbFiles.contains(p)) additions.append(p);
+                QStringList removals;
+                for (const QString &p : dbFiles) if (!diskFiles.contains(p)) removals.append(p);
 
-    QHash<QPair<qint64, int>, QString> removalIndex;
-    {
-        QSqlQuery sigQ(db);
-        sigQ.prepare(QStringLiteral("SELECT file_size, duration FROM tracks WHERE path = ?"));
-        for (const QString &p : removals) {
-            qint64 sz = 0;
-            int dur = 0;
-            if (loadDbSignature(sigQ, p, sz, dur) && sz > 0) {
-                removalIndex.insert(qMakePair(sz, dur), p);
+                QStringList additions;
+                for (const QString &p : diskFiles) if (!dbFiles.contains(p)) additions.append(p);
+
+                QHash<QPair<qint64, int>, QString> removalIndex;
+                {
+                    QSqlQuery sigQ(db);
+                    sigQ.prepare(QStringLiteral("SELECT file_size, duration FROM tracks WHERE path = ?"));
+                    for (const QString &p : removals) {
+                        qint64 sz = 0;
+                        int dur = 0;
+                        if (loadDbSignature(sigQ, p, sz, dur) && sz > 0) {
+                            removalIndex.insert(qMakePair(sz, dur), p);
+                        }
+                    }
+                }
+
+                QSet<QString> matchedRemovals;
+                QStringList unmatchedAdditions;
+                for (const QString &add : additions) {
+                    Track t;
+                    qint64 sz = 0;
+                    if (!MusicLibrary::readTrackFromFile(add, t, sz)) continue;
+                    const auto key = qMakePair(sz, t.duration);
+                    const auto it2 = removalIndex.find(key);
+                    if (it2 != removalIndex.end()) {
+                        updateTrackPath(db, it2.value(), add);
+                        matchedRemovals.insert(it2.value());
+                        removalIndex.erase(it2);
+                    } else {
+                        unmatchedAdditions.append(add);
+                    }
+                }
+                if (!matchedRemovals.isEmpty()) changed = true;
+
+                QStringList toDelete;
+                for (const QString &p : removals) {
+                    if (!matchedRemovals.contains(p)) toDelete.append(p);
+                }
+                if (!toDelete.isEmpty()) {
+                    if (deleteTrackRowsBatch(db, toDelete) > 0) changed = true;
+                }
+                if (!unmatchedAdditions.isEmpty()) {
+                    if (insertTrackRowsBatch(db, unmatchedAdditions) > 0) changed = true;
+                }
+                db.close();
             }
         }
-    }
+        QSqlDatabase::removeDatabase(connName);
 
-    QSet<QString> matchedRemovals;
-    QStringList unmatchedAdditions;
-    for (const QString &add : additions) {
-        Track t;
-        qint64 sz = 0;
-        if (!MusicLibrary::readTrackFromFile(add, t, sz)) continue;
-        const auto key = qMakePair(sz, t.duration);
-        const auto it2 = removalIndex.find(key);
-        if (it2 != removalIndex.end()) {
-            updateTrackPath(db, it2.value(), add);
-            matchedRemovals.insert(it2.value());
-            removalIndex.erase(it2);
-        } else {
-            unmatchedAdditions.append(add);
+        if (changed) {
+            QMetaObject::invokeMethod(this, [this]() {
+                emit libraryChanged();
+            }, Qt::QueuedConnection);
         }
-    }
-
-    QStringList toDelete;
-    for (const QString &p : removals) {
-        if (!matchedRemovals.contains(p)) toDelete.append(p);
-    }
-    if (!toDelete.isEmpty()) deleteTrackRowsBatch(db, toDelete);
-    if (!unmatchedAdditions.isEmpty()) insertTrackRowsBatch(db, unmatchedAdditions);
+    });
 }

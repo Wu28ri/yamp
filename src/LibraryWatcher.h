@@ -39,7 +39,7 @@ private:
     void watchTreeRecursive(const QString &root);
     void unwatchTree(const QString &root);
 
-    void initialReconcile(const QString &root);
+    void initialReconcileAsync(const QString &root);
 
     QFileSystemWatcher *m_watcher = nullptr;
     QTimer *m_debounce = nullptr;
