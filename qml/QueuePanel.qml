@@ -122,6 +122,7 @@ Rectangle {
                     drag.smoothed: false
 
                     property bool wasDragged: false
+                    property bool _moving: false
 
                     onPressed: wasDragged = false
                     onPositionChanged: {
@@ -129,8 +130,10 @@ Rectangle {
                             wasDragged = true
                             const mappedY = contentItem.mapToItem(queueList.contentItem, 0, contentItem.height / 2).y
                             const targetIndex = queueList.indexAt(0, mappedY)
-                            if (targetIndex !== -1 && targetIndex !== delegateRoot.index) {
+                            if (targetIndex !== -1 && targetIndex !== delegateRoot.index && !_moving) {
+                                _moving = true
                                 playerBackend.queueModel.move(delegateRoot.index, targetIndex)
+                                Qt.callLater(() => mouseArea._moving = false)
                             }
                         }
                     }
