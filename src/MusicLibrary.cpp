@@ -258,6 +258,7 @@ void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArti
         findId.bindValue(0, norm);
         if (!findId.exec() || !findId.next()) continue;
         const qint64 artistId = findId.value(0).toLongLong();
+        findId.finish();
 
         link.bindValue(0, trackId);
         link.bindValue(1, artistId);
