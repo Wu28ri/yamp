@@ -15,8 +15,16 @@ class Settings : public QObject {
     Q_PROPERTY(int     coverMaxEdge        READ coverMaxEdge        WRITE setCoverMaxEdge        NOTIFY coverMaxEdgeChanged)
     Q_PROPERTY(int     coverSourceBudgetMb READ coverSourceBudgetMb WRITE setCoverSourceBudgetMb NOTIFY coverSourceBudgetMbChanged)
     Q_PROPERTY(int     coverScaledBudgetMb READ coverScaledBudgetMb WRITE setCoverScaledBudgetMb NOTIFY coverScaledBudgetMbChanged)
+    Q_PROPERTY(bool    replayGainEnabled READ replayGainEnabled WRITE setReplayGainEnabled NOTIFY replayGainEnabledChanged)
+    Q_PROPERTY(int     replayGainMode    READ replayGainMode    WRITE setReplayGainMode    NOTIFY replayGainModeChanged)
+    Q_PROPERTY(qreal   replayGainPreampDb    READ replayGainPreampDb    WRITE setReplayGainPreampDb    NOTIFY replayGainPreampDbChanged)
+    Q_PROPERTY(bool    replayGainClipProtect READ replayGainClipProtect WRITE setReplayGainClipProtect NOTIFY replayGainClipProtectChanged)
 
 public:
+    // Mirrors PlayerBackend::ReplayGainMode.
+    enum ReplayGainMode { RgModeTrack = 0, RgModeAlbum = 1 };
+    Q_ENUM(ReplayGainMode)
+
     explicit Settings(QObject *parent = nullptr);
 
     QStringList musicFolders() const;
@@ -29,6 +37,10 @@ public:
     int     coverMaxEdge()        const { return m_coverMaxEdge; }
     int     coverSourceBudgetMb() const { return m_coverSourceBudgetMb; }
     int     coverScaledBudgetMb() const { return m_coverScaledBudgetMb; }
+    bool    replayGainEnabled()     const { return m_rgEnabled; }
+    int     replayGainMode()        const { return m_rgMode; }
+    qreal   replayGainPreampDb()    const { return m_rgPreampDb; }
+    bool    replayGainClipProtect() const { return m_rgClipProtect; }
 
     void setVolume(qreal v);
     void setShuffle(bool s);
@@ -38,6 +50,10 @@ public:
     void setCoverMaxEdge(int edge);
     void setCoverSourceBudgetMb(int mb);
     void setCoverScaledBudgetMb(int mb);
+    void setReplayGainEnabled(bool enabled);
+    void setReplayGainMode(int mode);
+    void setReplayGainPreampDb(qreal db);
+    void setReplayGainClipProtect(bool enabled);
 
 public slots:
     void addFolder(const QUrl &folderUrl);
@@ -58,6 +74,10 @@ signals:
     void coverMaxEdgeChanged();
     void coverSourceBudgetMbChanged();
     void coverScaledBudgetMbChanged();
+    void replayGainEnabledChanged();
+    void replayGainModeChanged();
+    void replayGainPreampDbChanged();
+    void replayGainClipProtectChanged();
 
 private:
     QStringList m_folders;
@@ -71,6 +91,10 @@ private:
     int     m_coverMaxEdge        = 384;
     int     m_coverSourceBudgetMb = 48;
     int     m_coverScaledBudgetMb = 16;
+    bool    m_rgEnabled           = false;
+    int     m_rgMode              = RgModeTrack;
+    qreal   m_rgPreampDb          = 0.0;
+    bool    m_rgClipProtect       = true;
 
     void loadSettings();
     void saveFolders();

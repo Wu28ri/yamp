@@ -14,6 +14,9 @@
 #include <QUuid>
 #include <QVariant>
 
+#include <cmath>
+#include <limits>
+
 #include <taglib/fileref.h>
 #include <taglib/flacproperties.h>
 #include <taglib/tag.h>
@@ -30,6 +33,46 @@ QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int b
     if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
     out += QStringLiteral(" | %1 kbps").arg(bitrate);
     return out;
+}
+
+// Parse "-7.24 dB" / "-7.24" / "-7,24 dB" / "+3.0dB" into a double.
+// Returns NaN on failure.
+double parseReplayGainDb(const QString &raw) {
+    if (raw.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
+    QString s = raw.trimmed();
+    // Drop trailing "dB"/"db" with optional spaces.
+    static const QRegularExpression dbSuffix(
+        QStringLiteral(R"(\s*dB\s*$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    s.remove(dbSuffix);
+    s.replace(QLatin1Char(','), QLatin1Char('.'));
+    s = s.trimmed();
+    if (s.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
+    bool ok = false;
+    const double v = s.toDouble(&ok);
+    return ok ? v : std::numeric_limits<double>::quiet_NaN();
+}
+
+double parseReplayGainPeak(const QString &raw) {
+    if (raw.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
+    QString s = raw.trimmed();
+    s.replace(QLatin1Char(','), QLatin1Char('.'));
+    bool ok = false;
+    const double v = s.toDouble(&ok);
+    return ok ? v : std::numeric_limits<double>::quiet_NaN();
+}
+
+// Case-insensitive property lookup that also accepts the R128 variants.
+QString pickPropertyCI(const TagLib::PropertyMap &props, std::initializer_list<const char*> keys) {
+    for (const char *k : keys) {
+        for (auto it = props.begin(); it != props.end(); ++it) {
+            const QString keyStr = QString::fromStdString(it->first.to8Bit(true));
+            if (keyStr.compare(QLatin1String(k), Qt::CaseInsensitive) == 0 && !it->second.isEmpty()) {
+                return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
+            }
+        }
+    }
+    return {};
 }
 
 }
@@ -68,18 +111,28 @@ bool initialize() {
             "path TEXT UNIQUE, duration INTEGER, "
             "search_text TEXT, track_no INTEGER, "
             "tech_info TEXT, file_size INTEGER DEFAULT 0, "
-            "album_artist TEXT)"))) {
+            "album_artist TEXT, "
+            "rg_track_gain REAL, rg_album_gain REAL, "
+            "rg_track_peak REAL, rg_album_peak REAL)"))) {
         qWarning() << "[MusicLibrary] schema tracks:" << q.lastError().text();
         return false;
     }
 
-    bool hasFileSize = false;
+    bool hasFileSize    = false;
     bool hasAlbumArtist = false;
+    bool hasRgTrackGain = false;
+    bool hasRgAlbumGain = false;
+    bool hasRgTrackPeak = false;
+    bool hasRgAlbumPeak = false;
     if (q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
         while (q.next()) {
             const QString col = q.value(1).toString();
-            if (col == QLatin1String("file_size"))    hasFileSize = true;
-            if (col == QLatin1String("album_artist")) hasAlbumArtist = true;
+            if (col == QLatin1String("file_size"))      hasFileSize    = true;
+            if (col == QLatin1String("album_artist"))   hasAlbumArtist = true;
+            if (col == QLatin1String("rg_track_gain"))  hasRgTrackGain = true;
+            if (col == QLatin1String("rg_album_gain"))  hasRgAlbumGain = true;
+            if (col == QLatin1String("rg_track_peak"))  hasRgTrackPeak = true;
+            if (col == QLatin1String("rg_album_peak"))  hasRgAlbumPeak = true;
         }
     }
     if (!hasFileSize) {
@@ -94,6 +147,18 @@ bool initialize() {
             qWarning() << "[MusicLibrary] add album_artist:" << alterQ.lastError().text();
         }
     }
+    auto addRgColumn = [&db](const char *name) {
+        QSqlQuery alterQ(db);
+        const QString sql = QStringLiteral("ALTER TABLE tracks ADD COLUMN %1 REAL")
+                                .arg(QLatin1String(name));
+        if (!alterQ.exec(sql)) {
+            qWarning() << "[MusicLibrary] add" << name << ':' << alterQ.lastError().text();
+        }
+    };
+    if (!hasRgTrackGain) addRgColumn("rg_track_gain");
+    if (!hasRgAlbumGain) addRgColumn("rg_album_gain");
+    if (!hasRgTrackPeak) addRgColumn("rg_track_peak");
+    if (!hasRgAlbumPeak) addRgColumn("rg_album_peak");
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
         "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"));
@@ -194,6 +259,12 @@ bool initialize() {
         QSqlQuery dropQ(db);
         dropQ.exec(QStringLiteral("DROP TRIGGER IF EXISTS ta_after_delete"));
         countQ.exec(QStringLiteral("PRAGMA user_version = 3"));
+    }
+    if (userVersion < 4) {
+        // Schema v4: ReplayGain columns are present (either fresh CREATE TABLE
+        // or via the ALTER TABLE statements above). Existing rows stay NULL
+        // until the next library scan populates them.
+        countQ.exec(QStringLiteral("PRAGMA user_version = 4"));
     }
 
     return true;
@@ -334,6 +405,11 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
     int duration = 0;
     int trackNo  = 0;
 
+    double rgTrackGain = std::numeric_limits<double>::quiet_NaN();
+    double rgAlbumGain = std::numeric_limits<double>::quiet_NaN();
+    double rgTrackPeak = std::numeric_limits<double>::quiet_NaN();
+    double rgAlbumPeak = std::numeric_limits<double>::quiet_NaN();
+
     if (!f.isNull()) {
         if (auto *tag = f.tag()) {
             const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
@@ -354,6 +430,20 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
             albumArtistTag = pickProp("ALBUMARTIST");
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
+
+            // ReplayGain keys. TagLib's PropertyMap unifies:
+            //  * Vorbis comments (FLAC/Ogg): REPLAYGAIN_TRACK_GAIN, etc.
+            //  * ID3v2 TXXX frames: exposed with the TXXX description as key.
+            //  * APEv2: REPLAYGAIN_TRACK_GAIN, etc.
+            // We do a case-insensitive lookup to be safe across tools.
+            rgTrackGain = parseReplayGainDb(
+                pickPropertyCI(props, {"REPLAYGAIN_TRACK_GAIN"}));
+            rgAlbumGain = parseReplayGainDb(
+                pickPropertyCI(props, {"REPLAYGAIN_ALBUM_GAIN"}));
+            rgTrackPeak = parseReplayGainPeak(
+                pickPropertyCI(props, {"REPLAYGAIN_TRACK_PEAK"}));
+            rgAlbumPeak = parseReplayGainPeak(
+                pickPropertyCI(props, {"REPLAYGAIN_ALBUM_PEAK"}));
         }
         if (auto *audio = f.audioProperties()) {
             duration = audio->lengthInSeconds();
@@ -373,6 +463,10 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
     t.duration    = duration;
     t.techInfo    = techInfo;
     t.trackNo     = trackNo;
+    t.rgTrackGainDb = rgTrackGain;
+    t.rgAlbumGainDb = rgAlbumGain;
+    t.rgTrackPeak   = rgTrackPeak;
+    t.rgAlbumPeak   = rgAlbumPeak;
     return true;
 }
 
@@ -427,8 +521,10 @@ void LibraryScanner::run() {
         QSqlQuery insertTrack(db);
         insertTrack.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
-            "(title, artist, album, path, duration, search_text, track_no, tech_info, file_size, album_artist) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+            "(title, artist, album, path, duration, search_text, track_no, tech_info, "
+            " file_size, album_artist, "
+            " rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
         QSqlQuery upsertArtist(db);
         upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
@@ -467,6 +563,10 @@ void LibraryScanner::run() {
             insertTrack.bindValue(7, t.techInfo);
             insertTrack.bindValue(8, fileSize);
             insertTrack.bindValue(9, t.albumArtist);
+            insertTrack.bindValue(10, std::isnan(t.rgTrackGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackGainDb));
+            insertTrack.bindValue(11, std::isnan(t.rgAlbumGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumGainDb));
+            insertTrack.bindValue(12, std::isnan(t.rgTrackPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackPeak));
+            insertTrack.bindValue(13, std::isnan(t.rgAlbumPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumPeak));
 
             if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
                 MusicLibrary::linkTrackToArtistsPrepared(

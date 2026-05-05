@@ -25,6 +25,10 @@ int main(int argc, char *argv[]) {
 
     backend.setVolume(settings.volume());
     backend.setShuffle(settings.shuffle());
+    backend.setReplayGainEnabled(settings.replayGainEnabled());
+    backend.setReplayGainMode(settings.replayGainMode());
+    backend.setReplayGainPreampDb(settings.replayGainPreampDb());
+    backend.setReplayGainClipProtect(settings.replayGainClipProtect());
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
@@ -44,6 +48,15 @@ int main(int argc, char *argv[]) {
 
     QObject::connect(&backend, &PlayerBackend::shuffleChanged, &settings,
                      [&]() { settings.setShuffle(backend.shuffle()); });
+
+    QObject::connect(&settings, &Settings::replayGainEnabledChanged, &backend,
+                     [&]() { backend.setReplayGainEnabled(settings.replayGainEnabled()); });
+    QObject::connect(&settings, &Settings::replayGainModeChanged, &backend,
+                     [&]() { backend.setReplayGainMode(settings.replayGainMode()); });
+    QObject::connect(&settings, &Settings::replayGainPreampDbChanged, &backend,
+                     [&]() { backend.setReplayGainPreampDb(settings.replayGainPreampDb()); });
+    QObject::connect(&settings, &Settings::replayGainClipProtectChanged, &backend,
+                     [&]() { backend.setReplayGainClipProtect(settings.replayGainClipProtect()); });
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

@@ -52,6 +52,12 @@ class PlayerBackend : public QObject {
 public:
     explicit PlayerBackend(QObject *parent = nullptr);
 
+    enum ReplayGainMode {
+        RgModeTrack = 0,
+        RgModeAlbum = 1,
+    };
+    Q_ENUM(ReplayGainMode)
+
     QString currentTitle()    const { return m_currentTitle;  }
     QString currentArtist()   const { return m_currentArtist; }
     QString currentAlbum()    const { return m_currentAlbum;  }
@@ -82,6 +88,11 @@ public:
     void setVolume(qreal v);
     void setShuffle(bool enabled);
     void setPosition(qint64 ms) { m_player->setPosition(ms); }
+
+    void setReplayGainEnabled(bool enabled);
+    void setReplayGainMode(int mode);
+    void setReplayGainPreampDb(qreal db);
+    void setReplayGainClipProtect(bool enabled);
 
     Q_INVOKABLE void togglePlayback();
     Q_INVOKABLE void scanFolder(const QUrl &folderUrl);
@@ -133,6 +144,7 @@ private:
     static bool writeCoverAtomic(const QString &targetPath, const QByteArray &data);
     static void pruneCoverCache(int keepCount);
     void setupMpris();
+    void applyReplayGainToOutput();
 
     QMediaPlayer       *m_player      = nullptr;
     QAudioOutput       *m_audioOutput = nullptr;
@@ -162,4 +174,10 @@ private:
     int     m_scanProgressCached = 0;
     int     m_scanTotalCached    = 0;
     QTimer *m_scanRefreshTimer = nullptr;
+
+    bool    m_rgEnabled      = false;
+    int     m_rgMode         = RgModeTrack;
+    qreal   m_rgPreampDb     = 0.0;
+    bool    m_rgClipProtect  = true;
+    Track   m_currentTrack;
 };

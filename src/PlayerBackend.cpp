@@ -19,6 +19,9 @@
 #include <QThreadPool>
 #include <QUrl>
 
+#include <cmath>
+#include <limits>
+
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 
@@ -183,6 +186,78 @@ void PlayerBackend::setShuffle(bool enabled) {
     emit currentQueuePositionChanged();
 }
 
+void PlayerBackend::setReplayGainEnabled(bool enabled) {
+    if (m_rgEnabled == enabled) return;
+    m_rgEnabled = enabled;
+    applyReplayGainToOutput();
+}
+
+void PlayerBackend::setReplayGainMode(int mode) {
+    if (mode != RgModeTrack && mode != RgModeAlbum) return;
+    if (m_rgMode == mode) return;
+    m_rgMode = mode;
+    applyReplayGainToOutput();
+}
+
+void PlayerBackend::setReplayGainPreampDb(qreal db) {
+    if (db < -15.0) db = -15.0;
+    if (db >  15.0) db =  15.0;
+    if (qFuzzyCompare(m_rgPreampDb + 100.0, db + 100.0)) return;
+    m_rgPreampDb = db;
+    applyReplayGainToOutput();
+}
+
+void PlayerBackend::setReplayGainClipProtect(bool enabled) {
+    if (m_rgClipProtect == enabled) return;
+    m_rgClipProtect = enabled;
+    applyReplayGainToOutput();
+}
+
+void PlayerBackend::applyReplayGainToOutput() {
+    // Gain of 0 dB = linear factor 1.0. QAudioOutput::setVolume() takes a
+    // linear 0..1 value applied in software before the sink. Anything over
+    // 1.0 would clip, so we never push the output above unity here; a
+    // positive ReplayGain (rare, ~quiet masters) will effectively be
+    // capped unless the user's preamp explicitly asks for boost and no
+    // peak protection kicks in.
+    if (!m_audioOutput) return;
+
+    double gainDb = 0.0;
+    bool   hasRg  = false;
+    if (m_rgEnabled) {
+        const double preferred = (m_rgMode == RgModeAlbum) ? m_currentTrack.rgAlbumGainDb
+                                                           : m_currentTrack.rgTrackGainDb;
+        const double fallback  = (m_rgMode == RgModeAlbum) ? m_currentTrack.rgTrackGainDb
+                                                           : m_currentTrack.rgAlbumGainDb;
+        if (!std::isnan(preferred))      { gainDb = preferred; hasRg = true; }
+        else if (!std::isnan(fallback))  { gainDb = fallback;  hasRg = true; }
+    }
+
+    if (hasRg) gainDb += m_rgPreampDb;
+
+    double linear = std::pow(10.0, gainDb / 20.0);
+
+    if (m_rgEnabled && hasRg && m_rgClipProtect) {
+        const double peak = (m_rgMode == RgModeAlbum && !std::isnan(m_currentTrack.rgAlbumPeak))
+                                ? m_currentTrack.rgAlbumPeak
+                                : m_currentTrack.rgTrackPeak;
+        // peak is stored as a sample-amplitude ratio (0..1+). If peak * linear
+        // would exceed 1.0 we scale the gain down so the loudest sample sits
+        // at full scale.
+        if (!std::isnan(peak) && peak > 0.0) {
+            const double maxLinear = 1.0 / peak;
+            if (linear > maxLinear) linear = maxLinear;
+        }
+    }
+
+    // QAudioOutput is a software mixer on top of the system mixer. We keep it
+    // in the 0..1 range to avoid clipping within Qt itself; the user-facing
+    // volume is still driven by PulseAudio through PaVolumeController.
+    if (linear < 0.0) linear = 0.0;
+    if (linear > 1.0) linear = 1.0;
+    m_audioOutput->setVolume(linear);
+}
+
 void PlayerBackend::togglePlayback() {
     if (m_player->playbackState() == QMediaPlayer::PlayingState) {
         m_player->pause();
@@ -194,7 +269,8 @@ void PlayerBackend::togglePlayback() {
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
     QList<Track> out;
     QString sql = QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no FROM tracks");
+        "SELECT path, title, artist, album, duration, tech_info, track_no, "
+        "rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
     if (!orderBy.isEmpty()) sql += QStringLiteral(" ORDER BY ") + orderBy;
     else                    sql += QStringLiteral(" ORDER BY id");
@@ -214,6 +290,10 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
         t.duration = q.value(4).toInt();
         t.techInfo = q.value(5).toString();
         t.trackNo  = q.value(6).toInt();
+        t.rgTrackGainDb = q.value(7).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(7).toDouble();
+        t.rgAlbumGainDb = q.value(8).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(8).toDouble();
+        t.rgTrackPeak   = q.value(9).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(9).toDouble();
+        t.rgAlbumPeak   = q.value(10).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(10).toDouble();
         out.append(t);
     }
     return out;
@@ -320,6 +400,7 @@ void PlayerBackend::pruneCoverCache(int keepCount) {
 void PlayerBackend::loadTrack(const Track &t) {
     if (!t.isValid()) return;
 
+    m_currentTrack     = t;
     m_currentIndex     = m_queue.currentGlobalId();
     m_currentPath      = t.path;
     m_currentTitle     = t.title;
@@ -327,6 +408,8 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_currentAlbum     = t.album;
     m_currentTechInfo  = t.techInfo;
     m_currentCoverPath.clear();
+
+    applyReplayGainToOutput();
 
     m_player->setSource(QUrl::fromLocalFile(t.path));
     m_player->play();
@@ -500,7 +583,8 @@ int PlayerBackend::getRowForPath(const QString &path) {
 void PlayerBackend::addPlayNext(const QString &path) {
     QSqlQuery q;
     q.prepare(QStringLiteral(
-        "SELECT title, artist, album, duration, tech_info, track_no "
+        "SELECT title, artist, album, duration, tech_info, track_no, "
+        "rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak "
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
 
@@ -520,6 +604,10 @@ void PlayerBackend::addPlayNext(const QString &path) {
     t.duration = q.value(3).toInt();
     t.techInfo = q.value(4).toString();
     t.trackNo  = q.value(5).toInt();
+    t.rgTrackGainDb = q.value(6).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(6).toDouble();
+    t.rgAlbumGainDb = q.value(7).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(7).toDouble();
+    t.rgTrackPeak   = q.value(8).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(8).toDouble();
+    t.rgAlbumPeak   = q.value(9).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(9).toDouble();
     m_queueModel->insertTrack(t);
 }
 
@@ -558,6 +646,7 @@ void PlayerBackend::refreshAllModels() {
 void PlayerBackend::resetPlaybackState() {
     m_player->stop();
     m_player->setSource(QUrl());
+    m_currentTrack = Track();
     m_currentPath.clear();
     m_currentTitle    = kDefaultTitle;
     m_currentArtist   = kDefaultArtist;
@@ -565,6 +654,7 @@ void PlayerBackend::resetPlaybackState() {
     m_currentTechInfo.clear();
     m_currentCoverPath.clear();
     m_currentIndex    = -1;
+    applyReplayGainToOutput();
     emit metadataChanged();
     emit currentIndexChanged();
 }

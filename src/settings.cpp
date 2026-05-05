@@ -94,6 +94,37 @@ void Settings::setCoverScaledBudgetMb(int mb) {
     emit coverScaledBudgetMbChanged();
 }
 
+void Settings::setReplayGainEnabled(bool enabled) {
+    if (m_rgEnabled == enabled) return;
+    m_rgEnabled = enabled;
+    m_settings.setValue("replayGainEnabled", enabled);
+    emit replayGainEnabledChanged();
+}
+
+void Settings::setReplayGainMode(int mode) {
+    if (mode != RgModeTrack && mode != RgModeAlbum) return;
+    if (m_rgMode == mode) return;
+    m_rgMode = mode;
+    m_settings.setValue("replayGainMode", mode);
+    emit replayGainModeChanged();
+}
+
+void Settings::setReplayGainPreampDb(qreal db) {
+    if (db < -15.0) db = -15.0;
+    if (db >  15.0) db =  15.0;
+    if (qFuzzyCompare(m_rgPreampDb + 100.0, db + 100.0)) return;
+    m_rgPreampDb = db;
+    m_settings.setValue("replayGainPreampDb", db);
+    emit replayGainPreampDbChanged();
+}
+
+void Settings::setReplayGainClipProtect(bool enabled) {
+    if (m_rgClipProtect == enabled) return;
+    m_rgClipProtect = enabled;
+    m_settings.setValue("replayGainClipProtect", enabled);
+    emit replayGainClipProtectChanged();
+}
+
 void Settings::loadSettings() {
     m_folders             = m_settings.value("musicFolders", QStringList()).toStringList();
     m_volume              = m_settings.value("volume",              1.0).toReal();
@@ -104,6 +135,13 @@ void Settings::loadSettings() {
     m_coverMaxEdge        = m_settings.value("coverMaxEdge",        384).toInt();
     m_coverSourceBudgetMb = m_settings.value("coverSourceBudgetMb", 48).toInt();
     m_coverScaledBudgetMb = m_settings.value("coverScaledBudgetMb", 16).toInt();
+    m_rgEnabled           = m_settings.value("replayGainEnabled",     false).toBool();
+    m_rgMode              = m_settings.value("replayGainMode",        RgModeTrack).toInt();
+    if (m_rgMode != RgModeTrack && m_rgMode != RgModeAlbum) m_rgMode = RgModeTrack;
+    m_rgPreampDb          = m_settings.value("replayGainPreampDb",    0.0).toReal();
+    if (m_rgPreampDb < -15.0) m_rgPreampDb = -15.0;
+    if (m_rgPreampDb >  15.0) m_rgPreampDb =  15.0;
+    m_rgClipProtect       = m_settings.value("replayGainClipProtect", true).toBool();
 }
 
 void Settings::saveFolders() {

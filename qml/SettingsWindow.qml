@@ -46,15 +46,111 @@ Window {
             Layout.margins: 20
             currentIndex: settingsTabBar.currentIndex
 
-            Item {
+            ColumnLayout {
                 id: generalTab
+                spacing: 18
 
                 Label {
-                    anchors.centerIn: parent
-                    text: "General Settings (Work in Progress)"
+                    text: "ReplayGain"
+                    font.pixelSize: 16
+                    font.bold: true
                     color: sysPalette.text
-                    opacity: 0.5
                 }
+
+                Label {
+                    text: "Normalize playback loudness using ReplayGain tags embedded in your files. Tracks without tags play at their original level."
+                    color: sysPalette.windowText
+                    opacity: 0.7
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    CheckBox {
+                        id: rgEnabledBox
+                        text: "Enable ReplayGain"
+                        checked: appSettings.replayGainEnabled
+                        onToggled: appSettings.replayGainEnabled = checked
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: rgEnabledBox.checked
+
+                    Label {
+                        text: "Mode"
+                        color: sysPalette.text
+                        Layout.preferredWidth: 180
+                    }
+
+                    ComboBox {
+                        id: rgModeBox
+                        Layout.preferredWidth: 160
+                        model: ["Track gain", "Album gain"]
+                        currentIndex: appSettings.replayGainMode
+                        onActivated: appSettings.replayGainMode = currentIndex
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: rgEnabledBox.checked
+
+                    Label {
+                        text: "Pre-amp"
+                        color: sysPalette.text
+                        Layout.preferredWidth: 180
+                    }
+
+                    SpinBox {
+                        id: rgPreampBox
+                        Layout.preferredWidth: 120
+                        from: -1500
+                        to: 1500
+                        stepSize: 25
+                        value: Math.round(appSettings.replayGainPreampDb * 100)
+                        onValueModified: appSettings.replayGainPreampDb = value / 100
+                        textFromValue: function(value) {
+                            return (value / 100).toFixed(2)
+                        }
+                        valueFromText: function(text) {
+                            return Math.round(parseFloat(text) * 100)
+                        }
+                    }
+
+                    Label {
+                        text: "dB"
+                        color: sysPalette.windowText
+                        opacity: 0.6
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: rgEnabledBox.checked
+
+                    CheckBox {
+                        id: rgClipBox
+                        text: "Prevent clipping (use peak tags to cap gain)"
+                        checked: appSettings.replayGainClipProtect
+                        onToggled: appSettings.replayGainClipProtect = checked
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
             }
 
             ColumnLayout {
