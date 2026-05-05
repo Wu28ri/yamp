@@ -2,28 +2,26 @@
 
 #include <QHash>
 #include <QPointer>
+#include <QSet>
 
 #include <cmath>
 #include <unistd.h>
 
 #include <pulse/pulseaudio.h>
 #include <pulse/proplist.h>
-
 namespace {
-
-constexpr double kCurve = 3.0;
 
 pa_volume_t userToPa(double v) {
     if (v <= 0.0) return PA_VOLUME_MUTED;
     if (v >= 1.0) return PA_VOLUME_NORM;
-    return static_cast<pa_volume_t>(std::round(PA_VOLUME_NORM * std::pow(v, kCurve)));
+    return static_cast<pa_volume_t>(std::round(PA_VOLUME_NORM * v));
 }
 
 double paToUser(pa_volume_t v) {
     if (v == PA_VOLUME_MUTED) return 0.0;
     double linear = static_cast<double>(v) / PA_VOLUME_NORM;
     if (linear >= 1.0) return 1.0;
-    return std::pow(linear, 1.0 / kCurve);
+    return linear;
 }
 
 } // namespace
@@ -37,7 +35,10 @@ struct PaVolumeControllerPrivate {
 
     QString pidStr;
 
-    QHash<uint32_t, uint8_t> ourSinkInputs;
+    QSet<uint32_t> ourClientIds;
+    QSet<uint32_t> knownClientIds;
+    QHash<uint32_t, uint32_t> pendingSinkInputs;
+    QHash<uint32_t, uint8_t>  ourSinkInputs;
 
     double targetUser = 1.0;
     bool   targetMuted = false;
@@ -48,6 +49,10 @@ struct PaVolumeControllerPrivate {
     static void onContextState(pa_context *c, void *ud);
     static void onSubscribe(pa_context *c, pa_subscription_event_type_t t, uint32_t idx, void *ud);
     static void onSinkInputInfo(pa_context *c, const pa_sink_input_info *info, int eol, void *ud);
+    static void onClientInfo(pa_context *c, const pa_client_info *info, int eol, void *ud);
+
+    void requestClientInfo(uint32_t clientId);
+    void rescanPendingSinkInputs();
 
     void applyToSinkInput(uint32_t idx, uint8_t channels);
     void applyToAll();
@@ -63,7 +68,9 @@ void PaVolumeControllerPrivate::onContextState(pa_context *c, void *ud) {
     d->subscribed = true;
 
     pa_context_set_subscribe_callback(c, &onSubscribe, d);
-    if (auto *op = pa_context_subscribe(c, PA_SUBSCRIPTION_MASK_SINK_INPUT, nullptr, nullptr)) {
+    if (auto *op = pa_context_subscribe(c,
+            (pa_subscription_mask_t)(PA_SUBSCRIPTION_MASK_SINK_INPUT | PA_SUBSCRIPTION_MASK_CLIENT),
+            nullptr, nullptr)) {
         pa_operation_unref(op);
     }
     if (auto *op = pa_context_get_sink_input_info_list(c, &onSinkInputInfo, d)) {
@@ -75,33 +82,80 @@ void PaVolumeControllerPrivate::onSubscribe(pa_context *c,
                                             pa_subscription_event_type_t t,
                                             uint32_t idx, void *ud) {
     auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
-    if ((t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) != PA_SUBSCRIPTION_EVENT_SINK_INPUT) return;
+    const auto facility = (t & PA_SUBSCRIPTION_EVENT_FACILITY_MASK);
+    const auto type     = (t & PA_SUBSCRIPTION_EVENT_TYPE_MASK);
 
-    if ((t & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE) {
-        d->ourSinkInputs.remove(idx);
-        return;
+    if (facility == PA_SUBSCRIPTION_EVENT_SINK_INPUT) {
+        if (type == PA_SUBSCRIPTION_EVENT_REMOVE) {
+            d->ourSinkInputs.remove(idx);
+            d->pendingSinkInputs.remove(idx);
+            return;
+        }
+        if (auto *op = pa_context_get_sink_input_info(c, idx, &onSinkInputInfo, d)) {
+            pa_operation_unref(op);
+        }
+    } else if (facility == PA_SUBSCRIPTION_EVENT_CLIENT) {
+        if (type == PA_SUBSCRIPTION_EVENT_REMOVE) {
+            d->ourClientIds.remove(idx);
+            d->knownClientIds.remove(idx);
+            return;
+        }
+        d->requestClientInfo(idx);
     }
+}
 
-    if (auto *op = pa_context_get_sink_input_info(c, idx, &onSinkInputInfo, d)) {
+void PaVolumeControllerPrivate::requestClientInfo(uint32_t clientId) {
+    if (knownClientIds.contains(clientId)) return;
+    knownClientIds.insert(clientId);
+    if (auto *op = pa_context_get_client_info(context, clientId, &onClientInfo, this)) {
         pa_operation_unref(op);
     }
 }
 
-void PaVolumeControllerPrivate::onSinkInputInfo(pa_context * /*c*/,
-                                                const pa_sink_input_info *info,
-                                                int eol, void *ud) {
+void PaVolumeControllerPrivate::onClientInfo(pa_context * /*c*/,
+                                             const pa_client_info *info,
+                                             int eol, void *ud) {
     if (eol > 0 || !info || !info->proplist) return;
     auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
 
     const char *pid = pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
-    const bool ours = pid && d->pidStr == QString::fromUtf8(pid);
-    if (!ours) {
-        d->ourSinkInputs.remove(info->index);
+    if (!pid) return;
+    if (d->pidStr != QString::fromUtf8(pid)) {
+        d->ourClientIds.remove(info->index);
         return;
+    }
+    d->ourClientIds.insert(info->index);
+    d->rescanPendingSinkInputs();
+}
+
+void PaVolumeControllerPrivate::onSinkInputInfo(pa_context *c,
+                                                const pa_sink_input_info *info,
+                                                int eol, void *ud) {
+    if (eol > 0 || !info) return;
+    auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
+
+    // First, try matching by the sink-input's own application.process.id.
+    // On native PulseAudio this is usually set; on PipeWire-pulse compat it
+    // often isn't, so we fall back to looking up the owning client below.
+    bool ours = false;
+    if (info->proplist) {
+        const char *pid = pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
+        if (pid && d->pidStr == QString::fromUtf8(pid)) ours = true;
+    }
+
+    if (!ours) {
+        if (d->ourClientIds.contains(info->client)) {
+            ours = true;
+        } else {
+            d->pendingSinkInputs.insert(info->index, info->client);
+            if (info->client != PA_INVALID_INDEX) d->requestClientInfo(info->client);
+            return;
+        }
     }
 
     const bool wasOurs = d->ourSinkInputs.contains(info->index);
     d->ourSinkInputs.insert(info->index, info->volume.channels);
+    d->pendingSinkInputs.remove(info->index);
 
     const double user = paToUser(pa_cvolume_avg(&info->volume));
     if (std::fabs(user - d->reportedUser) > 1e-4) {
@@ -114,6 +168,17 @@ void PaVolumeControllerPrivate::onSinkInputInfo(pa_context * /*c*/,
     }
 
     if (!wasOurs) d->applyToSinkInput(info->index, info->volume.channels);
+    Q_UNUSED(c);
+}
+
+void PaVolumeControllerPrivate::rescanPendingSinkInputs() {
+    if (!context) return;
+    for (auto it = pendingSinkInputs.constBegin(); it != pendingSinkInputs.constEnd(); ++it) {
+        if (!ourClientIds.contains(it.value())) continue;
+        if (auto *op = pa_context_get_sink_input_info(context, it.key(), &onSinkInputInfo, this)) {
+            pa_operation_unref(op);
+        }
+    }
 }
 
 void PaVolumeControllerPrivate::applyToSinkInput(uint32_t idx, uint8_t channels) {
