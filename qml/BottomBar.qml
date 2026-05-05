@@ -18,9 +18,14 @@ Rectangle {
         z: 10
         from: 0
         to: playerBackend.duration > 0 ? playerBackend.duration : 1
-        value: playerBackend.position
-        live: false
+        live: true
         onMoved: playerBackend.position = value
+
+        Binding {
+            progressSlider.value: playerBackend.position
+            when: !progressSlider.pressed
+            restoreMode: Binding.RestoreBindingOrValue
+        }
 
         background: Rectangle {
             implicitHeight: 4
