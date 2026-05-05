@@ -175,14 +175,11 @@ ListView {
             playerBackend.playMusic(trackItem.path)
         }
 
-        MouseArea {
-            anchors.fill: parent
+        TapHandler {
             acceptedButtons: Qt.RightButton
-            onClicked: (mouse) => {
-                if (mouse.button === Qt.RightButton) {
-                    globalTrackMenu.trackPath = trackItem.path
-                    globalTrackMenu.popup()
-                }
+            onTapped: {
+                globalTrackMenu.trackPath = trackItem.path
+                globalTrackMenu.popup()
             }
         }
 
