@@ -380,8 +380,7 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     connect(session, &ScanSession::finished, this,
             [this, session](const QString &rootPath, const QList<Track> &newTracks) {
                 if (m_scanRefreshTimer->isActive()) m_scanRefreshTimer->stop();
-                for (const Track &t : newTracks) m_queue.addTrack(t);
-                m_queueModel->resetAll();
+                m_queueModel->appendTracks(newTracks);
                 refreshAllModels();
                 if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(rootPath);
                 m_scanProgresses.remove(session);

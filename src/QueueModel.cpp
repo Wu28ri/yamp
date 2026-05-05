@@ -62,6 +62,16 @@ void QueueModel::insertTrack(const Track &track) {
     notifyCurrentChanged();
 }
 
+void QueueModel::appendTracks(const QList<Track> &tracks) {
+    if (tracks.isEmpty()) return;
+    const int first = m_queue->count();
+    const int last  = first + static_cast<int>(tracks.size()) - 1;
+    beginInsertRows({}, first, last);
+    for (const Track &t : tracks) m_queue->addTrack(t);
+    endInsertRows();
+    notifyCurrentChanged();
+}
+
 void QueueModel::resetAll() {
     beginResetModel();
     endResetModel();
