@@ -95,13 +95,15 @@ bool updateTrackPath(QSqlDatabase &db, const QString &oldPath, const QString &ne
     return q.numRowsAffected() > 0;
 }
 
-bool loadDbSignature(QSqlDatabase &db, const QString &path, qint64 &size, int &duration) {
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT file_size, duration FROM tracks WHERE path = ?"));
-    q.addBindValue(path);
-    if (!q.exec() || !q.next()) return false;
+bool loadDbSignature(QSqlQuery &q, const QString &path, qint64 &size, int &duration) {
+    q.bindValue(0, path);
+    if (!q.exec() || !q.next()) {
+        q.finish();
+        return false;
+    }
     size     = q.value(0).toLongLong();
     duration = q.value(1).toInt();
+    q.finish();
     return true;
 }
 
@@ -175,11 +177,15 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db, const QSet<QString> &dir
     }
 
     QHash<QPair<qint64, int>, QString> removalIndex;
-    for (const QString &p : allRemovals) {
-        qint64 sz = 0;
-        int dur = 0;
-        if (loadDbSignature(db, p, sz, dur) && sz > 0) {
-            removalIndex.insert(qMakePair(sz, dur), p);
+    {
+        QSqlQuery sigQ(db);
+        sigQ.prepare(QStringLiteral("SELECT file_size, duration FROM tracks WHERE path = ?"));
+        for (const QString &p : allRemovals) {
+            qint64 sz = 0;
+            int dur = 0;
+            if (loadDbSignature(sigQ, p, sz, dur) && sz > 0) {
+                removalIndex.insert(qMakePair(sz, dur), p);
+            }
         }
     }
 
@@ -440,11 +446,15 @@ void LibraryWatcher::initialReconcile(const QString &root) {
     for (const QString &p : diskFiles) if (!dbFiles.contains(p)) additions.append(p);
 
     QHash<QPair<qint64, int>, QString> removalIndex;
-    for (const QString &p : removals) {
-        qint64 sz = 0;
-        int dur = 0;
-        if (loadDbSignature(db, p, sz, dur) && sz > 0) {
-            removalIndex.insert(qMakePair(sz, dur), p);
+    {
+        QSqlQuery sigQ(db);
+        sigQ.prepare(QStringLiteral("SELECT file_size, duration FROM tracks WHERE path = ?"));
+        for (const QString &p : removals) {
+            qint64 sz = 0;
+            int dur = 0;
+            if (loadDbSignature(sigQ, p, sz, dur) && sz > 0) {
+                removalIndex.insert(qMakePair(sz, dur), p);
+            }
         }
     }
 
