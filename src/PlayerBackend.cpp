@@ -124,7 +124,11 @@ PlayerBackend::PlayerBackend(QObject *parent)
 
     m_libraryWatcher->start();
 
-    m_queue.setTracks(queryTracks());
+    QTimer::singleShot(0, this, [this]() {
+        m_queue.setTracks(queryTracks());
+        m_queueModel->resetAll();
+        emit currentQueuePositionChanged();
+    });
 }
 
 void PlayerBackend::initDatabase() {
