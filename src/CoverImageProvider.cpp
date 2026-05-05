@@ -95,7 +95,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
         const int kb = qMax(1, static_cast<int>(source.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
-        m_sources.insert(sourceKey, new Entry{source, kb, isPlaceholder}, kb);
+        m_sources.insert(sourceKey, new Entry{source, kb, isPlaceholder}, qMax(kb, 16));
     }
 
     QImage out = source;
@@ -108,7 +108,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     if (!isPlaceholder) {
         const int kb = qMax(1, static_cast<int>(out.sizeInBytes() / 1024));
         QMutexLocker locker(&m_mutex);
-        m_scaled.insert(scaledKey, new Entry{out, kb, false}, kb);
+        m_scaled.insert(scaledKey, new Entry{out, kb, false}, qMax(kb, 16));
     }
     return out;
 }
