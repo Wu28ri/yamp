@@ -15,7 +15,7 @@ ScanSession::~ScanSession() {
 }
 
 void ScanSession::start() {
-    m_thread  = new QThread(this);
+    m_thread  = new QThread;
     m_scanner = new LibraryScanner(m_rootPath);
     m_scanner->moveToThread(m_thread);
 
@@ -39,8 +39,12 @@ void ScanSession::start() {
         m_thread->quit();
     });
     connect(m_thread, &QThread::finished, m_scanner, &QObject::deleteLater);
-    connect(m_thread, &QThread::finished, m_thread,  &QObject::deleteLater);
-    connect(m_thread, &QThread::finished, this,      &QObject::deleteLater);
+    connect(m_thread, &QThread::finished, this, [this]() {
+        QThread *t = m_thread;
+        m_thread = nullptr;
+        if (t) t->deleteLater();
+        deleteLater();
+    });
 
     m_thread->start();
 }
