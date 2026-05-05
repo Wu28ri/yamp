@@ -89,6 +89,18 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_audioOutput = new QAudioOutput(this);
     m_player->setAudioOutput(m_audioOutput);
 
+    // Volume/mute is now controlled at the PipeWire stream level (the per-app
+    // slider in pavucontrol/wireplumber). Keep QAudioOutput's internal gain at
+    // unity so the only attenuation comes from the system mixer.
+    m_audioOutput->setVolume(1.0);
+    m_audioOutput->setMuted(false);
+
+    m_pwVolume = new PwVolumeController(this);
+    connect(m_pwVolume, &PwVolumeController::volumeChanged,
+            this, &PlayerBackend::volumeChanged);
+    connect(m_pwVolume, &PwVolumeController::mutedChanged,
+            this, &PlayerBackend::mutedChanged);
+
     setupMpris();
 
     connect(m_player, &QMediaPlayer::positionChanged,      this, &PlayerBackend::positionChanged);
@@ -159,19 +171,11 @@ void PlayerBackend::setupMpris() {
 }
 
 void PlayerBackend::setMuted(bool muted) {
-    if (m_audioOutput->isMuted() == muted) return;
-    m_audioOutput->setMuted(muted);
-    emit mutedChanged();
+    m_pwVolume->setMuted(muted);
 }
 
 void PlayerBackend::setVolume(qreal v) {
-    const float curr = m_audioOutput->volume();
-    const float next = static_cast<float>(v);
-    const bool same = (qFuzzyIsNull(curr) && qFuzzyIsNull(next))
-                       || qFuzzyCompare(curr, next);
-    if (same) return;
-    m_audioOutput->setVolume(next);
-    emit volumeChanged();
+    m_pwVolume->setVolume(v);
 }
 
 void PlayerBackend::setShuffle(bool enabled) {

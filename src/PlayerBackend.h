@@ -3,6 +3,7 @@
 #include "AlbumModel.h"
 #include "ArtistModel.h"
 #include "LibraryWatcher.h"
+#include "PwVolumeController.h"
 #include "QueueModel.h"
 #include "TrackModel.h"
 #include "TrackQueue.h"
@@ -58,8 +59,8 @@ public:
     QString currentTechInfo() const { return m_currentTechInfo; }
     QString currentCoverPath() const { return m_currentCoverPath; }
 
-    bool   isMuted()  const { return m_audioOutput->isMuted(); }
-    qreal  volume()   const { return m_audioOutput->volume();  }
+    bool   isMuted()  const { return m_pwVolume->isMuted(); }
+    qreal  volume()   const { return m_pwVolume->volume();  }
     bool   shuffle()  const { return m_queue.isShuffle();      }
     bool   isPlaying() const { return m_player->playbackState() == QMediaPlayer::PlayingState; }
     qint64 position() const { return m_player->position(); }
@@ -135,6 +136,7 @@ private:
 
     QMediaPlayer   *m_player        = nullptr;
     QAudioOutput   *m_audioOutput   = nullptr;
+    PwVolumeController *m_pwVolume  = nullptr;
     TrackModel     *m_trackModel    = nullptr;
     AlbumModel     *m_albumModel    = nullptr;
     ArtistModel    *m_artistModel   = nullptr;
