@@ -18,7 +18,10 @@ ListView {
         interval: 80
         onTriggered: {
             const realIdx = playerBackend.getRowForPath(playerBackend.currentPath)
-            if (realIdx !== -1) listView.positionViewAtIndex(realIdx, ListView.Center)
+            if (realIdx !== -1) {
+                playerBackend.trackModel.ensureFetchedTo(realIdx)
+                listView.positionViewAtIndex(realIdx, ListView.Center)
+            }
         }
     }
 

@@ -34,6 +34,7 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     Q_INVOKABLE QString pathForRow(int row);
+    Q_INVOKABLE void ensureFetchedTo(int row);
 
 private:
     static int columnForRole(int role);

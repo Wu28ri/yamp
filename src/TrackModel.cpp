@@ -52,3 +52,10 @@ QString TrackModel::pathForRow(int row) {
     if (!q.exec(sql) || !q.next()) return {};
     return q.value(0).toString();
 }
+
+void TrackModel::ensureFetchedTo(int row) {
+    if (row < 0) return;
+    while (rowCount() <= row && canFetchMore()) {
+        fetchMore();
+    }
+}
