@@ -152,9 +152,17 @@ bool initialize() {
         if (needBackfill) {
             db.transaction();
             QSqlQuery iter(db);
+            QSqlQuery up(db);
+            up.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
+            QSqlQuery fid(db);
+            fid.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
+            QSqlQuery lk(db);
+            lk.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
             if (iter.exec(QStringLiteral("SELECT id, artist FROM tracks"))) {
                 while (iter.next()) {
-                    linkTrackToArtists(db, iter.value(0).toLongLong(), iter.value(1).toString());
+                    linkTrackToArtistsPrepared(iter.value(0).toLongLong(),
+                                               iter.value(1).toString(),
+                                               up, fid, lk);
                 }
             }
             db.commit();
