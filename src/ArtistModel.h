@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QSqlQueryModel>
+#include <QString>
 
 class ArtistModel : public QSqlQueryModel {
     Q_OBJECT
@@ -17,4 +18,8 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void refresh();
+    void setSearch(const QString &query);
+
+private:
+    QString m_search;
 };

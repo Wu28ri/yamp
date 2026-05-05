@@ -12,6 +12,7 @@ Rectangle {
         searchField.text = ""
         playerBackend.searchTracks("")
         playerBackend.searchAlbums("")
+        playerBackend.searchArtists("")
     }
 
     ColumnLayout {
@@ -40,6 +41,7 @@ Rectangle {
                 Layout.fillWidth: true
                 placeholderText: {
                     if (root.currentView === "albums") return "Find album..."
+                    if (root.currentView === "artists") return "Find artist..."
                     return "Find track..."
                 }
                 visible: false
@@ -53,6 +55,8 @@ Rectangle {
                 onTextEdited: {
                     if (root.currentView === "albums") {
                         playerBackend.searchAlbums(text)
+                    } else if (root.currentView === "artists") {
+                        playerBackend.searchArtists(text)
                     } else {
                         playerBackend.searchTracks(text)
                     }

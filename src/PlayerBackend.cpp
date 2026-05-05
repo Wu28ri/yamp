@@ -458,6 +458,10 @@ void PlayerBackend::searchAlbums(const QString &query) {
     m_albumModel->setSearch(query);
 }
 
+void PlayerBackend::searchArtists(const QString &query) {
+    m_artistModel->setSearch(query);
+}
+
 void PlayerBackend::sortTracks(int column, bool ascending) {
     m_sortColumn = column;
     m_sortOrder  = ascending ? Qt::AscendingOrder : Qt::DescendingOrder;
