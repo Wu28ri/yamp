@@ -7,6 +7,7 @@ ListView {
     model: playerBackend.trackModel
     spacing: 0
     clip: true
+    reuseItems: true
     headerPositioning: ListView.OverlayHeader
     cacheBuffer: 2000
 

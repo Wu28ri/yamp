@@ -81,6 +81,7 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
             spacing: 0
+            reuseItems: true
             model: playerBackend.queueModel
 
             property bool ignoreNextScroll: false

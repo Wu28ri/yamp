@@ -6,6 +6,7 @@ GridView {
     id: albumsGrid
     anchors.fill: parent
     clip: true
+    reuseItems: true
     cellWidth: Math.floor(width / Math.max(1, Math.floor(width / 200)))
     cellHeight: 280
     cacheBuffer: 2000
