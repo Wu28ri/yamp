@@ -33,3 +33,4 @@ private:
     QThread        *m_thread  = nullptr;
     LibraryScanner *m_scanner = nullptr;
 };
+

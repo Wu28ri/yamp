@@ -738,3 +738,4 @@ void PlayerBackend::syncWithFolders(const QStringList &folders) {
 
     m_libraryWatcher->rescanAll();
 }
+

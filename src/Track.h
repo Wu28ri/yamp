@@ -20,3 +20,4 @@ struct Track {
 
     bool isValid() const { return !path.isEmpty(); }
 };
+

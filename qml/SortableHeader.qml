@@ -49,3 +49,4 @@ Item {
         onClicked: header.toggled(header.sortColumn)
     }
 }
+

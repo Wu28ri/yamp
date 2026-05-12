@@ -34,7 +34,6 @@ QString normalizeArtistName(const QString &raw);
 QStringList splitArtists(const QString &raw);
 QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist);
 int pruneOrphanArtists(QSqlDatabase &db);
-void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists);
 
 void linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
@@ -45,3 +44,4 @@ void linkTrackToArtistsPrepared(qint64 trackId,
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize);
 
 }
+

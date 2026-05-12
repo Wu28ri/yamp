@@ -62,31 +62,24 @@ QString sidecarImagePath(const QString &trackPath) {
 
     const QString dirPath = info.absolutePath();
     QString preferredBest;
-    qint64 preferredBestSize = -1;
     QString fallbackBest;
-    qint64 fallbackBestSize = -1;
 
     QDirIterator it(dirPath, nameFilters, QDir::Files);
     while (it.hasNext()) {
         const QString full = it.next();
-        const QFileInfo fi(full);
-        const QString fileName = fi.fileName();
-        const qint64 sz = fi.size();
+        const QString fileName = QFileInfo(full).fileName();
         bool isPreferred = false;
         for (const QString &keyword : preferredKeywords) {
             if (fileName.contains(keyword, Qt::CaseInsensitive)) { isPreferred = true; break; }
         }
         if (isPreferred) {
-            if (sz > preferredBestSize) { preferredBestSize = sz; preferredBest = full; }
-        } else {
-            if (sz > fallbackBestSize)  { fallbackBestSize  = sz; fallbackBest  = full; }
+
+            preferredBest = full;
+            break;
         }
+        if (fallbackBest.isEmpty()) fallbackBest = full;
     }
     return preferredBest.isEmpty() ? fallbackBest : preferredBest;
-}
-
-QImage loadCover(const QString &trackPath) {
-    return loadCoverWithBytes(trackPath).image;
 }
 
 CoverData loadCoverWithBytes(const QString &trackPath) {
@@ -111,14 +104,12 @@ CoverData loadCoverWithBytes(const QString &trackPath) {
             if (!raw.isEmpty() && image.loadFromData(raw)) {
                 result.image = std::move(image);
                 result.bytes = std::move(raw);
-                result.fromSidecar = true;
                 return result;
             }
         }
         QImage image;
         if (image.load(sidecar)) {
             result.image = std::move(image);
-            result.fromSidecar = true;
         }
     }
     return result;
@@ -139,3 +130,4 @@ QString detectImageExtension(const QByteArray &data) {
 }
 
 }
+

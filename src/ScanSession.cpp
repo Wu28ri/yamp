@@ -48,3 +48,4 @@ void ScanSession::start() {
 
     m_thread->start();
 }
+

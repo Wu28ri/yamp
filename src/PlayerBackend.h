@@ -181,3 +181,4 @@ private:
     bool    m_rgClipProtect  = true;
     Track   m_currentTrack;
 };
+

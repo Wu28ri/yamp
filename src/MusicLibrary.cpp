@@ -315,41 +315,6 @@ int pruneOrphanArtists(QSqlDatabase &db) {
     return q.numRowsAffected();
 }
 
-void linkTrackToArtists(QSqlDatabase &db, qint64 trackId, const QString &rawArtists) {
-    if (trackId <= 0) return;
-    const QStringList names = splitArtists(rawArtists);
-
-    QSqlQuery upsert(db);
-    upsert.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
-    QSqlQuery findId(db);
-    findId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
-    QSqlQuery link(db);
-    link.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
-
-    for (const QString &display : names) {
-        const QString norm = normalizeArtistName(display);
-        if (norm.isEmpty()) continue;
-
-        upsert.bindValue(0, display);
-        upsert.bindValue(1, norm);
-        if (!upsert.exec()) {
-            qWarning() << "[MusicLibrary] upsert artist:" << upsert.lastError().text();
-            continue;
-        }
-
-        findId.bindValue(0, norm);
-        if (!findId.exec() || !findId.next()) continue;
-        const qint64 artistId = findId.value(0).toLongLong();
-        findId.finish();
-
-        link.bindValue(0, trackId);
-        link.bindValue(1, artistId);
-        if (!link.exec()) {
-            qWarning() << "[MusicLibrary] link track-artist:" << link.lastError().text();
-        }
-    }
-}
-
 void linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
                                 QSqlQuery &upsertArtist,
@@ -587,3 +552,4 @@ void LibraryScanner::run() {
 
     emit finished(newTracks);
 }
+

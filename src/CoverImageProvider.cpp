@@ -2,18 +2,26 @@
 #include "CoverExtractor.h"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QFileInfo>
-#include <QMutexLocker>
+#include <QReadLocker>
 #include <QUrl>
+#include <QWriteLocker>
 
 namespace {
 
-QString fileSignature(const QString &path) {
-    QFileInfo info(path);
+QString fileSignature(const QFileInfo &info) {
     if (!info.exists()) return QStringLiteral("missing");
     return QString::number(info.lastModified().toMSecsSinceEpoch())
          + QLatin1Char(':')
          + QString::number(info.size());
+}
+
+QString dirSignature(const QString &dirPath) {
+    const QFileInfo info(dirPath);
+    if (!info.exists()) return QStringLiteral("missing");
+
+    return QString::number(info.lastModified().toMSecsSinceEpoch());
 }
 
 const QByteArray kPlaceholderHash = QByteArrayLiteral("__placeholder__");
@@ -83,17 +91,18 @@ CoverImageProvider::CoverImageProvider()
 
 void CoverImageProvider::setMaxEdge(int edge) {
     if (edge <= 0) return;
-    QMutexLocker locker(&m_mutex);
+    QWriteLocker locker(&m_lock);
     if (m_maxEdge == edge) return;
     m_maxEdge = edge;
     m_pathToHash.clear();
+    m_dirToHash.clear();
     m_sources.clear();
     m_scaled.clear();
 }
 
 void CoverImageProvider::setSourceBudgetKb(int kb) {
     if (kb <= 0) return;
-    QMutexLocker locker(&m_mutex);
+    QWriteLocker locker(&m_lock);
     if (m_sourceBudgetKb == kb) return;
     m_sourceBudgetKb = kb;
     m_sources.setMaxCost(kb);
@@ -101,7 +110,7 @@ void CoverImageProvider::setSourceBudgetKb(int kb) {
 
 void CoverImageProvider::setScaledBudgetKb(int kb) {
     if (kb <= 0) return;
-    QMutexLocker locker(&m_mutex);
+    QWriteLocker locker(&m_lock);
     if (m_scaledBudgetKb == kb) return;
     m_scaledBudgetKb = kb;
     m_scaled.setMaxCost(kb);
@@ -113,24 +122,37 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     int maxEdge = 0;
     {
-        QMutexLocker locker(&m_mutex);
+        QReadLocker locker(&m_lock);
         maxEdge = m_maxEdge;
     }
 
-    const QString pathKey = path + QLatin1Char('?') + fileSignature(path);
-    const int     reqW    = requestedSize.width();
-    const int     reqH    = requestedSize.height();
+    const QFileInfo fileInfo(path);
+    const QString   pathKey = path + QLatin1Char('?') + fileSignature(fileInfo);
+    const QString   dirPath = fileInfo.absolutePath();
+    const QString   dirKey  = dirPath + QLatin1Char('?') + dirSignature(dirPath);
+
+    const int reqW = requestedSize.width();
+    const int reqH = requestedSize.height();
 
     QByteArray contentHash;
     bool       haveHash      = false;
     bool       isPlaceholder = false;
+    bool       fromDirHash   = false;
     {
-        QMutexLocker locker(&m_mutex);
+        QReadLocker locker(&m_lock);
         auto it = m_pathToHash.constFind(pathKey);
         if (it != m_pathToHash.constEnd()) {
             contentHash   = it.value();
             haveHash      = true;
             isPlaceholder = (contentHash == kPlaceholderHash);
+        } else {
+            auto dit = m_dirToHash.constFind(dirKey);
+            if (dit != m_dirToHash.constEnd()) {
+                contentHash   = dit.value();
+                haveHash      = true;
+                fromDirHash   = true;
+                isPlaceholder = (contentHash == kPlaceholderHash);
+            }
         }
     }
 
@@ -144,31 +166,54 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         const QByteArray sourceKey = makeSourceKey(contentHash, maxEdge);
         const QByteArray scaledKey = makeScaledKey(sourceKey, reqW, reqH);
 
-        QMutexLocker locker(&m_mutex);
-        if (auto *entry = m_scaled.object(scaledKey)) {
-            if (size) *size = entry->sourceSize;
-            return entry->image;
-        }
-        if (auto *entry = m_sources.object(sourceKey)) {
-            const QImage source     = entry->image;
-            const QSize  sourceSize = source.size();
-            QImage out = source;
-            if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
-                out = source.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        QImage cachedScaled;
+        QSize  cachedSourceSize;
+        QImage cachedSource;
+        {
+            QReadLocker locker(&m_lock);
+            if (auto *entry = m_scaled.object(scaledKey)) {
+                cachedScaled     = entry->image;
+                cachedSourceSize = entry->sourceSize;
+            } else if (auto *entry = m_sources.object(sourceKey)) {
+                cachedSource     = entry->image;
+                cachedSourceSize = entry->image.size();
             }
-            m_scaled.insert(scaledKey,
-                            new ScaledEntry{out, sourceSize, imageKb(out)},
-                            qMax(imageKb(out), 16));
-            if (size) *size = sourceSize;
+        }
+
+        if (!cachedScaled.isNull()) {
+            if (size) *size = cachedSourceSize;
+
+            if (fromDirHash) {
+                QWriteLocker locker(&m_lock);
+                m_pathToHash.insert(pathKey, contentHash);
+            }
+            return cachedScaled;
+        }
+
+        if (!cachedSource.isNull()) {
+            QImage out = cachedSource;
+            if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
+                out = cachedSource.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            }
+            {
+                QWriteLocker locker(&m_lock);
+                m_scaled.insert(scaledKey,
+                                new ScaledEntry{out, cachedSourceSize, imageKb(out)},
+                                qMax(imageKb(out), 16));
+                if (fromDirHash) m_pathToHash.insert(pathKey, contentHash);
+            }
+            if (size) *size = cachedSourceSize;
             return out;
         }
+
     }
 
     CoverExtractor::CoverData cover = CoverExtractor::loadCoverWithBytes(path);
 
     if (cover.image.isNull()) {
-        QMutexLocker locker(&m_mutex);
+        QWriteLocker locker(&m_lock);
         m_pathToHash.insert(pathKey, kPlaceholderHash);
+
         QImage img = makePlaceholder();
         if (size) *size = img.size();
         return img;
@@ -179,7 +224,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     QImage source;
     {
-        QMutexLocker locker(&m_mutex);
+        QReadLocker locker(&m_lock);
         if (auto *entry = m_sources.object(sourceKey)) {
             source = entry->image;
         }
@@ -187,14 +232,17 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     if (source.isNull()) {
         source = downscaleIfNeeded(cover.image, maxEdge);
-        QMutexLocker locker(&m_mutex);
+        QWriteLocker locker(&m_lock);
         m_sources.insert(sourceKey,
                          new SourceEntry{source, imageKb(source)},
                          qMax(imageKb(source), 16));
         m_pathToHash.insert(pathKey, contentHash);
+
+        m_dirToHash.insert(dirKey, contentHash);
     } else {
-        QMutexLocker locker(&m_mutex);
+        QWriteLocker locker(&m_lock);
         m_pathToHash.insert(pathKey, contentHash);
+        m_dirToHash.insert(dirKey, contentHash);
     }
 
     const QSize sourceSize = source.size();
@@ -206,10 +254,11 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     {
         const QByteArray scaledKey = makeScaledKey(sourceKey, reqW, reqH);
-        QMutexLocker locker(&m_mutex);
+        QWriteLocker locker(&m_lock);
         m_scaled.insert(scaledKey,
                         new ScaledEntry{out, sourceSize, imageKb(out)},
                         qMax(imageKb(out), 16));
     }
     return out;
 }
+

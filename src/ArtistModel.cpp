@@ -55,3 +55,4 @@ void ArtistModel::setSearch(const QString &query) {
     m_search = query;
     refresh();
 }
+

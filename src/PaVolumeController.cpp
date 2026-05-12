@@ -299,3 +299,4 @@ void PaVolumeController::setMuted(bool muted) {
     }
     emit mutedChanged();
 }
+

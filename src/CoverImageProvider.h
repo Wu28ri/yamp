@@ -4,9 +4,10 @@
 #include <QCache>
 #include <QHash>
 #include <QImage>
-#include <QMutex>
+#include <QReadWriteLock>
 #include <QQuickImageProvider>
 #include <QSize>
+#include <QString>
 
 class CoverImageProvider : public QQuickImageProvider {
 public:
@@ -29,11 +30,16 @@ private:
         int    kb = 0;
     };
 
-    QHash<QString, QByteArray>     m_pathToHash;
+    QHash<QString, QByteArray>      m_pathToHash;
+
+    QHash<QString, QByteArray>      m_dirToHash;
     QCache<QByteArray, SourceEntry> m_sources;
     QCache<QByteArray, ScaledEntry> m_scaled;
-    QMutex m_mutex;
+
+    QReadWriteLock m_lock;
+
     int    m_maxEdge        = 384;
     int    m_sourceBudgetKb = 48 * 1024;
     int    m_scaledBudgetKb = 16 * 1024;
 };
+

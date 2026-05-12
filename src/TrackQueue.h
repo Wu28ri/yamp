@@ -8,8 +8,6 @@
 
 class TrackQueue {
 public:
-    enum RepeatMode { NoRepeat, RepeatOne, RepeatAll };
-
     int  currentPosition() const { return m_currentIndex; }
     int  count()           const { return static_cast<int>(m_playOrder.size()); }
     bool isShuffle()       const { return m_shuffle; }
@@ -31,7 +29,6 @@ public:
     void moveTrack(int from, int to);
 
     void setShuffle(bool enabled);
-    void setRepeatMode(RepeatMode mode) { m_repeatMode = mode; }
     void jumpToPosition(int pos);
     void setIndexByPath(const QString &path);
 
@@ -47,5 +44,5 @@ private:
     QHash<QString, int> m_pathToGlobalId;
     int m_currentIndex = -1;
     bool m_shuffle = false;
-    RepeatMode m_repeatMode = NoRepeat;
 };
+

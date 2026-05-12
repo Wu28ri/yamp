@@ -297,14 +297,6 @@ QString LibraryWatcher::attachRoot(const QString &path) {
     return clean;
 }
 
-void LibraryWatcher::addRoot(const QString &path) {
-    const QString clean = attachRoot(path);
-    if (clean.isEmpty()) return;
-
-    watchTreeRecursive(clean);
-    initialReconcileAsync(clean);
-}
-
 void LibraryWatcher::registerScannedRoot(const QString &path) {
     const QString clean = attachRoot(path);
     if (clean.isEmpty()) return;
@@ -532,3 +524,4 @@ void LibraryWatcher::initialReconcileAsync(const QString &root) {
         }
     });
 }
+

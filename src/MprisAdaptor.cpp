@@ -106,3 +106,4 @@ void MprisPlayerAdaptor::SetPosition(const QDBusObjectPath &trackId, qlonglong p
     m_backend->setPosition(positionUs / 1000);
     emit Seeked(static_cast<qlonglong>(m_backend->position()) * 1000);
 }
+

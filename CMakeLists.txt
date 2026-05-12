@@ -93,3 +93,4 @@ install(TARGETS appyamp
 install(FILES ${CMAKE_SOURCE_DIR}/yamp.desktop
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
 )
+

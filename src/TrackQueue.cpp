@@ -159,12 +159,8 @@ void TrackQueue::setIndexByPath(const QString &path) {
 
 Track TrackQueue::next() {
     if (m_playOrder.empty()) return {};
-    if (m_repeatMode == RepeatOne) return current();
-
     if (m_currentIndex < static_cast<int>(m_playOrder.size()) - 1) {
         ++m_currentIndex;
-    } else if (m_repeatMode == RepeatAll) {
-        m_currentIndex = 0;
     }
     return current();
 }
@@ -173,8 +169,7 @@ Track TrackQueue::previous() {
     if (m_playOrder.empty()) return {};
     if (m_currentIndex > 0) {
         --m_currentIndex;
-    } else if (m_repeatMode == RepeatAll) {
-        m_currentIndex = static_cast<int>(m_playOrder.size()) - 1;
     }
     return current();
 }
+

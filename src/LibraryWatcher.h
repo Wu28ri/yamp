@@ -14,8 +14,6 @@ public:
 
     void start();
 
-    void addRoot(const QString &path);
-
     void registerScannedRoot(const QString &path);
 
     void removeRoot(const QString &path);
@@ -49,3 +47,4 @@ private:
     QSet<QString> m_roots;
     bool m_reconcileRunning = false;
 };
+

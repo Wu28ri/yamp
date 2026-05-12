@@ -31,3 +31,4 @@ public:
 private:
     TrackQueue *m_queue;
 };
+

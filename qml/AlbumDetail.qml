@@ -27,6 +27,8 @@ Item {
                     source: root.coverSource(root.selectedAlbumPath)
                     sourceSize: Qt.size(220, 220)
                     fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    cache: true
                 }
             }
 
@@ -91,3 +93,4 @@ Item {
         }
     }
 }
+

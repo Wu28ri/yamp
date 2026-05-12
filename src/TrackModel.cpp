@@ -7,14 +7,11 @@ TrackModel::TrackModel(QObject *parent) : QSqlTableModel(parent) {}
 
 int TrackModel::columnForRole(int role) {
     switch (role) {
-    case IdRole:       return IdColumn;
     case TitleRole:    return TitleColumn;
     case ArtistRole:   return ArtistColumn;
     case AlbumRole:    return AlbumColumn;
     case PathRole:     return PathColumn;
     case DurationRole: return DurationColumn;
-    case TrackNoRole:  return TrackNoColumn;
-    case TechInfoRole: return TechInfoColumn;
     default:           return -1;
     }
 }
@@ -28,14 +25,11 @@ QVariant TrackModel::data(const QModelIndex &index, int role) const {
 
 QHash<int, QByteArray> TrackModel::roleNames() const {
     return {
-        {IdRole,       "id"},
         {TitleRole,    "title"},
         {ArtistRole,   "artist"},
         {AlbumRole,    "album"},
         {PathRole,     "path"},
         {DurationRole, "duration"},
-        {TrackNoRole,  "trackNo"},
-        {TechInfoRole, "techInfo"},
     };
 }
 
@@ -59,3 +53,4 @@ void TrackModel::ensureFetchedTo(int row) {
         fetchMore();
     }
 }
+

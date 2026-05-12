@@ -6,26 +6,20 @@ class TrackModel : public QSqlTableModel {
     Q_OBJECT
 public:
     enum Roles {
-        IdRole = Qt::UserRole + 1,
-        TitleRole,
+        TitleRole = Qt::UserRole + 1,
         ArtistRole,
         AlbumRole,
         PathRole,
         DurationRole,
-        TrackNoRole,
-        TechInfoRole,
     };
 
     enum Column {
-        IdColumn       = 0,
         TitleColumn    = 1,
         ArtistColumn   = 2,
         AlbumColumn    = 3,
         PathColumn     = 4,
         DurationColumn = 5,
-        SearchColumn   = 6,
         TrackNoColumn  = 7,
-        TechInfoColumn = 8,
     };
 
     explicit TrackModel(QObject *parent = nullptr);
@@ -39,3 +33,4 @@ public:
 private:
     static int columnForRole(int role);
 };
+

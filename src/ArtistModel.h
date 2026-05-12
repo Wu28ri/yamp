@@ -23,3 +23,4 @@ public:
 private:
     QString m_search;
 };
+

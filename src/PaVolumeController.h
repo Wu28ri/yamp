@@ -23,3 +23,4 @@ signals:
 private:
     PaVolumeControllerPrivate *d;
 };
+

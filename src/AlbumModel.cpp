@@ -56,3 +56,4 @@ void AlbumModel::setSearch(const QString &query) {
     m_search = query;
     refresh();
 }
+

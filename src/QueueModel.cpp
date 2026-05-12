@@ -81,3 +81,4 @@ void QueueModel::notifyCurrentChanged() {
     if (rowCount() == 0) return;
     emit dataChanged(index(0), index(rowCount() - 1), {IsCurrentRole});
 }
+

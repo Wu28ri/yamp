@@ -24,7 +24,7 @@ public:
     explicit MprisRootAdaptor(PlayerBackend *backend);
 
     bool        canQuit()             const { return true; }
-    bool        canRaise()            const { return true; }
+    bool        canRaise()            const { return false; }
     bool        hasTrackList()        const { return false; }
     QString     identity()            const { return QStringLiteral("YAMP Music Player"); }
     QString     desktopEntry()        const { return QStringLiteral("yamp"); }
@@ -32,7 +32,6 @@ public:
     QStringList supportedMimeTypes()  const { return {QStringLiteral("audio/mpeg"), QStringLiteral("audio/flac")}; }
 
 public slots:
-    void Raise() {}
     void Quit() { qApp->quit(); }
 };
 
@@ -98,3 +97,4 @@ private:
     mutable QString     m_cachedArtist;
     mutable QStringList m_cachedArtistList;
 };
+
