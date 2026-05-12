@@ -230,6 +230,8 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
     }
 
+    const bool shareAcrossDir = (cover.source == CoverExtractor::Source::Sidecar);
+
     if (source.isNull()) {
         source = downscaleIfNeeded(cover.image, maxEdge);
         QWriteLocker locker(&m_lock);
@@ -238,11 +240,11 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
                          qMax(imageKb(source), 16));
         m_pathToHash.insert(pathKey, contentHash);
 
-        m_dirToHash.insert(dirKey, contentHash);
+        if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     } else {
         QWriteLocker locker(&m_lock);
         m_pathToHash.insert(pathKey, contentHash);
-        m_dirToHash.insert(dirKey, contentHash);
+        if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     }
 
     const QSize sourceSize = source.size();

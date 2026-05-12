@@ -6,9 +6,16 @@
 
 namespace CoverExtractor {
 
+enum class Source {
+    None,
+    Embedded,
+    Sidecar,
+};
+
 struct CoverData {
     QImage     image;
     QByteArray bytes;
+    Source     source = Source::None;
 };
 
 QByteArray embeddedPicture(const QString &trackPath);

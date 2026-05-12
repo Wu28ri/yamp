@@ -89,8 +89,9 @@ CoverData loadCoverWithBytes(const QString &trackPath) {
     if (!data.isEmpty()) {
         QImage image;
         if (image.loadFromData(data)) {
-            result.image = std::move(image);
-            result.bytes = std::move(data);
+            result.image  = std::move(image);
+            result.bytes  = std::move(data);
+            result.source = Source::Embedded;
             return result;
         }
     }
@@ -102,14 +103,16 @@ CoverData loadCoverWithBytes(const QString &trackPath) {
             QByteArray raw = file.readAll();
             QImage image;
             if (!raw.isEmpty() && image.loadFromData(raw)) {
-                result.image = std::move(image);
-                result.bytes = std::move(raw);
+                result.image  = std::move(image);
+                result.bytes  = std::move(raw);
+                result.source = Source::Sidecar;
                 return result;
             }
         }
         QImage image;
         if (image.load(sidecar)) {
-            result.image = std::move(image);
+            result.image  = std::move(image);
+            result.source = Source::Sidecar;
         }
     }
     return result;
