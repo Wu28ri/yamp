@@ -52,10 +52,12 @@ Rectangle {
 
     RowLayout {
         anchors {
-            left:       parent.left
-            top:        progressSlider.bottom
-            bottom:     parent.bottom
-            leftMargin: 15
+            left:        parent.left
+            right:       centerControls.left
+            top:         progressSlider.bottom
+            bottom:      parent.bottom
+            leftMargin:  15
+            rightMargin: 15
         }
         spacing: 10
 
@@ -75,15 +77,20 @@ Rectangle {
 
         ColumnLayout {
             spacing: 2
+            Layout.fillWidth: true
             Text {
                 text: playerBackend.currentTitle
                 color: sysPalette.text
                 font.bold: true
+                Layout.fillWidth: true
+                elide: Text.ElideRight
             }
             Text {
                 text: playerBackend.currentArtist + (playerBackend.currentAlbum ? " — " + playerBackend.currentAlbum : "")
                 color: sysPalette.windowText
                 font.pixelSize: 12
+                Layout.fillWidth: true
+                elide: Text.ElideRight
             }
         }
     }

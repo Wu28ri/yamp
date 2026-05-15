@@ -112,6 +112,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
                 case QMediaPlayer::LoadedMedia:
                 case QMediaPlayer::BufferedMedia:
                     m_consecutiveInvalid = 0;
+                    applyReplayGainToOutput();
                     break;
                 case QMediaPlayer::EndOfMedia:
                     playNext();
