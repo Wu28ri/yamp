@@ -40,6 +40,7 @@ A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and 
 - **MPRIS support** — full integration with system media controllers and lock screens.
 - **Modern stack** — built on Qt 6.8+, QtMultimedia and TagLib.
 - **Replay Gain** — full support of replay gain via tags.
+- **Last.fm integration** — built-in support for scrobbling played tracks.
 
 ## Installation
 
