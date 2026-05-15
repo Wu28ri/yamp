@@ -64,6 +64,7 @@ public:
     QString currentPath()     const { return m_currentPath;   }
     QString currentTechInfo() const { return m_currentTechInfo; }
     QString currentCoverPath() const { return m_currentCoverPath; }
+    const Track& currentTrack() const { return m_currentTrack; }
 
     bool   isMuted()  const { return m_paVolume->isMuted(); }
     qreal  volume()   const { return m_paVolume->volume();  }

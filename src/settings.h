@@ -19,6 +19,9 @@ class Settings : public QObject {
     Q_PROPERTY(int     replayGainMode    READ replayGainMode    WRITE setReplayGainMode    NOTIFY replayGainModeChanged)
     Q_PROPERTY(qreal   replayGainPreampDb    READ replayGainPreampDb    WRITE setReplayGainPreampDb    NOTIFY replayGainPreampDbChanged)
     Q_PROPERTY(bool    replayGainClipProtect READ replayGainClipProtect WRITE setReplayGainClipProtect NOTIFY replayGainClipProtectChanged)
+    Q_PROPERTY(bool    lastfmEnabled     READ lastfmEnabled    WRITE setLastfmEnabled    NOTIFY lastfmEnabledChanged)
+    Q_PROPERTY(QString lastfmSessionKey  READ lastfmSessionKey WRITE setLastfmSessionKey NOTIFY lastfmSessionKeyChanged)
+    Q_PROPERTY(QString lastfmUsername    READ lastfmUsername   WRITE setLastfmUsername   NOTIFY lastfmUsernameChanged)
 
 public:
     enum ReplayGainMode { RgModeTrack = 0, RgModeAlbum = 1 };
@@ -40,6 +43,9 @@ public:
     int     replayGainMode()        const { return m_rgMode; }
     qreal   replayGainPreampDb()    const { return m_rgPreampDb; }
     bool    replayGainClipProtect() const { return m_rgClipProtect; }
+    bool    lastfmEnabled()         const { return m_lastfmEnabled; }
+    QString lastfmSessionKey()      const { return m_lastfmSessionKey; }
+    QString lastfmUsername()        const { return m_lastfmUsername; }
 
     void setVolume(qreal v);
     void setShuffle(bool s);
@@ -53,6 +59,9 @@ public:
     void setReplayGainMode(int mode);
     void setReplayGainPreampDb(qreal db);
     void setReplayGainClipProtect(bool enabled);
+    void setLastfmEnabled(bool enabled);
+    void setLastfmSessionKey(const QString &key);
+    void setLastfmUsername(const QString &name);
 
 public slots:
     void addFolder(const QUrl &folderUrl);
@@ -77,6 +86,9 @@ signals:
     void replayGainModeChanged();
     void replayGainPreampDbChanged();
     void replayGainClipProtectChanged();
+    void lastfmEnabledChanged();
+    void lastfmSessionKeyChanged();
+    void lastfmUsernameChanged();
 
 private:
     QStringList m_folders;
@@ -94,6 +106,9 @@ private:
     int     m_rgMode              = RgModeTrack;
     qreal   m_rgPreampDb          = 0.0;
     bool    m_rgClipProtect       = true;
+    bool    m_lastfmEnabled       = false;
+    QString m_lastfmSessionKey;
+    QString m_lastfmUsername;
 
     void loadSettings();
     void saveFolders();

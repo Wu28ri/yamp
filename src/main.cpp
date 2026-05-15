@@ -1,4 +1,5 @@
 #include "CoverImageProvider.h"
+#include "LastFmScrobbler.h"
 #include "PlayerBackend.h"
 #include "settings.h"
 
@@ -30,9 +31,12 @@ int main(int argc, char *argv[]) {
     backend.setReplayGainPreampDb(settings.replayGainPreampDb());
     backend.setReplayGainClipProtect(settings.replayGainClipProtect());
 
+    LastFmScrobbler scrobbler(&backend, &settings);
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), &settings);
+    engine.rootContext()->setContextProperty(QStringLiteral("lastfm"), &scrobbler);
 
     QObject::connect(&settings, &Settings::requestRescanDatabase, &backend,
                      [&backend](const QStringList &folders) { backend.syncWithFolders(folders); });

@@ -125,6 +125,27 @@ void Settings::setReplayGainClipProtect(bool enabled) {
     emit replayGainClipProtectChanged();
 }
 
+void Settings::setLastfmEnabled(bool enabled) {
+    if (m_lastfmEnabled == enabled) return;
+    m_lastfmEnabled = enabled;
+    m_settings.setValue("lastfmEnabled", enabled);
+    emit lastfmEnabledChanged();
+}
+
+void Settings::setLastfmSessionKey(const QString &key) {
+    if (m_lastfmSessionKey == key) return;
+    m_lastfmSessionKey = key;
+    m_settings.setValue("lastfmSessionKey", key);
+    emit lastfmSessionKeyChanged();
+}
+
+void Settings::setLastfmUsername(const QString &name) {
+    if (m_lastfmUsername == name) return;
+    m_lastfmUsername = name;
+    m_settings.setValue("lastfmUsername", name);
+    emit lastfmUsernameChanged();
+}
+
 void Settings::loadSettings() {
     m_folders             = m_settings.value("musicFolders", QStringList()).toStringList();
     m_volume              = m_settings.value("volume",              1.0).toReal();
@@ -142,6 +163,9 @@ void Settings::loadSettings() {
     if (m_rgPreampDb < -15.0) m_rgPreampDb = -15.0;
     if (m_rgPreampDb >  15.0) m_rgPreampDb =  15.0;
     m_rgClipProtect       = m_settings.value("replayGainClipProtect", true).toBool();
+    m_lastfmEnabled       = m_settings.value("lastfmEnabled",        false).toBool();
+    m_lastfmSessionKey    = m_settings.value("lastfmSessionKey",     QString()).toString();
+    m_lastfmUsername      = m_settings.value("lastfmUsername",       QString()).toString();
 }
 
 void Settings::saveFolders() {

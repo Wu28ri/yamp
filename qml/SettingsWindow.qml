@@ -37,6 +37,9 @@ Window {
             TabButton {
                 text: "Performance"
             }
+            TabButton {
+                text: "Last.fm"
+            }
         }
 
         StackLayout {
@@ -336,6 +339,66 @@ Window {
                     }
 
                     Item { Layout.fillWidth: true }
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
+            ColumnLayout {
+                id: lastfmTab
+                spacing: 18
+
+                Label {
+                    text: "Last.fm Scrobbling"
+                    font.pixelSize: 16
+                    font.bold: true
+                    color: sysPalette.text
+                }
+
+                Label {
+                    text: "Submit your listening history to Last.fm. Tracks shorter than 30 seconds are not scrobbled."
+                    color: sysPalette.windowText
+                    opacity: 0.7
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                CheckBox {
+                    id: lastfmEnabledBox
+                    text: "Enable scrobbling"
+                    checked: lastfm.enabled
+                    onToggled: lastfm.enabled = checked
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Label {
+                        text: lastfm.authenticated
+                              ? ("Connected as " + lastfm.username)
+                              : "Not connected"
+                        color: sysPalette.text
+                        Layout.fillWidth: true
+                    }
+
+                    Button {
+                        text: "Connect"
+                        visible: !lastfm.authenticated && !lastfm.awaitingAuth
+                        onClicked: lastfm.startAuth()
+                    }
+
+                    Button {
+                        text: "Cancel"
+                        visible: lastfm.awaitingAuth
+                        onClicked: lastfm.cancelAuth()
+                    }
+
+                    Button {
+                        text: "Disconnect"
+                        visible: lastfm.authenticated
+                        onClicked: lastfm.logout()
+                    }
                 }
 
                 Item { Layout.fillHeight: true }

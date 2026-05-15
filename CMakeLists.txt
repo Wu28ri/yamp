@@ -11,7 +11,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib)
 pkg_check_modules(LIBPULSE REQUIRED IMPORTED_TARGET libpulse)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Multimedia Sql DBus)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Multimedia Sql DBus Network)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -62,6 +62,8 @@ qt_add_qml_module(appyamp
         src/PaVolumeController.cpp
         src/MprisAdaptor.h
         src/MprisAdaptor.cpp
+        src/LastFmScrobbler.h
+        src/LastFmScrobbler.cpp
         src/settings.h
         src/settings.cpp
 )
@@ -79,6 +81,7 @@ target_link_libraries(appyamp
         Qt6::Multimedia
         Qt6::Sql
         Qt6::DBus
+        Qt6::Network
         PkgConfig::TAGLIB
         PkgConfig::LIBPULSE
 )
