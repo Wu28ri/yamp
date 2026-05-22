@@ -1,6 +1,5 @@
 #include "MusicLibrary.h"
 
-#include <QDebug>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -87,10 +86,7 @@ bool initialize() {
         db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"));
         db.setDatabaseName(databasePath());
     }
-    if (!db.isOpen() && !db.open()) {
-        qWarning() << "[MusicLibrary] failed to open DB:" << db.lastError().text();
-        return false;
-    }
+    if (!db.isOpen() && !db.open()) return false;
 
     QSqlQuery pragma(db);
     pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
@@ -98,6 +94,7 @@ bool initialize() {
     pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
     pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
     pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
+    pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
 
     QSqlQuery q(db);
     if (!q.exec(QStringLiteral(
@@ -110,7 +107,6 @@ bool initialize() {
             "album_artist TEXT, "
             "rg_track_gain REAL, rg_album_gain REAL, "
             "rg_track_peak REAL, rg_album_peak REAL)"))) {
-        qWarning() << "[MusicLibrary] schema tracks:" << q.lastError().text();
         return false;
     }
 
@@ -131,7 +127,6 @@ bool initialize() {
     QSqlQuery wq(db);
     if (!wq.exec(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"))) {
-        qWarning() << "[MusicLibrary] schema watch_roots:" << wq.lastError().text();
         return false;
     }
 
@@ -140,7 +135,6 @@ bool initialize() {
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "name TEXT NOT NULL, "
             "name_norm TEXT NOT NULL UNIQUE)"))) {
-        qWarning() << "[MusicLibrary] schema artists:" << q.lastError().text();
         return false;
     }
     if (!q.exec(QStringLiteral(
@@ -148,7 +142,6 @@ bool initialize() {
             "track_id INTEGER NOT NULL, "
             "artist_id INTEGER NOT NULL, "
             "PRIMARY KEY (track_id, artist_id))"))) {
-        qWarning() << "[MusicLibrary] schema track_artists:" << q.lastError().text();
         return false;
     }
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)"));
@@ -204,10 +197,7 @@ int pruneOrphanArtists(QSqlDatabase &db) {
     QSqlQuery q(db);
     if (!q.exec(QStringLiteral(
             "DELETE FROM artists WHERE id NOT IN "
-            "(SELECT DISTINCT artist_id FROM track_artists)"))) {
-        qWarning() << "[MusicLibrary] pruneOrphanArtists:" << q.lastError().text();
-        return 0;
-    }
+            "(SELECT DISTINCT artist_id FROM track_artists)"))) return 0;
     return q.numRowsAffected();
 }
 
@@ -225,10 +215,7 @@ void linkTrackToArtistsPrepared(qint64 trackId,
 
         upsertArtist.bindValue(0, display);
         upsertArtist.bindValue(1, norm);
-        if (!upsertArtist.exec()) {
-            qWarning() << "[MusicLibrary] upsert artist:" << upsertArtist.lastError().text();
-            continue;
-        }
+        if (!upsertArtist.exec()) continue;
 
         findArtistId.bindValue(0, norm);
         if (!findArtistId.exec() || !findArtistId.next()) continue;
@@ -237,9 +224,7 @@ void linkTrackToArtistsPrepared(qint64 trackId,
 
         linkTrackArtist.bindValue(0, trackId);
         linkTrackArtist.bindValue(1, artistId);
-        if (!linkTrackArtist.exec()) {
-            qWarning() << "[MusicLibrary] link track-artist:" << linkTrackArtist.lastError().text();
-        }
+        linkTrackArtist.exec();
     }
 }
 
@@ -356,7 +341,6 @@ void LibraryScanner::run() {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
         db.setDatabaseName(MusicLibrary::databasePath());
         if (!db.open()) {
-            qWarning() << "[Scan] failed to open DB:" << db.lastError().text();
             QSqlDatabase::removeDatabase(connName);
             emit finished({});
             return;
@@ -382,9 +366,7 @@ void LibraryScanner::run() {
         QSqlQuery linkTrackArtist(db);
         linkTrackArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
 
-        if (!db.transaction()) {
-            qWarning() << "[Scan] BEGIN failed:" << db.lastError().text();
-        }
+        db.transaction();
 
         QElapsedTimer batchTimer;
         batchTimer.start();

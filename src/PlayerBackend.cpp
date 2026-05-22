@@ -7,7 +7,6 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
-#include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -130,8 +129,6 @@ PlayerBackend::PlayerBackend(QObject *parent)
     connect(m_player, &QMediaPlayer::errorOccurred, this,
             [this](QMediaPlayer::Error error, const QString &errorString) {
                 if (error == QMediaPlayer::NoError) return;
-                qWarning() << "[PlayerBackend] media error:" << error << errorString
-                           << "path:" << m_currentPath;
                 if (error == QMediaPlayer::ResourceError ||
                     error == QMediaPlayer::FormatError) {
                     skipBrokenTrack();
@@ -148,9 +145,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
 }
 
 void PlayerBackend::initDatabase() {
-    if (!MusicLibrary::initialize()) {
-        qWarning() << "[PlayerBackend] DB initialization failed";
-    }
+    MusicLibrary::initialize();
 }
 
 void PlayerBackend::setupMpris() {
@@ -158,13 +153,8 @@ void PlayerBackend::setupMpris() {
     auto *mprisPlayer = new MprisPlayerAdaptor(this);
 
     QDBusConnection bus = QDBusConnection::sessionBus();
-    if (!bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"), this)) {
-        qWarning() << "[MPRIS] registerObject failed";
-        return;
-    }
-    if (!bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.yamp"))) {
-        qWarning() << "[MPRIS] registerService failed";
-    }
+    if (!bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"), this)) return;
+    bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.yamp"));
 
     connect(mprisPlayer, &MprisPlayerAdaptor::nextRequested,      this, &PlayerBackend::playNext);
     connect(mprisPlayer, &MprisPlayerAdaptor::previousRequested,  this, &PlayerBackend::playPrevious);
@@ -273,10 +263,7 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
 
     QSqlQuery q;
     q.setForwardOnly(true);
-    if (!q.exec(sql)) {
-        qWarning() << "[queryTracks] failed:" << q.lastError().text() << sql;
-        return out;
-    }
+    if (!q.exec(sql)) return out;
     while (q.next()) {
         Track t;
         t.path     = q.value(0).toString();
@@ -333,7 +320,6 @@ void PlayerBackend::skipBrokenTrack() {
         return;
     }
     if (++m_consecutiveInvalid >= queueSize) {
-        qWarning() << "[PlayerBackend] all queue items unplayable, stopping";
         m_consecutiveInvalid = 0;
         resetPlaybackState();
         return;
@@ -461,12 +447,13 @@ void PlayerBackend::scanFolder(const QUrl &folderUrl) {
         if (!m_scanRefreshTimer->isActive()) m_scanRefreshTimer->start();
     });
 
+    if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(path);
+
     connect(session, &ScanSession::finished, this,
-            [this, session](const QString &rootPath, const QList<Track> &newTracks) {
+            [this, session](const QString &, const QList<Track> &newTracks) {
                 if (m_scanRefreshTimer->isActive()) m_scanRefreshTimer->stop();
                 m_queueModel->appendTracks(newTracks);
                 refreshAllModels();
-                if (m_libraryWatcher) m_libraryWatcher->registerScannedRoot(rootPath);
                 m_scanProgresses.remove(session);
                 recomputeScanTotals();
             });
@@ -579,10 +566,7 @@ int PlayerBackend::getRowForPath(const QString &path) {
     QSqlQuery q;
     q.prepare(sql);
     q.addBindValue(path);
-    if (!q.exec()) {
-        qWarning() << "[getRowForPath] SQL error:" << q.lastError().text();
-        return -1;
-    }
+    if (!q.exec()) return -1;
     if (!q.next()) return -1;
     return q.value(0).toInt();
 }
@@ -595,14 +579,7 @@ void PlayerBackend::addPlayNext(const QString &path) {
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
 
-    if (!q.exec()) {
-        qWarning() << "[addPlayNext] SQL error:" << q.lastError().text();
-        return;
-    }
-    if (!q.next()) {
-        qWarning() << "[addPlayNext] track not in DB:" << path;
-        return;
-    }
+    if (!q.exec() || !q.next()) return;
     Track t;
     t.path     = path;
     t.title    = q.value(0).toString();
@@ -629,10 +606,7 @@ QVariantMap PlayerBackend::trackContextForPath(const QString &path) {
         "artist "
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
-    if (!q.exec() || !q.next()) {
-        qWarning() << "[trackContextForPath] track not found:" << path;
-        return result;
-    }
+    if (!q.exec() || !q.next()) return result;
 
     result[QStringLiteral("album")]       = q.value(0).toString();
     result[QStringLiteral("albumArtist")] = q.value(1).toString();
@@ -740,9 +714,7 @@ void PlayerBackend::removeFolder(const QString &folder) {
         del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ? OR path LIKE ?"));
         del.addBindValue(clean);
         del.addBindValue(clean + QStringLiteral("/%"));
-        if (!del.exec()) {
-            qWarning() << "[removeFolder] delete tracks failed:" << del.lastError().text();
-        }
+        del.exec();
         db.commit();
         MusicLibrary::pruneOrphanArtists(db);
     }
