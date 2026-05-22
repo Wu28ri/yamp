@@ -68,6 +68,9 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_trackModel = new TrackModel(this);
     m_trackModel->setTable(QStringLiteral("tracks"));
     m_trackModel->setEditStrategy(QSqlTableModel::OnManualSubmit);
+    m_sortColumn = TrackModel::TitleColumn;
+    m_sortOrder  = Qt::AscendingOrder;
+    m_trackModel->setSort(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 
     m_albumModel = new AlbumModel(this);
@@ -250,9 +253,13 @@ void PlayerBackend::applyReplayGainToOutput() {
 void PlayerBackend::togglePlayback() {
     if (m_player->playbackState() == QMediaPlayer::PlayingState) {
         m_player->pause();
-    } else if (m_player->hasAudio()) {
-        m_player->play();
+        return;
     }
+    if (m_player->hasAudio()) {
+        m_player->play();
+        return;
+    }
+    if (m_queue.count() > 0) playFromQueue(0);
 }
 
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
