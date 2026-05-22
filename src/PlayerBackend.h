@@ -16,6 +16,7 @@
 #include <QString>
 #include <QTimer>
 #include <QUrl>
+#include <QVariantMap>
 
 #include <QtMultimedia/QAudioOutput>
 #include <QtMultimedia/QMediaPlayer>
@@ -110,6 +111,7 @@ public:
     Q_INVOKABLE int  getRowForPath(const QString &path);
     Q_INVOKABLE void addPlayNext(const QString &path);
     Q_INVOKABLE void openInFileManager(const QString &path);
+    Q_INVOKABLE QVariantMap trackContextForPath(const QString &path);
 
     void clearLibrary();
     void removeFolder(const QString &folder);

@@ -295,7 +295,7 @@ void PlayerBackend::rebuildQueueFromCurrentFilter() {
         orderBy = colName + (m_sortOrder == Qt::AscendingOrder
                              ? QStringLiteral(" ASC") : QStringLiteral(" DESC"));
     }
-    m_queue.setTracks(queryTracks(combinedFilter(), orderBy));
+    m_queue.setTracks(queryTracks(m_categoryFilter, orderBy));
     m_queueModel->resetAll();
 }
 
@@ -481,49 +481,60 @@ void PlayerBackend::applyFilter() {
 }
 
 void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
+    QString       newFilter;
+    int           newSortColumn;
+    Qt::SortOrder newSortOrder = Qt::AscendingOrder;
     if (albumName.isEmpty()) {
-        m_categoryFilter.clear();
-        m_sortColumn = TrackModel::TitleColumn;
-        m_sortOrder  = Qt::AscendingOrder;
+        newSortColumn = TrackModel::TitleColumn;
     } else {
         if (artistName.isEmpty()) {
-            m_categoryFilter = QStringLiteral("album = %1").arg(sqlQuote(albumName));
+            newFilter = QStringLiteral("album = %1").arg(sqlQuote(albumName));
         } else {
-            m_categoryFilter = QStringLiteral(
+            newFilter = QStringLiteral(
                 "album = %1 AND "
                 "COALESCE(NULLIF(album_artist, ''), artist) = %2")
                 .arg(sqlQuote(albumName), sqlQuote(artistName));
         }
-        m_sortColumn = TrackModel::TrackNoColumn;
-        m_sortOrder  = Qt::AscendingOrder;
+        newSortColumn = TrackModel::TrackNoColumn;
     }
+    if (newFilter == m_categoryFilter && newSortColumn == m_sortColumn &&
+        newSortOrder == m_sortOrder) return;
+    m_categoryFilter = newFilter;
+    m_sortColumn     = newSortColumn;
+    m_sortOrder      = newSortOrder;
     applyFilter();
 }
 
 void PlayerBackend::filterByArtist(const QString &artistName) {
+    QString       newFilter;
+    int           newSortColumn;
+    Qt::SortOrder newSortOrder = Qt::AscendingOrder;
     if (artistName.isEmpty()) {
-        m_categoryFilter.clear();
-        m_sortColumn = TrackModel::TitleColumn;
-        m_sortOrder  = Qt::AscendingOrder;
+        newSortColumn = TrackModel::TitleColumn;
     } else {
         const QString norm = MusicLibrary::normalizeArtistName(artistName);
-        m_categoryFilter = QStringLiteral(
+        newFilter = QStringLiteral(
             "id IN (SELECT track_id FROM track_artists ta "
             "JOIN artists a ON a.id = ta.artist_id "
             "WHERE a.name_norm = %1)").arg(sqlQuote(norm));
-        m_sortColumn = TrackModel::AlbumColumn;
-        m_sortOrder  = Qt::AscendingOrder;
+        newSortColumn = TrackModel::AlbumColumn;
     }
+    if (newFilter == m_categoryFilter && newSortColumn == m_sortColumn &&
+        newSortOrder == m_sortOrder) return;
+    m_categoryFilter = newFilter;
+    m_sortColumn     = newSortColumn;
+    m_sortOrder      = newSortOrder;
     applyFilter();
 }
 
 void PlayerBackend::searchTracks(const QString &query) {
-    if (query.isEmpty()) {
-        m_searchFilter.clear();
-    } else {
+    QString newFilter;
+    if (!query.isEmpty()) {
         const QString safe = sqlLikeEscape(query.toLower());
-        m_searchFilter = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
+        newFilter = QStringLiteral("search_text LIKE '%%%1%%' ESCAPE '\\'").arg(safe);
     }
+    if (newFilter == m_searchFilter) return;
+    m_searchFilter = newFilter;
     applyFilter();
 }
 
@@ -598,6 +609,28 @@ void PlayerBackend::addPlayNext(const QString &path) {
     t.rgTrackPeak   = q.value(8).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(8).toDouble();
     t.rgAlbumPeak   = q.value(9).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(9).toDouble();
     m_queueModel->insertTrack(t);
+}
+
+QVariantMap PlayerBackend::trackContextForPath(const QString &path) {
+    QVariantMap result;
+    if (path.isEmpty()) return result;
+
+    QSqlQuery q;
+    q.prepare(QStringLiteral(
+        "SELECT album, "
+        "COALESCE(NULLIF(album_artist, ''), artist) AS album_artist, "
+        "artist "
+        "FROM tracks WHERE path = ?"));
+    q.addBindValue(path);
+    if (!q.exec() || !q.next()) {
+        qWarning() << "[trackContextForPath] track not found:" << path;
+        return result;
+    }
+
+    result[QStringLiteral("album")]       = q.value(0).toString();
+    result[QStringLiteral("albumArtist")] = q.value(1).toString();
+    result[QStringLiteral("artist")]      = q.value(2).toString();
+    return result;
 }
 
 void PlayerBackend::openInFileManager(const QString &path) {

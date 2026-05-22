@@ -88,3 +88,7 @@ heaptrack.*
 massif.out.*
 callgrind.out.*
 perf.data*
+
+# Build / packaging cruft
+/yamp/
+/src/yamp/

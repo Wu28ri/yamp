@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 
 ListView {
     id: listView
@@ -13,6 +12,37 @@ ListView {
 
     property bool ignoreNextScroll: false
     property int  pendingScrollIdx: -1
+    property bool persistScroll: false
+    property bool suppressSave: false
+
+    Timer {
+        id: suppressTimer
+        interval: 120
+        onTriggered: listView.suppressSave = false
+    }
+
+    Connections {
+        target: playerBackend.trackModel
+        function onModelReset() {
+            listView.suppressSave = true
+            suppressTimer.restart()
+        }
+    }
+
+    Component.onCompleted: {
+        persistScroll = (root.currentView === "tracks")
+        if (persistScroll && root.savedTracklistContentY > 0) {
+            const y = root.savedTracklistContentY
+            const targetRow = Math.ceil(y / 56) + 30
+            playerBackend.trackModel.ensureFetchedTo(targetRow)
+            forceLayout()
+            contentY = y
+        }
+    }
+
+    onContentYChanged: {
+        if (persistScroll && !suppressSave) root.savedTracklistContentY = contentY
+    }
 
     Timer {
         id: scrollDebounce
@@ -188,6 +218,28 @@ ListView {
             text: "Play next"
             onTriggered: playerBackend.addPlayNext(globalTrackMenu.trackPath)
         }
+        MenuSeparator {}
+        MenuItem {
+            text: "Go to artist"
+            onTriggered: {
+                const ctx = playerBackend.trackContextForPath(globalTrackMenu.trackPath)
+                if (!ctx || !ctx.artist) return
+                root.selectedArtist = ctx.artist
+                root.currentView    = "artistDetail"
+            }
+        }
+        MenuItem {
+            text: "Go to album"
+            onTriggered: {
+                const ctx = playerBackend.trackContextForPath(globalTrackMenu.trackPath)
+                if (!ctx || !ctx.album) return
+                root.selectedAlbum     = ctx.album
+                root.selectedArtist    = ctx.albumArtist
+                root.selectedAlbumPath = globalTrackMenu.trackPath
+                root.currentView       = "albumDetail"
+            }
+        }
+        MenuSeparator {}
         MenuItem {
             text: "Show in file manager"
             icon.name: "folder-open"

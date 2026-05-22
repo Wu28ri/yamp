@@ -114,47 +114,6 @@ bool initialize() {
         return false;
     }
 
-    bool hasFileSize    = false;
-    bool hasAlbumArtist = false;
-    bool hasRgTrackGain = false;
-    bool hasRgAlbumGain = false;
-    bool hasRgTrackPeak = false;
-    bool hasRgAlbumPeak = false;
-    if (q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
-        while (q.next()) {
-            const QString col = q.value(1).toString();
-            if (col == QLatin1String("file_size"))      hasFileSize    = true;
-            if (col == QLatin1String("album_artist"))   hasAlbumArtist = true;
-            if (col == QLatin1String("rg_track_gain"))  hasRgTrackGain = true;
-            if (col == QLatin1String("rg_album_gain"))  hasRgAlbumGain = true;
-            if (col == QLatin1String("rg_track_peak"))  hasRgTrackPeak = true;
-            if (col == QLatin1String("rg_album_peak"))  hasRgAlbumPeak = true;
-        }
-    }
-    if (!hasFileSize) {
-        QSqlQuery alterQ(db);
-        if (!alterQ.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN file_size INTEGER DEFAULT 0"))) {
-            qWarning() << "[MusicLibrary] add file_size:" << alterQ.lastError().text();
-        }
-    }
-    if (!hasAlbumArtist) {
-        QSqlQuery alterQ(db);
-        if (!alterQ.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN album_artist TEXT"))) {
-            qWarning() << "[MusicLibrary] add album_artist:" << alterQ.lastError().text();
-        }
-    }
-    auto addRgColumn = [&db](const char *name) {
-        QSqlQuery alterQ(db);
-        const QString sql = QStringLiteral("ALTER TABLE tracks ADD COLUMN %1 REAL")
-                                .arg(QLatin1String(name));
-        if (!alterQ.exec(sql)) {
-            qWarning() << "[MusicLibrary] add" << name << ':' << alterQ.lastError().text();
-        }
-    };
-    if (!hasRgTrackGain) addRgColumn("rg_track_gain");
-    if (!hasRgAlbumGain) addRgColumn("rg_album_gain");
-    if (!hasRgTrackPeak) addRgColumn("rg_track_peak");
-    if (!hasRgAlbumPeak) addRgColumn("rg_album_peak");
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
         "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"));
@@ -196,69 +155,6 @@ bool initialize() {
     q.exec(QStringLiteral(
         "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
         "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"));
-
-    QSqlQuery countQ(db);
-    int userVersion = 0;
-    if (countQ.exec(QStringLiteral("PRAGMA user_version")) && countQ.next()) {
-        userVersion = countQ.value(0).toInt();
-    }
-    if (userVersion < 1) {
-        bool needBackfill = false;
-        if (countQ.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM tracks), (SELECT COUNT(*) FROM track_artists)"))
-            && countQ.next()) {
-            const int tracksCount = countQ.value(0).toInt();
-            const int linksCount  = countQ.value(1).toInt();
-            needBackfill = tracksCount > 0 && linksCount == 0;
-        }
-        if (needBackfill) {
-            db.transaction();
-            QSqlQuery iter(db);
-            QSqlQuery up(db);
-            up.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
-            QSqlQuery fid(db);
-            fid.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
-            QSqlQuery lk(db);
-            lk.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
-            if (iter.exec(QStringLiteral("SELECT id, artist FROM tracks"))) {
-                while (iter.next()) {
-                    linkTrackToArtistsPrepared(iter.value(0).toLongLong(),
-                                               iter.value(1).toString(),
-                                               up, fid, lk);
-                }
-            }
-            db.commit();
-        }
-        countQ.exec(QStringLiteral("PRAGMA user_version = 1"));
-    }
-    if (userVersion < 2) {
-        db.transaction();
-        QSqlQuery iter(db);
-        QSqlQuery upd(db);
-        upd.prepare(QStringLiteral("UPDATE tracks SET album_artist = ? WHERE id = ?"));
-        if (iter.exec(QStringLiteral(
-                "SELECT id, artist FROM tracks "
-                "WHERE album_artist IS NULL OR album_artist = ''"))) {
-            while (iter.next()) {
-                const qint64 id = iter.value(0).toLongLong();
-                const QString artist = iter.value(1).toString();
-                upd.bindValue(0, pickAlbumArtist(QString(), artist));
-                upd.bindValue(1, id);
-                if (!upd.exec()) {
-                    qWarning() << "[MusicLibrary] backfill album_artist:" << upd.lastError().text();
-                }
-            }
-        }
-        db.commit();
-        countQ.exec(QStringLiteral("PRAGMA user_version = 2"));
-    }
-    if (userVersion < 3) {
-        QSqlQuery dropQ(db);
-        dropQ.exec(QStringLiteral("DROP TRIGGER IF EXISTS ta_after_delete"));
-        countQ.exec(QStringLiteral("PRAGMA user_version = 3"));
-    }
-    if (userVersion < 4) {
-        countQ.exec(QStringLiteral("PRAGMA user_version = 4"));
-    }
 
     return true;
 }

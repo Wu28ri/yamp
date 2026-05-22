@@ -18,6 +18,7 @@ Window {
     property string selectedAlbum: ""
     property string selectedAlbumPath: ""
     property string selectedArtist: ""
+    property real   savedTracklistContentY: 0
 
     function coverSource(path) {
         return path ? "image://cover/" + encodeURI(path) : ""
