@@ -163,9 +163,18 @@ Rectangle {
         }
 
         ToolButton {
-            icon.name: playerBackend.isMuted ? "audio-volume-muted" : "audio-volume-high"
+            readonly property bool effectivelyMuted: playerBackend.isMuted || playerBackend.volume <= 0
+            icon.name: effectivelyMuted ? "audio-volume-muted" : "audio-volume-high"
             opacity: 0.8
-            onClicked: playerBackend.isMuted = !playerBackend.isMuted
+            onClicked: {
+                if (effectivelyMuted) {
+                    playerBackend.isMuted = false
+                    playerBackend.volume = 1.0
+                } else {
+                    playerBackend.isMuted = true
+                    playerBackend.volume = 0
+                }
+            }
         }
 
         Slider {

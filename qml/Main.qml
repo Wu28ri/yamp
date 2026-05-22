@@ -43,6 +43,32 @@ Window {
 
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
+    Shortcut {
+        sequence: "Space"
+        context: Qt.ApplicationShortcut
+        onActivated: playerBackend.togglePlayback()
+    }
+    Shortcut {
+        sequence: "Left"
+        context: Qt.ApplicationShortcut
+        onActivated: playerBackend.position = Math.max(0, playerBackend.position - 5000)
+    }
+    Shortcut {
+        sequence: "Right"
+        context: Qt.ApplicationShortcut
+        onActivated: playerBackend.position = Math.min(playerBackend.duration, playerBackend.position + 5000)
+    }
+    Shortcut {
+        sequence: "Up"
+        context: Qt.ApplicationShortcut
+        onActivated: playerBackend.volume = Math.min(1.0, playerBackend.volume + 0.05)
+    }
+    Shortcut {
+        sequence: "Down"
+        context: Qt.ApplicationShortcut
+        onActivated: playerBackend.volume = Math.max(0.0, playerBackend.volume - 0.05)
+    }
+
     SettingsWindow {
         id: settingsWindow
         visible: false
