@@ -16,22 +16,48 @@
 #include <cmath>
 #include <limits>
 
+#include <taglib/aiffproperties.h>
+#include <taglib/apeproperties.h>
+#include <taglib/asfproperties.h>
 #include <taglib/fileref.h>
 #include <taglib/flacproperties.h>
+#include <taglib/mp4properties.h>
+#include <taglib/mpegproperties.h>
+#include <taglib/opusproperties.h>
 #include <taglib/tag.h>
 #include <taglib/tpropertymap.h>
+#include <taglib/vorbisproperties.h>
+#include <taglib/wavproperties.h>
 
 namespace {
 
-QString makeTechInfo(const QString &filePath, int sampleRate, int bitrate, int bitDepth) {
+QString makeTechInfo(const QString &formatLabel, int sampleRate, int bitrate, int bitDepth) {
     const double khz = sampleRate / 1000.0;
     QString prefix;
-    if (filePath.endsWith(QLatin1String(".flac"), Qt::CaseInsensitive))     prefix = QStringLiteral("FLAC | ");
-    else if (filePath.endsWith(QLatin1String(".mp3"), Qt::CaseInsensitive)) prefix = QStringLiteral("MP3 | ");
+    if (!formatLabel.isEmpty()) prefix = formatLabel + QStringLiteral(" | ");
     QString out = QStringLiteral("%1%2 kHz").arg(prefix).arg(khz, 0, 'f', 1);
     if (bitDepth > 0) out += QStringLiteral(" | %1 bit").arg(bitDepth);
     out += QStringLiteral(" | %1 kbps").arg(bitrate);
     return out;
+}
+
+QString fallbackFormatLabel(const QString &filePath) {
+    const QString lower = filePath.toLower();
+    if (lower.endsWith(QLatin1String(".flac"))) return QStringLiteral("FLAC");
+    if (lower.endsWith(QLatin1String(".mp3")))  return QStringLiteral("MP3");
+    if (lower.endsWith(QLatin1String(".wav")))  return QStringLiteral("WAV");
+    if (lower.endsWith(QLatin1String(".m4a")))  return QStringLiteral("M4A");
+    if (lower.endsWith(QLatin1String(".mp4")))  return QStringLiteral("MP4");
+    if (lower.endsWith(QLatin1String(".aac")))  return QStringLiteral("AAC");
+    if (lower.endsWith(QLatin1String(".ogg")) || lower.endsWith(QLatin1String(".oga")))
+        return QStringLiteral("OGG");
+    if (lower.endsWith(QLatin1String(".opus"))) return QStringLiteral("Opus");
+    if (lower.endsWith(QLatin1String(".wma")))  return QStringLiteral("WMA");
+    if (lower.endsWith(QLatin1String(".aiff")) || lower.endsWith(QLatin1String(".aif")))
+        return QStringLiteral("AIFF");
+    if (lower.endsWith(QLatin1String(".ape")))  return QStringLiteral("APE");
+    if (lower.endsWith(QLatin1String(".alac"))) return QStringLiteral("ALAC");
+    return {};
 }
 
 double parseReplayGainDb(const QString &raw) {
@@ -282,10 +308,37 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
         if (auto *audio = f.audioProperties()) {
             duration = audio->lengthInSeconds();
             int bitDepth = 0;
-            if (auto *flac = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
-                bitDepth = flac->bitsPerSample();
+            QString formatLabel;
+            if (auto *p = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
+                bitDepth = p->bitsPerSample();
+                formatLabel = QStringLiteral("FLAC");
+            } else if (auto *p = dynamic_cast<TagLib::RIFF::WAV::Properties*>(audio)) {
+                bitDepth = p->bitsPerSample();
+                formatLabel = QStringLiteral("WAV");
+            } else if (auto *p = dynamic_cast<TagLib::RIFF::AIFF::Properties*>(audio)) {
+                bitDepth = p->bitsPerSample();
+                formatLabel = QStringLiteral("AIFF");
+            } else if (auto *p = dynamic_cast<TagLib::MP4::Properties*>(audio)) {
+                if (p->codec() == TagLib::MP4::Properties::ALAC) {
+                    bitDepth = p->bitsPerSample();
+                    formatLabel = QStringLiteral("ALAC");
+                } else {
+                    formatLabel = QStringLiteral("M4A");
+                }
+            } else if (auto *p = dynamic_cast<TagLib::APE::Properties*>(audio)) {
+                bitDepth = p->bitsPerSample();
+                formatLabel = QStringLiteral("APE");
+            } else if (dynamic_cast<TagLib::MPEG::Properties*>(audio)) {
+                formatLabel = QStringLiteral("MP3");
+            } else if (dynamic_cast<TagLib::Ogg::Vorbis::Properties*>(audio)) {
+                formatLabel = QStringLiteral("OGG");
+            } else if (dynamic_cast<TagLib::Ogg::Opus::Properties*>(audio)) {
+                formatLabel = QStringLiteral("Opus");
+            } else if (dynamic_cast<TagLib::ASF::Properties*>(audio)) {
+                formatLabel = QStringLiteral("WMA");
             }
-            techInfo = makeTechInfo(filePath, audio->sampleRate(), audio->bitrate(), bitDepth);
+            if (formatLabel.isEmpty()) formatLabel = fallbackFormatLabel(filePath);
+            techInfo = makeTechInfo(formatLabel, audio->sampleRate(), audio->bitrate(), bitDepth);
         }
     }
 
@@ -319,7 +372,13 @@ void LibraryScanner::run() {
     QStringList allFiles;
     {
         QDirIterator it(m_rootPath,
-                        {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
+                        {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
+                         QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
+                         QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
+                         QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
+                         QStringLiteral("*.opus"), QStringLiteral("*.wma"),
+                         QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
+                         QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
                         QDir::Files,
                         QDirIterator::Subdirectories);
         while (it.hasNext()) allFiles.append(it.next());

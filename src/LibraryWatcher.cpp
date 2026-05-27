@@ -115,7 +115,13 @@ QStringList listAudioFilesIn(const QString &dir) {
     QDir d(dir);
     if (!d.exists()) return out;
     const auto entries = d.entryInfoList(
-        {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
+        {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
+         QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
+         QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
+         QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
+         QStringLiteral("*.opus"), QStringLiteral("*.wma"),
+         QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
+         QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
         QDir::Files | QDir::NoSymLinks);
     out.reserve(entries.size());
     for (const auto &e : entries) out.append(e.absoluteFilePath());
@@ -448,7 +454,13 @@ void LibraryWatcher::initialReconcileAsync(const QString &root) {
 
                 QSet<QString> diskFiles;
                 QDirIterator it(root,
-                                {QStringLiteral("*.flac"), QStringLiteral("*.mp3")},
+                                {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
+                                 QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
+                                 QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
+                                 QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
+                                 QStringLiteral("*.opus"), QStringLiteral("*.wma"),
+                                 QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
+                                 QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
                                 QDir::Files | QDir::NoSymLinks,
                                 QDirIterator::Subdirectories);
                 while (it.hasNext()) diskFiles.insert(it.next());

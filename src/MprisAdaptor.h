@@ -29,7 +29,26 @@ public:
     QString     identity()            const { return QStringLiteral("YAMP Music Player"); }
     QString     desktopEntry()        const { return QStringLiteral("yamp"); }
     QStringList supportedUriSchemes() const { return {QStringLiteral("file")}; }
-    QStringList supportedMimeTypes()  const { return {QStringLiteral("audio/mpeg"), QStringLiteral("audio/flac")}; }
+    QStringList supportedMimeTypes()  const {
+        return {
+            QStringLiteral("audio/mpeg"),
+            QStringLiteral("audio/flac"),
+            QStringLiteral("audio/x-flac"),
+            QStringLiteral("audio/mp4"),
+            QStringLiteral("audio/x-m4a"),
+            QStringLiteral("audio/aac"),
+            QStringLiteral("audio/ogg"),
+            QStringLiteral("audio/x-vorbis+ogg"),
+            QStringLiteral("audio/opus"),
+            QStringLiteral("audio/x-opus+ogg"),
+            QStringLiteral("audio/wav"),
+            QStringLiteral("audio/x-wav"),
+            QStringLiteral("audio/x-ms-wma"),
+            QStringLiteral("audio/aiff"),
+            QStringLiteral("audio/x-aiff"),
+            QStringLiteral("audio/x-ape")
+        };
+    }
 
 public slots:
     void Quit() { qApp->quit(); }
