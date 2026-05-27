@@ -5,12 +5,14 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QThreadPool>
 #include <QTimer>
 
 class LibraryWatcher : public QObject {
     Q_OBJECT
 public:
     explicit LibraryWatcher(QObject *parent = nullptr);
+    ~LibraryWatcher() override;
 
     void start();
 
@@ -45,6 +47,7 @@ private:
     QTimer *m_debounce = nullptr;
     QSet<QString> m_pendingDirs;
     QSet<QString> m_roots;
+    QThreadPool m_workerPool;
     bool m_reconcileRunning = false;
 };
 

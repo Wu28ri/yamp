@@ -409,6 +409,7 @@ void LibraryScanner::run() {
         pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
         pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
         pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
+        pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
 
         QSqlQuery insertTrack(db);
         insertTrack.prepare(QStringLiteral(

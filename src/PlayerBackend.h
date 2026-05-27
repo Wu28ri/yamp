@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QPair>
 #include <QString>
+#include <QThreadPool>
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
@@ -52,6 +53,7 @@ class PlayerBackend : public QObject {
 
 public:
     explicit PlayerBackend(QObject *parent = nullptr);
+    ~PlayerBackend() override;
 
     enum ReplayGainMode {
         RgModeTrack = 0,
@@ -158,6 +160,7 @@ private:
     QueueModel     *m_queueModel    = nullptr;
     LibraryWatcher *m_libraryWatcher = nullptr;
     TrackQueue      m_queue;
+    QThreadPool     m_coverPool;
 
     QString m_currentPath;
     QString m_currentTitle;

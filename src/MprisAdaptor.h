@@ -62,8 +62,8 @@ class MprisPlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(qlonglong   Position       READ position       NOTIFY positionChanged)
     Q_PROPERTY(double      Volume         READ volume         WRITE setVolume NOTIFY volumeChanged)
     Q_PROPERTY(double      Rate           READ rate           CONSTANT)
-    Q_PROPERTY(double      MinimumRate    READ rate           CONSTANT)
-    Q_PROPERTY(double      MaximumRate    READ rate           CONSTANT)
+    Q_PROPERTY(double      MinimumRate    READ minimumRate    CONSTANT)
+    Q_PROPERTY(double      MaximumRate    READ maximumRate    CONSTANT)
     Q_PROPERTY(bool        CanGoNext      READ canControl     CONSTANT)
     Q_PROPERTY(bool        CanGoPrevious  READ canControl     CONSTANT)
     Q_PROPERTY(bool        CanPlay        READ canControl     CONSTANT)
@@ -79,6 +79,8 @@ public:
     qlonglong   position()       const;
     double      volume()         const;
     double      rate()           const { return 1.0; }
+    double      minimumRate()    const { return 1.0; }
+    double      maximumRate()    const { return 1.0; }
     bool        canControl()     const { return true; }
 
     void setVolume(double v);
@@ -110,10 +112,15 @@ signals:
 private:
     void emitProperties(const QVariantMap &props);
     void scheduleMetadataPush();
+    void invalidateMetadataCache();
 
     PlayerBackend *m_backend;
     QTimer *m_metadataTimer = nullptr;
     mutable QString     m_cachedArtist;
     mutable QStringList m_cachedArtistList;
+    mutable QVariantMap m_cachedMetadata;
+    mutable bool        m_metadataDirty = true;
+    mutable QString     m_lastTrackIdPath;
+    mutable quint64     m_trackIdCounter = 0;
 };
 

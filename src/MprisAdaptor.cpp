@@ -2,7 +2,7 @@
 #include "MusicLibrary.h"
 #include "PlayerBackend.h"
 
-#include <QDateTime>
+#include <QUrl>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 
@@ -24,6 +24,8 @@ MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
         emitProperties({{QStringLiteral("Metadata"), metadata()}});
     });
 
+    connect(m_backend, &PlayerBackend::metadataChanged, this, &MprisPlayerAdaptor::invalidateMetadataCache);
+    connect(m_backend, &PlayerBackend::durationChanged, this, &MprisPlayerAdaptor::invalidateMetadataCache);
     connect(m_backend, &PlayerBackend::metadataChanged, this, &MprisPlayerAdaptor::scheduleMetadataPush);
     connect(m_backend, &PlayerBackend::durationChanged, this, &MprisPlayerAdaptor::scheduleMetadataPush);
 
@@ -38,6 +40,10 @@ MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
 
 void MprisPlayerAdaptor::scheduleMetadataPush() {
     if (!m_metadataTimer->isActive()) m_metadataTimer->start();
+}
+
+void MprisPlayerAdaptor::invalidateMetadataCache() {
+    m_metadataDirty = true;
 }
 
 void MprisPlayerAdaptor::emitProperties(const QVariantMap &props) {
@@ -56,9 +62,21 @@ QString MprisPlayerAdaptor::playbackStatus() const {
 }
 
 QVariantMap MprisPlayerAdaptor::metadata() const {
+    if (!m_metadataDirty) return m_cachedMetadata;
+
     QVariantMap dict;
+
+    const QString path = m_backend->currentPath();
+    if (path != m_lastTrackIdPath) {
+        m_lastTrackIdPath = path;
+        ++m_trackIdCounter;
+    }
+    const QString trackIdPath = path.isEmpty()
+        ? QStringLiteral("/org/mpris/MediaPlayer2/TrackList/NoTrack")
+        : QStringLiteral("/org/yamp/Track/%1").arg(m_trackIdCounter);
     dict.insert(QStringLiteral("mpris:trackid"),
-                QVariant::fromValue(QDBusObjectPath(QStringLiteral("/org/mpris/MediaPlayer2/Track/0"))));
+                QVariant::fromValue(QDBusObjectPath(trackIdPath)));
+
     dict.insert(QStringLiteral("mpris:length"),
                 static_cast<qlonglong>(m_backend->duration()) * 1000);
     dict.insert(QStringLiteral("xesam:title"),  m_backend->currentTitle());
@@ -77,10 +95,12 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
     if (art.isEmpty()) {
         dict.insert(QStringLiteral("mpris:artUrl"), QString());
     } else {
-        const qint64 ts = QDateTime::currentMSecsSinceEpoch();
         dict.insert(QStringLiteral("mpris:artUrl"),
-                    QStringLiteral("file://%1?t=%2").arg(art).arg(ts));
+                    QUrl::fromLocalFile(art).toString());
     }
+
+    m_cachedMetadata = dict;
+    m_metadataDirty = false;
     return dict;
 }
 

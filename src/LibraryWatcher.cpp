@@ -11,7 +11,6 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
-#include <QThreadPool>
 #include <QUuid>
 #include <QVariant>
 
@@ -260,6 +259,10 @@ LibraryWatcher::LibraryWatcher(QObject *parent)
             this, &LibraryWatcher::onDirectoryChanged);
 }
 
+LibraryWatcher::~LibraryWatcher() {
+    m_workerPool.waitForDone();
+}
+
 QStringList LibraryWatcher::roots() const {
     return QStringList(m_roots.begin(), m_roots.end());
 }
@@ -361,7 +364,7 @@ void LibraryWatcher::flushPending() {
     m_pendingDirs.clear();
     m_reconcileRunning = true;
 
-    QThreadPool::globalInstance()->start([this, pending]() {
+    m_workerPool.start([this, pending]() {
         const QString connName = QStringLiteral("yamp_lw_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
         ReconcileResult result;
         {
@@ -373,6 +376,7 @@ void LibraryWatcher::flushPending() {
                 pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
                 pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
                 pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
+                pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
                 result = reconcileDirsBlocking(db, pending);
                 db.close();
             }
@@ -439,7 +443,7 @@ void LibraryWatcher::unwatchTree(const QString &root) {
 }
 
 void LibraryWatcher::initialReconcileAsync(const QString &root) {
-    QThreadPool::globalInstance()->start([this, root]() {
+    m_workerPool.start([this, root]() {
         const QString connName = QStringLiteral("yamp_lw_init_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
         bool changed = false;
         {
@@ -451,6 +455,7 @@ void LibraryWatcher::initialReconcileAsync(const QString &root) {
                 pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
                 pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
                 pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
+                pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
 
                 QSet<QString> diskFiles;
                 QDirIterator it(root,

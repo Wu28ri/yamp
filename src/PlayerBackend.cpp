@@ -144,6 +144,10 @@ PlayerBackend::PlayerBackend(QObject *parent)
     });
 }
 
+PlayerBackend::~PlayerBackend() {
+    m_coverPool.waitForDone();
+}
+
 void PlayerBackend::initDatabase() {
     MusicLibrary::initialize();
 }
@@ -403,7 +407,7 @@ void PlayerBackend::loadTrack(const Track &t) {
 
     const QString trackPath = t.path;
     const quint64 gen = ++m_coverGen;
-    QThreadPool::globalInstance()->start([this, trackPath, gen]() {
+    m_coverPool.start([this, trackPath, gen]() {
         const QByteArray data = CoverExtractor::embeddedPicture(trackPath);
         QString resolved;
         if (!data.isEmpty()) {
