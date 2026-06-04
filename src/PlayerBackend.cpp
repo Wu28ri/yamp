@@ -18,11 +18,12 @@
 #include <QThreadPool>
 #include <QUrl>
 
-#include <cmath>
-#include <limits>
+#include <clocale>
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
+
+#include <mpv/client.h>
 
 namespace {
 const QString kDefaultTitle  = QStringLiteral("N/A");
@@ -90,12 +91,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
     connect(m_scanRefreshTimer, &QTimer::timeout, this,
             &PlayerBackend::refreshAllModels);
 
-    m_player      = new QMediaPlayer(this);
-    m_audioOutput = new QAudioOutput(this);
-    m_player->setAudioOutput(m_audioOutput);
-
-    m_audioOutput->setVolume(1.0);
-    m_audioOutput->setMuted(false);
+    initMpv();
 
     m_paVolume = new PaVolumeController(this);
     connect(m_paVolume, &PaVolumeController::volumeChanged,
@@ -105,35 +101,19 @@ PlayerBackend::PlayerBackend(QObject *parent)
 
     setupMpris();
 
-    connect(m_player, &QMediaPlayer::positionChanged,      this, &PlayerBackend::positionChanged);
-    connect(m_player, &QMediaPlayer::durationChanged,      this, &PlayerBackend::durationChanged);
-    connect(m_player, &QMediaPlayer::playbackStateChanged, this, &PlayerBackend::playbackStateChanged);
-    connect(m_player, &QMediaPlayer::mediaStatusChanged,   this,
-            [this](QMediaPlayer::MediaStatus status) {
-                switch (status) {
-                case QMediaPlayer::LoadedMedia:
-                case QMediaPlayer::BufferedMedia:
-                    m_consecutiveInvalid = 0;
-                    applyReplayGainToOutput();
-                    break;
-                case QMediaPlayer::EndOfMedia:
-                    playNext();
-                    break;
-                case QMediaPlayer::InvalidMedia:
-                    skipBrokenTrack();
-                    break;
-                default:
-                    break;
-                }
-            });
-    connect(m_player, &QMediaPlayer::errorOccurred, this,
-            [this](QMediaPlayer::Error error, const QString &errorString) {
-                if (error == QMediaPlayer::NoError) return;
-                if (error == QMediaPlayer::ResourceError ||
-                    error == QMediaPlayer::FormatError) {
-                    skipBrokenTrack();
-                }
-            });
+    m_positionPollTimer = new QTimer(this);
+    m_positionPollTimer->setInterval(100);
+    connect(m_positionPollTimer, &QTimer::timeout, this, [this]() {
+        if (!m_mpv) return;
+        double t = 0;
+        if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+            const qint64 ms = static_cast<qint64>(t * 1000.0);
+            if (ms != m_lastPositionMs) {
+                m_lastPositionMs = ms;
+                emit positionChanged();
+            }
+        }
+    });
 
     m_libraryWatcher->start();
 
@@ -146,6 +126,137 @@ PlayerBackend::PlayerBackend(QObject *parent)
 
 PlayerBackend::~PlayerBackend() {
     m_coverPool.waitForDone();
+    shutdownMpv();
+}
+
+void PlayerBackend::initMpv() {
+    setlocale(LC_NUMERIC, "C");
+
+    m_mpv = mpv_create();
+    if (!m_mpv) {
+        qFatal("[mpv] mpv_create failed");
+        return;
+    }
+
+    mpv_set_option_string(m_mpv, "vid",                "no");
+    mpv_set_option_string(m_mpv, "audio-display",      "no");
+    mpv_set_option_string(m_mpv, "idle",               "yes");
+    mpv_set_option_string(m_mpv, "force-window",       "no");
+    mpv_set_option_string(m_mpv, "terminal",           "no");
+    mpv_set_option_string(m_mpv, "input-default-bindings", "no");
+    mpv_set_option_string(m_mpv, "input-vo-keyboard",  "no");
+    mpv_set_option_string(m_mpv, "osc",                "no");
+    mpv_set_option_string(m_mpv, "keep-open",          "no");
+    mpv_set_option_string(m_mpv, "audio-client-name",  "yamp");
+    mpv_set_option_string(m_mpv, "volume",             "100");
+    mpv_set_option_string(m_mpv, "replaygain",         "no");
+    mpv_set_option_string(m_mpv, "replaygain-preamp",  "0");
+    mpv_set_option_string(m_mpv, "replaygain-clip",    "yes");
+
+    if (mpv_initialize(m_mpv) < 0) {
+        qFatal("[mpv] mpv_initialize failed");
+        return;
+    }
+
+    mpv_observe_property(m_mpv, 0, "pause",       MPV_FORMAT_FLAG);
+    mpv_observe_property(m_mpv, 0, "duration",    MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_mpv, 0, "idle-active", MPV_FORMAT_FLAG);
+
+    mpv_set_wakeup_callback(m_mpv, &PlayerBackend::mpvWakeupCallback, this);
+}
+
+void PlayerBackend::shutdownMpv() {
+    if (m_positionPollTimer) m_positionPollTimer->stop();
+    if (m_mpv) {
+        mpv_set_wakeup_callback(m_mpv, nullptr, nullptr);
+        mpv_terminate_destroy(m_mpv);
+        m_mpv = nullptr;
+    }
+}
+
+void PlayerBackend::mpvWakeupCallback(void *ctx) {
+    auto *self = static_cast<PlayerBackend*>(ctx);
+    QMetaObject::invokeMethod(self, "processMpvEvents", Qt::QueuedConnection);
+}
+
+void PlayerBackend::processMpvEvents() {
+    if (!m_mpv) return;
+    while (true) {
+        mpv_event *e = mpv_wait_event(m_mpv, 0);
+        if (!e || e->event_id == MPV_EVENT_NONE) break;
+        switch (e->event_id) {
+        case MPV_EVENT_PROPERTY_CHANGE:
+            handleMpvPropertyChange(static_cast<mpv_event_property*>(e->data));
+            break;
+        case MPV_EVENT_END_FILE:
+            handleMpvEndFile(static_cast<mpv_event_end_file*>(e->data));
+            break;
+        case MPV_EVENT_PLAYBACK_RESTART:
+            m_consecutiveInvalid = 0;
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
+    if (!prop || !prop->name) return;
+    const QByteArray name = QByteArray::fromRawData(prop->name, qstrlen(prop->name));
+
+    if (name == "pause" && prop->format == MPV_FORMAT_FLAG) {
+        const bool newPaused = *static_cast<int*>(prop->data) != 0;
+        if (newPaused != m_paused) {
+            m_paused = newPaused;
+            if (m_paused) {
+                m_positionPollTimer->stop();
+            } else if (m_hasFile) {
+                m_positionPollTimer->start();
+            }
+            emit playbackStateChanged();
+        }
+    } else if (name == "duration" && prop->format == MPV_FORMAT_DOUBLE) {
+        const double d = *static_cast<double*>(prop->data);
+        const qint64 ms = static_cast<qint64>(d * 1000.0);
+        if (ms != m_durationMs) {
+            m_durationMs = ms;
+            emit durationChanged();
+        }
+    } else if (name == "idle-active" && prop->format == MPV_FORMAT_FLAG) {
+        const bool idle = *static_cast<int*>(prop->data) != 0;
+        const bool newHasFile = !idle;
+        if (newHasFile != m_hasFile) {
+            m_hasFile = newHasFile;
+            if (!m_hasFile) {
+                m_positionPollTimer->stop();
+                if (m_durationMs != 0) {
+                    m_durationMs = 0;
+                    emit durationChanged();
+                }
+                if (m_lastPositionMs != 0) {
+                    m_lastPositionMs = 0;
+                    emit positionChanged();
+                }
+            } else if (!m_paused) {
+                m_positionPollTimer->start();
+            }
+            emit playbackStateChanged();
+        }
+    }
+}
+
+void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
+    if (!ev) return;
+    switch (ev->reason) {
+    case MPV_END_FILE_REASON_EOF:
+        playNext();
+        break;
+    case MPV_END_FILE_REASON_ERROR:
+        skipBrokenTrack();
+        break;
+    default:
+        break;
+    }
 }
 
 void PlayerBackend::initDatabase() {
@@ -163,9 +274,9 @@ void PlayerBackend::setupMpris() {
     connect(mprisPlayer, &MprisPlayerAdaptor::nextRequested,      this, &PlayerBackend::playNext);
     connect(mprisPlayer, &MprisPlayerAdaptor::previousRequested,  this, &PlayerBackend::playPrevious);
     connect(mprisPlayer, &MprisPlayerAdaptor::playPauseRequested, this, &PlayerBackend::togglePlayback);
-    connect(mprisPlayer, &MprisPlayerAdaptor::playRequested,      m_player, &QMediaPlayer::play);
-    connect(mprisPlayer, &MprisPlayerAdaptor::pauseRequested,     m_player, &QMediaPlayer::pause);
-    connect(mprisPlayer, &MprisPlayerAdaptor::stopRequested,      m_player, &QMediaPlayer::stop);
+    connect(mprisPlayer, &MprisPlayerAdaptor::playRequested,      this, &PlayerBackend::play);
+    connect(mprisPlayer, &MprisPlayerAdaptor::pauseRequested,     this, &PlayerBackend::pause);
+    connect(mprisPlayer, &MprisPlayerAdaptor::stopRequested,      this, &PlayerBackend::stop);
 }
 
 void PlayerBackend::setMuted(bool muted) {
@@ -187,14 +298,14 @@ void PlayerBackend::setShuffle(bool enabled) {
 void PlayerBackend::setReplayGainEnabled(bool enabled) {
     if (m_rgEnabled == enabled) return;
     m_rgEnabled = enabled;
-    applyReplayGainToOutput();
+    applyReplayGainSettings();
 }
 
 void PlayerBackend::setReplayGainMode(int mode) {
     if (mode != RgModeTrack && mode != RgModeAlbum) return;
     if (m_rgMode == mode) return;
     m_rgMode = mode;
-    applyReplayGainToOutput();
+    applyReplayGainSettings();
 }
 
 void PlayerBackend::setReplayGainPreampDb(qreal db) {
@@ -202,55 +313,70 @@ void PlayerBackend::setReplayGainPreampDb(qreal db) {
     if (db >  15.0) db =  15.0;
     if (qFuzzyCompare(m_rgPreampDb + 100.0, db + 100.0)) return;
     m_rgPreampDb = db;
-    applyReplayGainToOutput();
+    applyReplayGainSettings();
 }
 
 void PlayerBackend::setReplayGainClipProtect(bool enabled) {
     if (m_rgClipProtect == enabled) return;
     m_rgClipProtect = enabled;
-    applyReplayGainToOutput();
+    applyReplayGainSettings();
 }
 
-void PlayerBackend::applyReplayGainToOutput() {
-    if (!m_audioOutput) return;
+void PlayerBackend::applyReplayGainSettings() {
+    if (!m_mpv) return;
 
-    double gainDb = 0.0;
-    bool   hasRg  = false;
-    if (m_rgEnabled) {
-        const double preferred = (m_rgMode == RgModeAlbum) ? m_currentTrack.rgAlbumGainDb
-                                                           : m_currentTrack.rgTrackGainDb;
-        const double fallback  = (m_rgMode == RgModeAlbum) ? m_currentTrack.rgTrackGainDb
-                                                           : m_currentTrack.rgAlbumGainDb;
-        if (!std::isnan(preferred))      { gainDb = preferred; hasRg = true; }
-        else if (!std::isnan(fallback))  { gainDb = fallback;  hasRg = true; }
+    const char *mode = "no";
+    if (m_rgEnabled) mode = (m_rgMode == RgModeAlbum) ? "album" : "track";
+    mpv_set_property_string(m_mpv, "replaygain", mode);
+
+    double preamp = m_rgPreampDb;
+    mpv_set_property(m_mpv, "replaygain-preamp", MPV_FORMAT_DOUBLE, &preamp);
+
+    mpv_set_property_string(m_mpv, "replaygain-clip", m_rgClipProtect ? "yes" : "no");
+}
+
+qint64 PlayerBackend::position() const {
+    if (!m_mpv) return 0;
+    double t = 0;
+    if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+        return static_cast<qint64>(t * 1000.0);
     }
+    return 0;
+}
 
-    if (hasRg) gainDb += m_rgPreampDb;
-
-    double linear = std::pow(10.0, gainDb / 20.0);
-
-    if (m_rgEnabled && hasRg && m_rgClipProtect) {
-        const double peak = (m_rgMode == RgModeAlbum && !std::isnan(m_currentTrack.rgAlbumPeak))
-                                ? m_currentTrack.rgAlbumPeak
-                                : m_currentTrack.rgTrackPeak;
-        if (!std::isnan(peak) && peak > 0.0) {
-            const double maxLinear = 1.0 / peak;
-            if (linear > maxLinear) linear = maxLinear;
-        }
+void PlayerBackend::setPosition(qint64 ms) {
+    if (!m_mpv) return;
+    if (ms < 0) ms = 0;
+    double t = ms / 1000.0;
+    if (mpv_set_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+        m_lastPositionMs = ms;
+        emit positionChanged();
     }
+}
 
-    if (linear < 0.0) linear = 0.0;
-    if (linear > 1.0) linear = 1.0;
-    m_audioOutput->setVolume(linear);
+void PlayerBackend::play() {
+    if (!m_mpv) return;
+    int p = 0;
+    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
+}
+
+void PlayerBackend::pause() {
+    if (!m_mpv) return;
+    int p = 1;
+    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
+}
+
+void PlayerBackend::stop() {
+    if (!m_mpv) return;
+    const char *cmd[] = {"stop", nullptr};
+    mpv_command(m_mpv, cmd);
 }
 
 void PlayerBackend::togglePlayback() {
-    if (m_player->playbackState() == QMediaPlayer::PlayingState) {
-        m_player->pause();
-        return;
-    }
-    if (m_player->hasAudio()) {
-        m_player->play();
+    if (!m_mpv) return;
+    if (m_hasFile) {
+        int p = m_paused ? 0 : 1;
+        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
         return;
     }
     if (m_queue.count() > 0) playFromQueue(0);
@@ -259,8 +385,7 @@ void PlayerBackend::togglePlayback() {
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
     QList<Track> out;
     QString sql = QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no, "
-        "rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak FROM tracks");
+        "SELECT path, title, artist, album, duration, tech_info, track_no FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
     if (!orderBy.isEmpty()) sql += QStringLiteral(" ORDER BY ") + orderBy;
     else                    sql += QStringLiteral(" ORDER BY id");
@@ -277,10 +402,6 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
         t.duration = q.value(4).toInt();
         t.techInfo = q.value(5).toString();
         t.trackNo  = q.value(6).toInt();
-        t.rgTrackGainDb = q.value(7).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(7).toDouble();
-        t.rgAlbumGainDb = q.value(8).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(8).toDouble();
-        t.rgTrackPeak   = q.value(9).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(9).toDouble();
-        t.rgAlbumPeak   = q.value(10).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(10).toDouble();
         out.append(t);
     }
     return out;
@@ -395,10 +516,13 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_currentTechInfo  = t.techInfo;
     m_currentCoverPath.clear();
 
-    applyReplayGainToOutput();
-
-    m_player->setSource(QUrl::fromLocalFile(t.path));
-    m_player->play();
+    if (m_mpv) {
+        int p = 0;
+        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
+        const QByteArray path = t.path.toUtf8();
+        const char *cmd[] = {"loadfile", path.constData(), nullptr};
+        mpv_command(m_mpv, cmd);
+    }
 
     m_queueModel->notifyCurrentChanged();
     emit currentIndexChanged();
@@ -578,8 +702,7 @@ int PlayerBackend::getRowForPath(const QString &path) {
 void PlayerBackend::addPlayNext(const QString &path) {
     QSqlQuery q;
     q.prepare(QStringLiteral(
-        "SELECT title, artist, album, duration, tech_info, track_no, "
-        "rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak "
+        "SELECT title, artist, album, duration, tech_info, track_no "
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
 
@@ -592,10 +715,6 @@ void PlayerBackend::addPlayNext(const QString &path) {
     t.duration = q.value(3).toInt();
     t.techInfo = q.value(4).toString();
     t.trackNo  = q.value(5).toInt();
-    t.rgTrackGainDb = q.value(6).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(6).toDouble();
-    t.rgAlbumGainDb = q.value(7).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(7).toDouble();
-    t.rgTrackPeak   = q.value(8).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(8).toDouble();
-    t.rgAlbumPeak   = q.value(9).isNull() ? std::numeric_limits<double>::quiet_NaN() : q.value(9).toDouble();
     m_queueModel->insertTrack(t);
 }
 
@@ -651,8 +770,10 @@ void PlayerBackend::refreshAllModels() {
 }
 
 void PlayerBackend::resetPlaybackState() {
-    m_player->stop();
-    m_player->setSource(QUrl());
+    if (m_mpv) {
+        const char *cmd[] = {"stop", nullptr};
+        mpv_command(m_mpv, cmd);
+    }
     m_currentTrack = Track();
     m_currentPath.clear();
     m_currentTitle    = kDefaultTitle;
@@ -661,7 +782,6 @@ void PlayerBackend::resetPlaybackState() {
     m_currentTechInfo.clear();
     m_currentCoverPath.clear();
     m_currentIndex    = -1;
-    applyReplayGainToOutput();
     emit metadataChanged();
     emit currentIndexChanged();
 }

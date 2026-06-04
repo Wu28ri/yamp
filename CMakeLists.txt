@@ -10,8 +10,9 @@ set(QT_QML_GENERATE_QMLLS_INI ON)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(TAGLIB REQUIRED IMPORTED_TARGET taglib)
 pkg_check_modules(LIBPULSE REQUIRED IMPORTED_TARGET libpulse)
+pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Multimedia Sql DBus Network)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Sql DBus Network)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -78,12 +79,12 @@ set_target_properties(appyamp PROPERTIES
 target_link_libraries(appyamp
     PRIVATE
         Qt6::Quick
-        Qt6::Multimedia
         Qt6::Sql
         Qt6::DBus
         Qt6::Network
         PkgConfig::TAGLIB
         PkgConfig::LIBPULSE
+        PkgConfig::MPV
 )
 
 include(GNUInstallDirs)

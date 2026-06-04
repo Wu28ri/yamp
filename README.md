@@ -38,7 +38,7 @@ A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and 
 
 - **Fast media scanning** — SQLite-backed library handles thousands of tracks instantly.
 - **MPRIS support** — full integration with system media controllers and lock screens.
-- **Modern stack** — built on Qt 6.8+, QtMultimedia and TagLib.
+- **Modern stack** — built on Qt 6.8+, libmpv and TagLib.
 - **Replay Gain** — full support of replay gain via tags.
 - **Last.fm integration** — built-in support for scrobbling played tracks.
 
@@ -55,7 +55,7 @@ yay -S yamp-git
 ### From source — `makepkg`
 
 ```bash
-sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative qt6-multimedia taglib
+sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative mpv taglib
 git clone https://github.com/Wu28ri/yamp.git
 cd yamp
 makepkg -si

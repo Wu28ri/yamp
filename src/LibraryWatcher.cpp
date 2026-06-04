@@ -14,8 +14,6 @@
 #include <QUuid>
 #include <QVariant>
 
-#include <cmath>
-
 namespace {
 
 constexpr int kDebounceMs = 350;
@@ -27,9 +25,8 @@ int insertTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
     insertTrack.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO tracks "
         "(title, artist, album, path, duration, search_text, track_no, tech_info, "
-        " file_size, album_artist, "
-        " rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        " file_size, album_artist) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
     QSqlQuery upsertArtist(db);
     upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
@@ -56,10 +53,6 @@ int insertTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
         insertTrack.bindValue(7, t.techInfo);
         insertTrack.bindValue(8, fileSize);
         insertTrack.bindValue(9, t.albumArtist);
-        insertTrack.bindValue(10, std::isnan(t.rgTrackGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackGainDb));
-        insertTrack.bindValue(11, std::isnan(t.rgAlbumGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumGainDb));
-        insertTrack.bindValue(12, std::isnan(t.rgTrackPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackPeak));
-        insertTrack.bindValue(13, std::isnan(t.rgAlbumPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumPeak));
         if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
             MusicLibrary::linkTrackToArtistsPrepared(
                 insertTrack.lastInsertId().toLongLong(),

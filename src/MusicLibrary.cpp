@@ -13,9 +13,6 @@
 #include <QUuid>
 #include <QVariant>
 
-#include <cmath>
-#include <limits>
-
 #include <taglib/aiffproperties.h>
 #include <taglib/apeproperties.h>
 #include <taglib/asfproperties.h>
@@ -60,42 +57,6 @@ QString fallbackFormatLabel(const QString &filePath) {
     return {};
 }
 
-double parseReplayGainDb(const QString &raw) {
-    if (raw.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
-    QString s = raw.trimmed();
-    static const QRegularExpression dbSuffix(
-        QStringLiteral(R"(\s*dB\s*$)"),
-        QRegularExpression::CaseInsensitiveOption);
-    s.remove(dbSuffix);
-    s.replace(QLatin1Char(','), QLatin1Char('.'));
-    s = s.trimmed();
-    if (s.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
-    bool ok = false;
-    const double v = s.toDouble(&ok);
-    return ok ? v : std::numeric_limits<double>::quiet_NaN();
-}
-
-double parseReplayGainPeak(const QString &raw) {
-    if (raw.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
-    QString s = raw.trimmed();
-    s.replace(QLatin1Char(','), QLatin1Char('.'));
-    bool ok = false;
-    const double v = s.toDouble(&ok);
-    return ok ? v : std::numeric_limits<double>::quiet_NaN();
-}
-
-QString pickPropertyCI(const TagLib::PropertyMap &props, std::initializer_list<const char*> keys) {
-    for (const char *k : keys) {
-        for (auto it = props.begin(); it != props.end(); ++it) {
-            const QString keyStr = QString::fromStdString(it->first.to8Bit(true));
-            if (keyStr.compare(QLatin1String(k), Qt::CaseInsensitive) == 0 && !it->second.isEmpty()) {
-                return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
-            }
-        }
-    }
-    return {};
-}
-
 }
 
 namespace MusicLibrary {
@@ -130,9 +91,7 @@ bool initialize() {
             "path TEXT UNIQUE, duration INTEGER, "
             "search_text TEXT, track_no INTEGER, "
             "tech_info TEXT, file_size INTEGER DEFAULT 0, "
-            "album_artist TEXT, "
-            "rg_track_gain REAL, rg_album_gain REAL, "
-            "rg_track_peak REAL, rg_album_peak REAL)"))) {
+            "album_artist TEXT)"))) {
         return false;
     }
 
@@ -270,11 +229,6 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
     int duration = 0;
     int trackNo  = 0;
 
-    double rgTrackGain = std::numeric_limits<double>::quiet_NaN();
-    double rgAlbumGain = std::numeric_limits<double>::quiet_NaN();
-    double rgTrackPeak = std::numeric_limits<double>::quiet_NaN();
-    double rgAlbumPeak = std::numeric_limits<double>::quiet_NaN();
-
     if (!f.isNull()) {
         if (auto *tag = f.tag()) {
             const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
@@ -295,15 +249,6 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
             albumArtistTag = pickProp("ALBUMARTIST");
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
             if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
-
-            rgTrackGain = parseReplayGainDb(
-                pickPropertyCI(props, {"REPLAYGAIN_TRACK_GAIN"}));
-            rgAlbumGain = parseReplayGainDb(
-                pickPropertyCI(props, {"REPLAYGAIN_ALBUM_GAIN"}));
-            rgTrackPeak = parseReplayGainPeak(
-                pickPropertyCI(props, {"REPLAYGAIN_TRACK_PEAK"}));
-            rgAlbumPeak = parseReplayGainPeak(
-                pickPropertyCI(props, {"REPLAYGAIN_ALBUM_PEAK"}));
         }
         if (auto *audio = f.audioProperties()) {
             duration = audio->lengthInSeconds();
@@ -350,10 +295,6 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
     t.duration    = duration;
     t.techInfo    = techInfo;
     t.trackNo     = trackNo;
-    t.rgTrackGainDb = rgTrackGain;
-    t.rgAlbumGainDb = rgAlbumGain;
-    t.rgTrackPeak   = rgTrackPeak;
-    t.rgAlbumPeak   = rgAlbumPeak;
     return true;
 }
 
@@ -415,9 +356,8 @@ void LibraryScanner::run() {
         insertTrack.prepare(QStringLiteral(
             "INSERT OR IGNORE INTO tracks "
             "(title, artist, album, path, duration, search_text, track_no, tech_info, "
-            " file_size, album_artist, "
-            " rg_track_gain, rg_album_gain, rg_track_peak, rg_album_peak) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+            " file_size, album_artist) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
 
         QSqlQuery upsertArtist(db);
         upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
@@ -454,10 +394,6 @@ void LibraryScanner::run() {
             insertTrack.bindValue(7, t.techInfo);
             insertTrack.bindValue(8, fileSize);
             insertTrack.bindValue(9, t.albumArtist);
-            insertTrack.bindValue(10, std::isnan(t.rgTrackGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackGainDb));
-            insertTrack.bindValue(11, std::isnan(t.rgAlbumGainDb) ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumGainDb));
-            insertTrack.bindValue(12, std::isnan(t.rgTrackPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgTrackPeak));
-            insertTrack.bindValue(13, std::isnan(t.rgAlbumPeak)   ? QVariant(QMetaType(QMetaType::Double)) : QVariant(t.rgAlbumPeak));
 
             if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
                 MusicLibrary::linkTrackToArtistsPrepared(

@@ -19,8 +19,9 @@
 #include <QUrl>
 #include <QVariantMap>
 
-#include <QtMultimedia/QAudioOutput>
-#include <QtMultimedia/QMediaPlayer>
+struct mpv_handle;
+struct mpv_event_property;
+struct mpv_event_end_file;
 
 class ScanSession;
 
@@ -72,9 +73,9 @@ public:
     bool   isMuted()  const { return m_paVolume->isMuted(); }
     qreal  volume()   const { return m_paVolume->volume();  }
     bool   shuffle()  const { return m_queue.isShuffle();      }
-    bool   isPlaying() const { return m_player->playbackState() == QMediaPlayer::PlayingState; }
-    qint64 position() const { return m_player->position(); }
-    qint64 duration() const { return m_player->duration(); }
+    bool   isPlaying() const { return m_hasFile && !m_paused; }
+    qint64 position() const;
+    qint64 duration() const { return m_durationMs; }
 
     int currentIndex()         const { return m_currentIndex; }
     int currentQueuePosition() const { return m_queue.currentPosition(); }
@@ -91,7 +92,7 @@ public:
     void setMuted(bool muted);
     void setVolume(qreal v);
     void setShuffle(bool enabled);
-    void setPosition(qint64 ms) { m_player->setPosition(ms); }
+    void setPosition(qint64 ms);
 
     void setReplayGainEnabled(bool enabled);
     void setReplayGainMode(int mode);
@@ -99,6 +100,9 @@ public:
     void setReplayGainClipProtect(bool enabled);
 
     Q_INVOKABLE void togglePlayback();
+    Q_INVOKABLE void play();
+    Q_INVOKABLE void pause();
+    Q_INVOKABLE void stop();
     Q_INVOKABLE void scanFolder(const QUrl &folderUrl);
     Q_INVOKABLE void playMusic(const QString &filePath);
     Q_INVOKABLE void playFromQueue(int position);
@@ -149,10 +153,21 @@ private:
     static bool writeCoverAtomic(const QString &targetPath, const QByteArray &data);
     static void pruneCoverCache(int keepCount);
     void setupMpris();
-    void applyReplayGainToOutput();
+    void applyReplayGainSettings();
+    void initMpv();
+    void shutdownMpv();
+    static void mpvWakeupCallback(void *ctx);
+    Q_INVOKABLE void processMpvEvents();
+    void handleMpvPropertyChange(mpv_event_property *prop);
+    void handleMpvEndFile(mpv_event_end_file *ev);
 
-    QMediaPlayer       *m_player      = nullptr;
-    QAudioOutput       *m_audioOutput = nullptr;
+    mpv_handle *m_mpv = nullptr;
+    QTimer     *m_positionPollTimer = nullptr;
+    bool        m_paused    = true;
+    bool        m_hasFile   = false;
+    qint64      m_lastPositionMs = -1;
+    qint64      m_durationMs     = 0;
+
     PaVolumeController *m_paVolume    = nullptr;
     TrackModel         *m_trackModel  = nullptr;
     AlbumModel     *m_albumModel    = nullptr;
