@@ -91,6 +91,42 @@ Rectangle {
             model: playerBackend.queueModel
 
             property bool ignoreNextScroll: false
+            property Item draggedDelegate: null
+
+            FrameAnimation {
+                id: autoScrollAnim
+                running: queueList.draggedDelegate !== null
+
+                readonly property real edgeSize: 56
+                readonly property real maxSpeedPxPerSec: 900
+
+                onTriggered: {
+                    const dragged = queueList.draggedDelegate
+                    if (!dragged)
+                        return
+                    const draggedItem = dragged.contentItemRef
+                    if (!draggedItem)
+                        return
+                    // frameTime — длительность предыдущего кадра в секундах;
+                    // клампим на случай зависшего кадра, чтобы не было гигантского скачка
+                    const dt = Math.min(frameTime, 0.05)
+                    const centerInList = draggedItem.mapToItem(queueList, draggedItem.width / 2, draggedItem.height / 2)
+                    const y = centerInList.y
+                    const h = queueList.height
+                    const maxScroll = Math.max(0, queueList.contentHeight - h)
+                    let factor = 0
+                    if (y < edgeSize && queueList.contentY > 0) {
+                        factor = -(1 - Math.max(0, y) / edgeSize)
+                    } else if (y > h - edgeSize && queueList.contentY < maxScroll) {
+                        factor = (1 - Math.max(0, h - y) / edgeSize)
+                    }
+                    if (factor !== 0) {
+                        const delta = factor * maxSpeedPxPerSec * dt
+                        queueList.contentY = Math.max(0, Math.min(maxScroll, queueList.contentY + delta))
+                        dragged.checkSwap()
+                    }
+                }
+            }
 
             Connections {
                 target: playerBackend
@@ -119,6 +155,29 @@ Rectangle {
                 required property string artist
                 required property string path
 
+                property Item contentItemRef: contentItem
+                property bool isDragging: mouseArea.drag.active
+
+                onIsDraggingChanged: {
+                    if (isDragging) {
+                        queueList.draggedDelegate = delegateRoot
+                    } else if (queueList.draggedDelegate === delegateRoot) {
+                        queueList.draggedDelegate = null
+                    }
+                }
+
+                function checkSwap() {
+                    if (!mouseArea.drag.active || mouseArea._moving)
+                        return
+                    const mappedY = contentItem.mapToItem(queueList.contentItem, 0, contentItem.height / 2).y
+                    const targetIndex = queueList.indexAt(queueList.width / 2, mappedY)
+                    if (targetIndex !== -1 && targetIndex !== delegateRoot.index) {
+                        mouseArea._moving = true
+                        playerBackend.queueModel.move(delegateRoot.index, targetIndex)
+                        Qt.callLater(() => mouseArea._moving = false)
+                    }
+                }
+
                 MouseArea {
                     id: mouseArea
                     anchors.fill: parent
@@ -134,13 +193,7 @@ Rectangle {
                     onPositionChanged: {
                         if (drag.active) {
                             wasDragged = true
-                            const mappedY = contentItem.mapToItem(queueList.contentItem, 0, contentItem.height / 2).y
-                            const targetIndex = queueList.indexAt(0, mappedY)
-                            if (targetIndex !== -1 && targetIndex !== delegateRoot.index && !_moving) {
-                                _moving = true
-                                playerBackend.queueModel.move(delegateRoot.index, targetIndex)
-                                Qt.callLater(() => mouseArea._moving = false)
-                            }
+                            delegateRoot.checkSwap()
                         }
                     }
                     onReleased: {
@@ -148,6 +201,8 @@ Rectangle {
                             contentItem.Drag.drop()
                             contentItem.y = 0
                         }
+                        if (queueList.draggedDelegate === delegateRoot)
+                            queueList.draggedDelegate = null
                     }
                     onClicked: {
                         if (!wasDragged) {

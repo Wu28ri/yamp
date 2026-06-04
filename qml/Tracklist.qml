@@ -52,23 +52,28 @@ ListView {
             if (realIdx < 0) return
             playerBackend.trackModel.ensureFetchedTo(realIdx)
             listView.pendingScrollIdx = realIdx
-            scrollApply.attempts = 0
-            scrollApply.restart()
+            scrollApply.running = false
+            scrollApply.running = true
         }
     }
 
-    Timer {
+    FrameAnimation {
         id: scrollApply
-        interval: 16
-        repeat: true
-        property int attempts: 0
+        running: false
+        property real elapsed: 0
+        readonly property real timeoutSec: 0.5
+
+        onRunningChanged: if (running) elapsed = 0
+
         onTriggered: {
             const idx = listView.pendingScrollIdx
-            if (idx < 0) { stop(); return }
+            if (idx < 0) { running = false; return }
+
+            elapsed += frameTime
 
             if (idx >= listView.count) {
                 playerBackend.trackModel.ensureFetchedTo(idx)
-                if (++attempts > 30) { stop(); listView.pendingScrollIdx = -1 }
+                if (elapsed > timeoutSec) { running = false; listView.pendingScrollIdx = -1 }
                 return
             }
 
@@ -78,9 +83,9 @@ ListView {
 
             const hit = listView.indexAt(listView.width / 2,
                                          listView.contentY + listView.height / 2)
-            if (hit === idx || ++attempts > 30) {
+            if (hit === idx || elapsed > timeoutSec) {
                 listView.pendingScrollIdx = -1
-                stop()
+                running = false
             }
         }
     }
