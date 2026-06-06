@@ -144,7 +144,7 @@ void LastFmScrobbler::startAuth() {
         authUrl.setQuery(q);
         QDesktopServices::openUrl(authUrl);
         setStatus(QStringLiteral("Waiting for browser authorization..."));
-        m_authPollsLeft = 120; // ~5 minutes at 2.5s
+        m_authPollsLeft = 120;
         m_authPollTimer->start();
     });
 }
@@ -177,7 +177,7 @@ void LastFmScrobbler::pollAuthSession() {
         const QJsonObject obj = doc.object();
         if (obj.contains(QStringLiteral("error"))) {
             const int err = obj.value(QStringLiteral("error")).toInt();
-            if (err == 14) return; // not yet authorized — keep polling
+            if (err == 14) return;
             m_authPollTimer->stop();
             setPendingToken(QString());
             const QString msg = obj.value(QStringLiteral("message")).toString(
@@ -185,12 +185,12 @@ void LastFmScrobbler::pollAuthSession() {
             setStatus(QStringLiteral("Auth failed: %1").arg(msg));
             return;
         }
-        if (reply->error() != QNetworkReply::NoError) return; // network blip, retry
+        if (reply->error() != QNetworkReply::NoError) return;
 
         const QJsonObject session = obj.value(QStringLiteral("session")).toObject();
         const QString key  = session.value(QStringLiteral("key")).toString();
         const QString name = session.value(QStringLiteral("name")).toString();
-        if (key.isEmpty()) return; // unexpected, keep trying
+        if (key.isEmpty()) return;
 
         m_authPollTimer->stop();
         m_sessionKey = key;

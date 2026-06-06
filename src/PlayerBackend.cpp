@@ -297,7 +297,7 @@ void PlayerBackend::setMuted(bool muted) {
         emit mutedChanged();
         return;
     }
-    if (m_bitPerfectEnabled) return; // hardware locked, no-op
+    if (m_bitPerfectEnabled) return;
     m_paVolume->setMuted(muted);
 }
 
@@ -311,7 +311,7 @@ void PlayerBackend::setVolume(qreal v) {
         emit volumeChanged();
         return;
     }
-    if (m_bitPerfectEnabled) return; // hardware locked, no-op
+    if (m_bitPerfectEnabled) return;
     m_paVolume->setVolume(v);
 }
 
@@ -354,7 +354,6 @@ void PlayerBackend::setSoftwareVolume(bool enabled) {
     if (m_softwareVolume == enabled) return;
     m_softwareVolume = enabled;
     if (enabled && m_paVolume && !m_bitPerfectEnabled) {
-        // mirror PA state into the cached SW value so the slider doesn't jump
         m_swVolume = m_paVolume->volume();
         m_swMuted  = m_paVolume->isMuted();
     }
@@ -385,7 +384,7 @@ void PlayerBackend::applyMpvVolume() {
 QVariantList PlayerBackend::listHardwareDevices() {
     QVariantList out;
 
-    QHash<int, QPair<QString, QString>> cards; // n -> {short_id, descriptive_name}
+    QHash<int, QPair<QString, QString>> cards;
     {
         QFile f(QStringLiteral("/proc/asound/cards"));
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
@@ -398,7 +397,6 @@ QVariantList PlayerBackend::listHardwareDevices() {
             const int n = m.captured(1).toInt();
             const QString shortId = m.captured(2).trimmed();
             QString descriptive = m.captured(3).trimmed();
-            // Strip leading driver prefix like "USB-Audio - " or "HDA-Intel - "
             const int dashIdx = descriptive.indexOf(QStringLiteral(" - "));
             if (dashIdx > 0 && dashIdx < 24) {
                 descriptive = descriptive.mid(dashIdx + 3).trimmed();
@@ -412,7 +410,6 @@ QVariantList PlayerBackend::listHardwareDevices() {
     if (!pcm.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
     const QStringList pcmLines = QString::fromUtf8(pcm.readAll()).split(QLatin1Char('\n'));
 
-    // First pass: count playback devices per card.
     QHash<int, int> playbackCount;
     struct Entry { int card; int dev; QString pcmName; };
     QList<Entry> entries;
@@ -474,8 +471,7 @@ QVariantList PlayerBackend::listHardwareDevices() {
 bool PlayerBackend::lockDeviceToZeroDb() {
     if (!m_audioDevice.startsWith(QStringLiteral("alsa/hw:CARD="))) return false;
 
-    // extract card id from "alsa/hw:CARD=<id>,DEV=<n>"
-    const QString tail = m_audioDevice.mid(QStringLiteral("alsa/hw:").size()); // "CARD=Pro,DEV=0"
+    const QString tail = m_audioDevice.mid(QStringLiteral("alsa/hw:").size());
     QString cardId;
     for (const QString &part : tail.split(QLatin1Char(','))) {
         if (part.startsWith(QStringLiteral("CARD="))) {

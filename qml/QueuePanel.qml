@@ -107,8 +107,6 @@ Rectangle {
                     const draggedItem = dragged.contentItemRef
                     if (!draggedItem)
                         return
-                    // frameTime — длительность предыдущего кадра в секундах;
-                    // клампим на случай зависшего кадра, чтобы не было гигантского скачка
                     const dt = Math.min(frameTime, 0.05)
                     const centerInList = draggedItem.mapToItem(queueList, draggedItem.width / 2, draggedItem.height / 2)
                     const y = centerInList.y
