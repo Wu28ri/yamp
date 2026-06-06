@@ -60,7 +60,8 @@ class MprisPlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(QString     PlaybackStatus READ playbackStatus NOTIFY statusChanged)
     Q_PROPERTY(QVariantMap Metadata       READ metadata       NOTIFY metadataChanged)
     Q_PROPERTY(qlonglong   Position       READ position       NOTIFY positionChanged)
-    Q_PROPERTY(double      Volume         READ volume         WRITE setVolume NOTIFY volumeChanged)
+    Q_PROPERTY(double      Volume         READ volume         WRITE setVolume  NOTIFY volumeChanged)
+    Q_PROPERTY(bool        Shuffle        READ shuffle        WRITE setShuffle NOTIFY shuffleChanged)
     Q_PROPERTY(double      Rate           READ rate           CONSTANT)
     Q_PROPERTY(double      MinimumRate    READ minimumRate    CONSTANT)
     Q_PROPERTY(double      MaximumRate    READ maximumRate    CONSTANT)
@@ -78,12 +79,14 @@ public:
     QVariantMap metadata()       const;
     qlonglong   position()       const;
     double      volume()         const;
+    bool        shuffle()        const;
     double      rate()           const { return 1.0; }
     double      minimumRate()    const { return 1.0; }
     double      maximumRate()    const { return 1.0; }
     bool        canControl()     const { return true; }
 
     void setVolume(double v);
+    void setShuffle(bool s);
 
 public slots:
     void Next()      { emit nextRequested(); }
@@ -108,6 +111,7 @@ signals:
     void metadataChanged();
     void positionChanged();
     void volumeChanged();
+    void shuffleChanged();
 
 private:
     void emitProperties(const QVariantMap &props);

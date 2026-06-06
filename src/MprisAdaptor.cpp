@@ -36,6 +36,10 @@ MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
     connect(m_backend, &PlayerBackend::volumeChanged, this, [this]() {
         emitProperties({{QStringLiteral("Volume"), volume()}});
     });
+
+    connect(m_backend, &PlayerBackend::shuffleChanged, this, [this]() {
+        emitProperties({{QStringLiteral("Shuffle"), shuffle()}});
+    });
 }
 
 void MprisPlayerAdaptor::scheduleMetadataPush() {
@@ -112,6 +116,12 @@ double MprisPlayerAdaptor::volume() const { return m_backend->volume(); }
 
 void MprisPlayerAdaptor::setVolume(double v) {
     m_backend->setVolume(qBound(0.0, v, 1.0));
+}
+
+bool MprisPlayerAdaptor::shuffle() const { return m_backend->shuffle(); }
+
+void MprisPlayerAdaptor::setShuffle(bool s) {
+    m_backend->setShuffle(s);
 }
 
 void MprisPlayerAdaptor::Seek(qlonglong offsetUs) {

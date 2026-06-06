@@ -7,6 +7,17 @@ Rectangle {
     implicitHeight: 105
     color: sysPalette.mid
 
+    function formatTime(ms) {
+        if (!ms || ms < 0 || isNaN(ms)) return "0:00"
+        const totalSec = Math.floor(ms / 1000)
+        const h = Math.floor(totalSec / 3600)
+        const m = Math.floor((totalSec % 3600) / 60)
+        const s = totalSec % 60
+        const pad = (n) => (n < 10 ? "0" + n : "" + n)
+        if (h > 0) return h + ":" + pad(m) + ":" + pad(s)
+        return m + ":" + pad(s)
+    }
+
     Slider {
         id: progressSlider
         anchors {
@@ -20,6 +31,7 @@ Rectangle {
         to: playerBackend.duration > 0 ? playerBackend.duration : 1
         live: true
         onMoved: playerBackend.position = value
+        hoverEnabled: true
 
         Binding {
             progressSlider.value: playerBackend.position
@@ -48,6 +60,38 @@ Rectangle {
             color: sysPalette.highlight
             visible: progressSlider.hovered || progressSlider.pressed
         }
+    }
+
+    Text {
+        id: positionLabel
+        anchors {
+            left:           parent.left
+            verticalCenter: progressSlider.verticalCenter
+            leftMargin:     10
+        }
+        text: bottomBar.formatTime(progressSlider.pressed ? progressSlider.value : playerBackend.position)
+        color: sysPalette.windowText
+        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.85 : 0.0
+        font.pixelSize: 10
+        font.family: "Monospace"
+        z: 11
+        Behavior on opacity { NumberAnimation { duration: 120 } }
+    }
+
+    Text {
+        id: durationLabel
+        anchors {
+            right:          parent.right
+            verticalCenter: progressSlider.verticalCenter
+            rightMargin:    10
+        }
+        text: bottomBar.formatTime(playerBackend.duration)
+        color: sysPalette.windowText
+        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.85 : 0.0
+        font.pixelSize: 10
+        font.family: "Monospace"
+        z: 11
+        Behavior on opacity { NumberAnimation { duration: 120 } }
     }
 
     RowLayout {
