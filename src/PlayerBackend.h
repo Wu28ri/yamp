@@ -40,6 +40,11 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(qint64  position  READ position  WRITE setPosition NOTIFY positionChanged)
     Q_PROPERTY(qint64  duration  READ duration  NOTIFY durationChanged)
 
+    Q_PROPERTY(bool    bitPerfect           READ bitPerfect           WRITE setBitPerfect    NOTIFY bitPerfectChanged)
+    Q_PROPERTY(QString audioDevice          READ audioDevice          WRITE setAudioDevice   NOTIFY audioDeviceChanged)
+    Q_PROPERTY(bool    softwareVolume       READ softwareVolume       WRITE setSoftwareVolume NOTIFY softwareVolumeChanged)
+    Q_PROPERTY(bool    volumeControllable   READ volumeControllable   NOTIFY volumeControllableChanged)
+
     Q_PROPERTY(int currentIndex         READ currentIndex         NOTIFY currentIndexChanged)
     Q_PROPERTY(int currentQueuePosition READ currentQueuePosition NOTIFY currentQueuePositionChanged)
 
@@ -70,12 +75,17 @@ public:
     QString currentCoverPath() const { return m_currentCoverPath; }
     const Track& currentTrack() const { return m_currentTrack; }
 
-    bool   isMuted()  const { return m_paVolume->isMuted(); }
-    qreal  volume()   const { return m_paVolume->volume();  }
+    bool   isMuted()  const;
+    qreal  volume()   const;
     bool   shuffle()  const { return m_queue.isShuffle();      }
     bool   isPlaying() const { return m_hasFile && !m_paused; }
     qint64 position() const;
     qint64 duration() const { return m_durationMs; }
+
+    QString audioDevice()          const { return m_audioDevice; }
+    bool    softwareVolume()       const { return m_softwareVolume; }
+    bool    bitPerfect()           const { return m_bitPerfectEnabled; }
+    bool    volumeControllable()   const { return !m_bitPerfectEnabled || m_softwareVolume; }
 
     int currentIndex()         const { return m_currentIndex; }
     int currentQueuePosition() const { return m_queue.currentPosition(); }
@@ -93,6 +103,10 @@ public:
     void setVolume(qreal v);
     void setShuffle(bool enabled);
     void setPosition(qint64 ms);
+
+    void setAudioDevice(const QString &device);
+    void setSoftwareVolume(bool enabled);
+    void setBitPerfect(bool enabled);
 
     void setReplayGainEnabled(bool enabled);
     void setReplayGainMode(int mode);
@@ -118,6 +132,8 @@ public:
     Q_INVOKABLE void addPlayNext(const QString &path);
     Q_INVOKABLE void openInFileManager(const QString &path);
     Q_INVOKABLE QVariantMap trackContextForPath(const QString &path);
+    Q_INVOKABLE QVariantList listHardwareDevices();
+    Q_INVOKABLE bool         lockDeviceToZeroDb();
 
     void clearLibrary();
     void removeFolder(const QString &folder);
@@ -134,6 +150,10 @@ signals:
     void currentIndexChanged();
     void currentQueuePositionChanged();
     void scanProgressChanged();
+    void audioDeviceChanged();
+    void softwareVolumeChanged();
+    void volumeControllableChanged();
+    void bitPerfectChanged();
 
 private:
     void initDatabase();
@@ -145,7 +165,6 @@ private:
     void resetPlaybackState();
     void recomputeScanTotals();
     void applyFilter();
-    void skipBrokenTrack();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
     static QString coverCacheDir();
@@ -154,6 +173,8 @@ private:
     static void pruneCoverCache(int keepCount);
     void setupMpris();
     void applyReplayGainSettings();
+    void applyAudioDeviceToMpv();
+    void applyMpvVolume();
     void initMpv();
     void shutdownMpv();
     static void mpvWakeupCallback(void *ctx);
@@ -187,7 +208,6 @@ private:
     QString m_searchFilter;
     int     m_currentIndex = -1;
     quint64 m_coverGen     = 0;
-    int     m_consecutiveInvalid = 0;
     int           m_sortColumn = -1;
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
@@ -200,6 +220,11 @@ private:
     int     m_rgMode         = RgModeTrack;
     qreal   m_rgPreampDb     = 0.0;
     bool    m_rgClipProtect  = true;
+    QString m_audioDevice    = QStringLiteral("auto");
+    bool    m_bitPerfectEnabled = false;
+    bool    m_softwareVolume = false;
+    qreal   m_swVolume       = 1.0;
+    bool    m_swMuted        = false;
     Track   m_currentTrack;
 };
 

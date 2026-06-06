@@ -94,6 +94,28 @@ void Settings::setCoverScaledBudgetMb(int mb) {
     emit coverScaledBudgetMbChanged();
 }
 
+void Settings::setAudioDevice(const QString &device) {
+    const QString normalized = device.isEmpty() ? QStringLiteral("auto") : device;
+    if (m_audioDevice == normalized) return;
+    m_audioDevice = normalized;
+    m_settings.setValue("audioDevice", normalized);
+    emit audioDeviceChanged();
+}
+
+void Settings::setAudioBitPerfect(bool enabled) {
+    if (m_audioBitPerfect == enabled) return;
+    m_audioBitPerfect = enabled;
+    m_settings.setValue("audioBitPerfect", enabled);
+    emit audioBitPerfectChanged();
+}
+
+void Settings::setAudioSoftwareVolume(bool enabled) {
+    if (m_audioSoftwareVolume == enabled) return;
+    m_audioSoftwareVolume = enabled;
+    m_settings.setValue("audioSoftwareVolume", enabled);
+    emit audioSoftwareVolumeChanged();
+}
+
 void Settings::setReplayGainEnabled(bool enabled) {
     if (m_rgEnabled == enabled) return;
     m_rgEnabled = enabled;
@@ -156,6 +178,10 @@ void Settings::loadSettings() {
     m_coverMaxEdge        = m_settings.value("coverMaxEdge",        384).toInt();
     m_coverSourceBudgetMb = m_settings.value("coverSourceBudgetMb", 48).toInt();
     m_coverScaledBudgetMb = m_settings.value("coverScaledBudgetMb", 16).toInt();
+    m_audioBitPerfect     = m_settings.value("audioBitPerfect",     false).toBool();
+    m_audioDevice         = m_settings.value("audioDevice",         QStringLiteral("auto")).toString();
+    if (m_audioDevice.isEmpty()) m_audioDevice = QStringLiteral("auto");
+    m_audioSoftwareVolume = m_settings.value("audioSoftwareVolume", false).toBool();
     m_rgEnabled           = m_settings.value("replayGainEnabled",     false).toBool();
     m_rgMode              = m_settings.value("replayGainMode",        RgModeTrack).toInt();
     if (m_rgMode != RgModeTrack && m_rgMode != RgModeAlbum) m_rgMode = RgModeTrack;

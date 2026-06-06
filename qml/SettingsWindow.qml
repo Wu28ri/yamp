@@ -32,6 +32,9 @@ Window {
                 text: "General"
             }
             TabButton {
+                text: "Audio"
+            }
+            TabButton {
                 text: "Library"
             }
             TabButton {
@@ -150,6 +153,139 @@ Window {
                         text: "Prevent clipping (use peak tags to cap gain)"
                         checked: appSettings.replayGainClipProtect
                         onToggled: appSettings.replayGainClipProtect = checked
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
+            ColumnLayout {
+                id: audioTab
+                spacing: 18
+
+                Label {
+                    text: "Audio Output"
+                    font.pixelSize: 16
+                    font.bold: true
+                    color: sysPalette.text
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Label {
+                        text: "Bit-perfect output (ALSA)"
+                        color: sysPalette.text
+                        Layout.fillWidth: true
+                    }
+
+                    Switch {
+                        id: bitPerfectSwitch
+                        checked: appSettings.audioBitPerfect
+                        onToggled: appSettings.audioBitPerfect = checked
+                    }
+                }
+
+                ColumnLayout {
+                    id: bitPerfectBlock
+                    Layout.fillWidth: true
+                    spacing: 12
+                    visible: bitPerfectSwitch.checked
+                    enabled: bitPerfectSwitch.checked
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        Label {
+                            text: "Hardware device"
+                            color: sysPalette.text
+                            Layout.preferredWidth: 180
+                        }
+
+                        ComboBox {
+                            id: deviceBox
+                            Layout.fillWidth: true
+                            textRole: "description"
+                            valueRole: "name"
+
+                            property var deviceList: []
+
+                            function refresh() {
+                                const list = playerBackend.listHardwareDevices()
+                                deviceList = list
+                                model = list
+                                const cur = appSettings.audioDevice
+                                let idx = -1
+                                for (let i = 0; i < list.length; ++i) {
+                                    if (list[i].name === cur) { idx = i; break }
+                                }
+                                if (idx < 0 && list.length > 0) {
+                                    idx = 0
+                                    appSettings.audioDevice = list[0].name
+                                }
+                                currentIndex = idx
+                            }
+
+                            Component.onCompleted: refresh()
+                            onVisibleChanged: if (visible) refresh()
+                            onActivated: {
+                                if (currentIndex >= 0 && currentIndex < deviceList.length) {
+                                    appSettings.audioDevice = deviceList[currentIndex].name
+                                }
+                            }
+                        }
+
+                        ToolButton {
+                            icon.name: "view-refresh"
+                            ToolTip.visible: hovered
+                            ToolTip.text: "Re-scan ALSA devices"
+                            onClicked: deviceBox.refresh()
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        CheckBox {
+                            id: swVolumeBox
+                            text: "Software volume"
+                            checked: appSettings.audioSoftwareVolume
+                            onToggled: appSettings.audioSoftwareVolume = checked
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        Button {
+                            text: "Lock device to 0 dB"
+                            icon.name: "audio-volume-high"
+                            onClicked: {
+                                const ok = playerBackend.lockDeviceToZeroDb()
+                                lockResultLabel.text = ok
+                                    ? "Hardware mixer set to 0 dB."
+                                    : "Could not set hardware mixer — device may have no software-controllable volume."
+                                lockResultLabel.error = !ok
+                                lockResultTimer.restart()
+                            }
+                        }
+                    }
+
+                    Label {
+                        id: lockResultLabel
+                        property bool error: false
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
+                        color: error ? "#d35" : sysPalette.windowText
+                        opacity: text.length > 0 ? 0.85 : 0.0
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                        Timer {
+                            id: lockResultTimer
+                            interval: 4000
+                            onTriggered: lockResultLabel.text = ""
+                        }
                     }
                 }
 

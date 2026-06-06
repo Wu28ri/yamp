@@ -11,6 +11,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
+#include <QRegularExpression>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -24,6 +27,8 @@
 #include <QtDBus/QDBusMessage>
 
 #include <mpv/client.h>
+
+#include <alsa/asoundlib.h>
 
 namespace {
 const QString kDefaultTitle  = QStringLiteral("N/A");
@@ -95,9 +100,9 @@ PlayerBackend::PlayerBackend(QObject *parent)
 
     m_paVolume = new PaVolumeController(this);
     connect(m_paVolume, &PaVolumeController::volumeChanged,
-            this, &PlayerBackend::volumeChanged);
+            this, [this]() { if (!m_softwareVolume) emit volumeChanged(); });
     connect(m_paVolume, &PaVolumeController::mutedChanged,
-            this, &PlayerBackend::mutedChanged);
+            this, [this]() { if (!m_softwareVolume) emit mutedChanged(); });
 
     setupMpris();
 
@@ -153,6 +158,13 @@ void PlayerBackend::initMpv() {
     mpv_set_option_string(m_mpv, "replaygain-preamp",  "0");
     mpv_set_option_string(m_mpv, "replaygain-clip",    "yes");
 
+    if (!m_audioDevice.isEmpty()) {
+        const QString eff = (m_bitPerfectEnabled && m_audioDevice != QStringLiteral("auto"))
+            ? m_audioDevice
+            : QStringLiteral("auto");
+        mpv_set_option_string(m_mpv, "audio-device", eff.toUtf8().constData());
+    }
+
     if (mpv_initialize(m_mpv) < 0) {
         qFatal("[mpv] mpv_initialize failed");
         return;
@@ -190,9 +202,6 @@ void PlayerBackend::processMpvEvents() {
             break;
         case MPV_EVENT_END_FILE:
             handleMpvEndFile(static_cast<mpv_event_end_file*>(e->data));
-            break;
-        case MPV_EVENT_PLAYBACK_RESTART:
-            m_consecutiveInvalid = 0;
             break;
         default:
             break;
@@ -252,7 +261,7 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
         playNext();
         break;
     case MPV_END_FILE_REASON_ERROR:
-        skipBrokenTrack();
+        resetPlaybackState();
         break;
     default:
         break;
@@ -280,11 +289,240 @@ void PlayerBackend::setupMpris() {
 }
 
 void PlayerBackend::setMuted(bool muted) {
+    const bool sw = m_bitPerfectEnabled && m_softwareVolume;
+    if (sw) {
+        if (m_swMuted == muted) return;
+        m_swMuted = muted;
+        applyMpvVolume();
+        emit mutedChanged();
+        return;
+    }
+    if (m_bitPerfectEnabled) return; // hardware locked, no-op
     m_paVolume->setMuted(muted);
 }
 
 void PlayerBackend::setVolume(qreal v) {
+    v = qBound(0.0, v, 1.0);
+    const bool sw = m_bitPerfectEnabled && m_softwareVolume;
+    if (sw) {
+        if (qFuzzyCompare(m_swVolume + 1.0, v + 1.0)) return;
+        m_swVolume = v;
+        applyMpvVolume();
+        emit volumeChanged();
+        return;
+    }
+    if (m_bitPerfectEnabled) return; // hardware locked, no-op
     m_paVolume->setVolume(v);
+}
+
+bool PlayerBackend::isMuted() const {
+    if (m_bitPerfectEnabled) return m_softwareVolume ? m_swMuted : false;
+    if (!m_paVolume) return false;
+    return m_paVolume->isMuted();
+}
+
+qreal PlayerBackend::volume() const {
+    if (m_bitPerfectEnabled) return m_softwareVolume ? m_swVolume : 1.0;
+    if (!m_paVolume) return m_swVolume;
+    return m_paVolume->volume();
+}
+
+void PlayerBackend::setBitPerfect(bool enabled) {
+    if (m_bitPerfectEnabled == enabled) return;
+    m_bitPerfectEnabled = enabled;
+    if (enabled && m_paVolume) {
+        m_swVolume = m_paVolume->volume();
+        m_swMuted  = m_paVolume->isMuted();
+    }
+    applyAudioDeviceToMpv();
+    applyMpvVolume();
+    emit bitPerfectChanged();
+    emit volumeControllableChanged();
+    emit volumeChanged();
+    emit mutedChanged();
+}
+
+void PlayerBackend::setAudioDevice(const QString &device) {
+    const QString normalized = device.isEmpty() ? QStringLiteral("auto") : device;
+    if (m_audioDevice == normalized) return;
+    m_audioDevice = normalized;
+    if (m_bitPerfectEnabled) applyAudioDeviceToMpv();
+    emit audioDeviceChanged();
+}
+
+void PlayerBackend::setSoftwareVolume(bool enabled) {
+    if (m_softwareVolume == enabled) return;
+    m_softwareVolume = enabled;
+    if (enabled && m_paVolume && !m_bitPerfectEnabled) {
+        // mirror PA state into the cached SW value so the slider doesn't jump
+        m_swVolume = m_paVolume->volume();
+        m_swMuted  = m_paVolume->isMuted();
+    }
+    applyMpvVolume();
+    emit softwareVolumeChanged();
+    emit volumeControllableChanged();
+    emit volumeChanged();
+    emit mutedChanged();
+}
+
+void PlayerBackend::applyAudioDeviceToMpv() {
+    if (!m_mpv) return;
+    const QString eff = (m_bitPerfectEnabled && !m_audioDevice.isEmpty() && m_audioDevice != QStringLiteral("auto"))
+        ? m_audioDevice
+        : QStringLiteral("auto");
+    mpv_set_property_string(m_mpv, "audio-device", eff.toUtf8().constData());
+}
+
+void PlayerBackend::applyMpvVolume() {
+    if (!m_mpv) return;
+    const bool sw = m_bitPerfectEnabled && m_softwareVolume;
+    double vol = sw ? (m_swVolume * 100.0) : 100.0;
+    mpv_set_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &vol);
+    int mute = (sw && m_swMuted) ? 1 : 0;
+    mpv_set_property(m_mpv, "mute", MPV_FORMAT_FLAG, &mute);
+}
+
+QVariantList PlayerBackend::listHardwareDevices() {
+    QVariantList out;
+
+    QHash<int, QPair<QString, QString>> cards; // n -> {short_id, descriptive_name}
+    {
+        QFile f(QStringLiteral("/proc/asound/cards"));
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
+        const QString text = QString::fromUtf8(f.readAll());
+        const QStringList lines = text.split(QLatin1Char('\n'));
+        static const QRegularExpression headRe(QStringLiteral(R"(^\s*(\d+)\s+\[([^\]]+)\]:\s*(.*)$)"));
+        for (const QString &line : lines) {
+            const auto m = headRe.match(line);
+            if (!m.hasMatch()) continue;
+            const int n = m.captured(1).toInt();
+            const QString shortId = m.captured(2).trimmed();
+            QString descriptive = m.captured(3).trimmed();
+            // Strip leading driver prefix like "USB-Audio - " or "HDA-Intel - "
+            const int dashIdx = descriptive.indexOf(QStringLiteral(" - "));
+            if (dashIdx > 0 && dashIdx < 24) {
+                descriptive = descriptive.mid(dashIdx + 3).trimmed();
+            }
+            if (descriptive.isEmpty()) descriptive = shortId;
+            cards.insert(n, qMakePair(shortId, descriptive));
+        }
+    }
+
+    QFile pcm(QStringLiteral("/proc/asound/pcm"));
+    if (!pcm.open(QIODevice::ReadOnly | QIODevice::Text)) return out;
+    const QStringList pcmLines = QString::fromUtf8(pcm.readAll()).split(QLatin1Char('\n'));
+
+    // First pass: count playback devices per card.
+    QHash<int, int> playbackCount;
+    struct Entry { int card; int dev; QString pcmName; };
+    QList<Entry> entries;
+
+    for (const QString &raw : pcmLines) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty()) continue;
+
+        const QStringList parts = line.split(QLatin1Char(':'));
+        if (parts.size() < 2) continue;
+
+        const QStringList head = parts.at(0).split(QLatin1Char('-'));
+        if (head.size() != 2) continue;
+        bool okC=false, okD=false;
+        const int card = head.at(0).toInt(&okC);
+        const int dev  = head.at(1).toInt(&okD);
+        if (!okC || !okD) continue;
+
+        bool hasPlayback = false;
+        for (int i = 1; i < parts.size(); ++i) {
+            if (parts.at(i).trimmed().startsWith(QStringLiteral("playback"))) {
+                hasPlayback = true;
+                break;
+            }
+        }
+        if (!hasPlayback) continue;
+        if (!cards.contains(card)) continue;
+
+        QString pcmName = parts.value(2).trimmed();
+        if (pcmName.isEmpty()) pcmName = parts.value(1).trimmed();
+
+        playbackCount[card]++;
+        entries.append({card, dev, pcmName});
+    }
+
+    for (const Entry &e : entries) {
+        const QString cardName = cards.value(e.card).second;
+        const bool multi = playbackCount.value(e.card) > 1;
+
+        QVariantMap entry;
+        entry.insert(QStringLiteral("name"),
+                     QStringLiteral("alsa/hw:CARD=%1,DEV=%2")
+                         .arg(cards.value(e.card).first).arg(e.dev));
+        if (multi && !e.pcmName.isEmpty() && e.pcmName != cardName) {
+            entry.insert(QStringLiteral("description"),
+                         QStringLiteral("%1 — %2  (hw:%3,%4)")
+                             .arg(cardName, e.pcmName).arg(e.card).arg(e.dev));
+        } else {
+            entry.insert(QStringLiteral("description"),
+                         QStringLiteral("%1  (hw:%2,%3)")
+                             .arg(cardName).arg(e.card).arg(e.dev));
+        }
+        out.append(entry);
+    }
+
+    return out;
+}
+
+bool PlayerBackend::lockDeviceToZeroDb() {
+    if (!m_audioDevice.startsWith(QStringLiteral("alsa/hw:CARD="))) return false;
+
+    // extract card id from "alsa/hw:CARD=<id>,DEV=<n>"
+    const QString tail = m_audioDevice.mid(QStringLiteral("alsa/hw:").size()); // "CARD=Pro,DEV=0"
+    QString cardId;
+    for (const QString &part : tail.split(QLatin1Char(','))) {
+        if (part.startsWith(QStringLiteral("CARD="))) {
+            cardId = part.mid(5);
+            break;
+        }
+    }
+    if (cardId.isEmpty()) return false;
+
+    snd_mixer_t *mixer = nullptr;
+    if (snd_mixer_open(&mixer, 0) < 0) return false;
+
+    const QByteArray ctlName = ("hw:CARD=" + cardId).toUtf8();
+    bool ok = false;
+    do {
+        if (snd_mixer_attach(mixer, ctlName.constData()) < 0) break;
+        if (snd_mixer_selem_register(mixer, nullptr, nullptr) < 0) break;
+        if (snd_mixer_load(mixer) < 0) break;
+
+        int touched = 0;
+        for (snd_mixer_elem_t *elem = snd_mixer_first_elem(mixer);
+             elem;
+             elem = snd_mixer_elem_next(elem)) {
+            if (snd_mixer_elem_get_type(elem) != SND_MIXER_ELEM_SIMPLE) continue;
+            if (!snd_mixer_selem_is_active(elem)) continue;
+
+            if (snd_mixer_selem_has_playback_volume(elem)) {
+                long minDb = 0, maxDb = 0;
+                if (snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0) {
+                    snd_mixer_selem_set_playback_dB_all(elem, maxDb, 0);
+                } else {
+                    long minV = 0, maxV = 0;
+                    if (snd_mixer_selem_get_playback_volume_range(elem, &minV, &maxV) == 0) {
+                        snd_mixer_selem_set_playback_volume_all(elem, maxV);
+                    }
+                }
+                ++touched;
+            }
+            if (snd_mixer_selem_has_playback_switch(elem)) {
+                snd_mixer_selem_set_playback_switch_all(elem, 1);
+            }
+        }
+        ok = touched > 0;
+    } while (false);
+
+    snd_mixer_close(mixer);
+    return ok;
 }
 
 void PlayerBackend::setShuffle(bool enabled) {
@@ -437,20 +675,6 @@ void PlayerBackend::playFromQueue(int position) {
 
 void PlayerBackend::playNext()     { loadTrack(m_queue.next()); }
 void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
-
-void PlayerBackend::skipBrokenTrack() {
-    const int queueSize = m_queue.count();
-    if (queueSize <= 0) {
-        resetPlaybackState();
-        return;
-    }
-    if (++m_consecutiveInvalid >= queueSize) {
-        m_consecutiveInvalid = 0;
-        resetPlaybackState();
-        return;
-    }
-    playNext();
-}
 
 QString PlayerBackend::coverCacheDir() {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)

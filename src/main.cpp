@@ -24,6 +24,9 @@ int main(int argc, char *argv[]) {
     PlayerBackend backend;
     Settings settings;
 
+    backend.setAudioDevice(settings.audioDevice());
+    backend.setSoftwareVolume(settings.audioSoftwareVolume());
+    backend.setBitPerfect(settings.audioBitPerfect());
     backend.setVolume(settings.volume());
     backend.setShuffle(settings.shuffle());
     backend.setReplayGainEnabled(settings.replayGainEnabled());
@@ -61,6 +64,19 @@ int main(int argc, char *argv[]) {
                      [&]() { backend.setReplayGainPreampDb(settings.replayGainPreampDb()); });
     QObject::connect(&settings, &Settings::replayGainClipProtectChanged, &backend,
                      [&]() { backend.setReplayGainClipProtect(settings.replayGainClipProtect()); });
+
+    QObject::connect(&settings, &Settings::audioDeviceChanged, &backend,
+                     [&]() { backend.setAudioDevice(settings.audioDevice()); });
+    QObject::connect(&settings, &Settings::audioSoftwareVolumeChanged, &backend,
+                     [&]() { backend.setSoftwareVolume(settings.audioSoftwareVolume()); });
+    QObject::connect(&settings, &Settings::audioBitPerfectChanged, &backend,
+                     [&]() { backend.setBitPerfect(settings.audioBitPerfect()); });
+    QObject::connect(&backend, &PlayerBackend::audioDeviceChanged, &settings,
+                     [&]() { settings.setAudioDevice(backend.audioDevice()); });
+    QObject::connect(&backend, &PlayerBackend::softwareVolumeChanged, &settings,
+                     [&]() { settings.setAudioSoftwareVolume(backend.softwareVolume()); });
+    QObject::connect(&backend, &PlayerBackend::bitPerfectChanged, &settings,
+                     [&]() { settings.setAudioBitPerfect(backend.bitPerfect()); });
 
     QObject::connect(&engine,
                      &QQmlApplicationEngine::objectCreationFailed,

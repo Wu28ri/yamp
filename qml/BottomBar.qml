@@ -209,7 +209,10 @@ Rectangle {
         ToolButton {
             readonly property bool effectivelyMuted: playerBackend.isMuted || playerBackend.volume <= 0
             icon.name: effectivelyMuted ? "audio-volume-muted" : "audio-volume-high"
-            opacity: 0.8
+            opacity: enabled ? 0.8 : 0.35
+            enabled: playerBackend.volumeControllable
+            ToolTip.visible: hovered && !enabled
+            ToolTip.text: "Volume is locked in bit-perfect mode\n(enable Software volume in Audio settings)"
             onClicked: {
                 if (effectivelyMuted) {
                     playerBackend.isMuted = false
@@ -227,6 +230,8 @@ Rectangle {
             from: 0
             to: 100
             value: playerBackend.volume * 100
+            enabled: playerBackend.volumeControllable
+            opacity: enabled ? 1.0 : 0.4
             onMoved: playerBackend.volume = value / 100
 
             ToolTip {
