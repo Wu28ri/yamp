@@ -73,7 +73,6 @@ QString sidecarImagePath(const QString &trackPath) {
             if (fileName.contains(keyword, Qt::CaseInsensitive)) { isPreferred = true; break; }
         }
         if (isPreferred) {
-
             preferredBest = full;
             break;
         }

@@ -17,6 +17,9 @@ public:
         return m_playOrder[m_currentIndex];
     }
 
+    bool containsPath(const QString &path) const;
+    int  positionOfPath(const QString &path) const;
+
     const std::vector<int>& playOrder() const { return m_playOrder; }
     const QList<Track>&     tracks()    const { return m_tracks; }
 

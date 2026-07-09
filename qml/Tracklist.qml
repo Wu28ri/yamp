@@ -106,29 +106,11 @@ ListView {
         }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.NoButton
-        onWheel: (wheel) => {
-            const multiplier = 3.0
-            const step = (wheel.angleDelta.y / 120) * 120 * multiplier
-            const minY = listView.originY
-            const maxY = Math.max(minY, listView.contentHeight - listView.height + listView.originY)
-            listView.contentY = Math.max(minY, Math.min(listView.contentY - step, maxY))
-        }
-    }
+    ScrollableViewHelper { target: listView }
 
-    ScrollBar.vertical: ScrollBar {
-        id: vBar
-        policy: ScrollBar.AlwaysOn
+    ScrollBar.vertical: SmoothScrollBar {
+        flickable: listView
         topPadding: 40
-        background: Item { implicitWidth: 8 }
-        contentItem: Rectangle {
-            implicitWidth: 8
-            radius: 4
-            color: sysPalette.highlight
-            opacity: (vBar.hovered || vBar.pressed || listView.moving) ? 1.0 : 0.4
-        }
     }
 
     header: Rectangle {
@@ -137,13 +119,8 @@ ListView {
         width: listView.width; height: 40
         color: sysPalette.window
 
-        readonly property int colTitleColumn  : 1
-        readonly property int colAlbumColumn  : 3
-        readonly property int colDurationCol  : 5
-        readonly property int colTrackNoCol   : 7
-
-        property int  sortCol: colTitleColumn
-        property bool sortAsc: true
+        property string sortCol: "title"
+        property bool   sortAsc: true
 
         function toggleSort(column) {
             sortAsc = sortCol === column ? !sortAsc : true
@@ -161,7 +138,7 @@ ListView {
                 width: listView.colNum
                 height: parent.height
                 label: "#"
-                sortColumn: headerRect.colTrackNoCol
+                sortColumn: "track_no"
                 activeColumn: headerRect.sortCol
                 ascending: headerRect.sortAsc
                 onToggled: column => headerRect.toggleSort(column)
@@ -173,7 +150,7 @@ ListView {
                 width: parent.width - (listView.colNum + listView.colCover + listView.colAlbum + listView.colTime + 40)
                 height: parent.height
                 label: "Name"
-                sortColumn: headerRect.colTitleColumn
+                sortColumn: "title"
                 activeColumn: headerRect.sortCol
                 ascending: headerRect.sortAsc
                 onToggled: column => headerRect.toggleSort(column)
@@ -183,7 +160,7 @@ ListView {
                 width: listView.colAlbum
                 height: parent.height
                 label: "Album"
-                sortColumn: headerRect.colAlbumColumn
+                sortColumn: "album"
                 activeColumn: headerRect.sortCol
                 ascending: headerRect.sortAsc
                 onToggled: column => headerRect.toggleSort(column)
@@ -193,7 +170,7 @@ ListView {
                 width: listView.colTime
                 height: parent.height
                 label: "Time"
-                sortColumn: headerRect.colDurationCol
+                sortColumn: "duration"
                 activeColumn: headerRect.sortCol
                 ascending: headerRect.sortAsc
                 alignment: Qt.AlignRight

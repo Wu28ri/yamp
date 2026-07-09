@@ -1,15 +1,6 @@
 #include "AlbumModel.h"
 
-namespace {
-QString sqlLikeEscape(const QString &raw) {
-    QString out = raw;
-    out.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-    out.replace(QLatin1Char('%'),  QLatin1String("\\%"));
-    out.replace(QLatin1Char('_'),  QLatin1String("\\_"));
-    out.replace(QLatin1Char('\''), QLatin1String("''"));
-    return out;
-}
-}
+#include "SqlUtils.h"
 
 AlbumModel::AlbumModel(QObject *parent) : QSqlQueryModel(parent) {}
 
@@ -36,10 +27,10 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
 void AlbumModel::refresh() {
     QString where;
     if (!m_search.isEmpty()) {
-        const QString safe = sqlLikeEscape(m_search.toLower());
+        const QString pattern = SqlUtils::containsPattern(m_search.toLower());
         where = QStringLiteral(
-            "WHERE LOWER(album) LIKE '%%%1%%' ESCAPE '\\' "
-            "OR LOWER(COALESCE(NULLIF(album_artist, ''), artist)) LIKE '%%%1%%' ESCAPE '\\' ").arg(safe);
+            "WHERE LOWER(album) LIKE %1 ESCAPE '\\' "
+            "OR LOWER(COALESCE(NULLIF(album_artist, ''), artist)) LIKE %1 ESCAPE '\\' ").arg(pattern);
     }
     setQuery(QStringLiteral(
         "SELECT album, "
@@ -56,4 +47,3 @@ void AlbumModel::setSearch(const QString &query) {
     m_search = query;
     refresh();
 }
-

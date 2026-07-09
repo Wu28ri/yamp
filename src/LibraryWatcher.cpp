@@ -1,6 +1,10 @@
 #include "LibraryWatcher.h"
 
+#include "AudioFormats.h"
+#include "LibraryDb.h"
 #include "MusicLibrary.h"
+#include "ScannerHelpers.h"
+#include "SqlUtils.h"
 #include "Track.h"
 
 #include <QDir>
@@ -9,86 +13,12 @@
 #include <QMetaObject>
 #include <QPair>
 #include <QSqlDatabase>
-#include <QSqlError>
 #include <QSqlQuery>
-#include <QUuid>
 #include <QVariant>
 
 namespace {
 
 constexpr int kDebounceMs = 350;
-
-int insertTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
-    if (paths.isEmpty()) return 0;
-
-    QSqlQuery insertTrack(db);
-    insertTrack.prepare(QStringLiteral(
-        "INSERT OR IGNORE INTO tracks "
-        "(title, artist, album, path, duration, search_text, track_no, tech_info, "
-        " file_size, album_artist) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
-
-    QSqlQuery upsertArtist(db);
-    upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
-    QSqlQuery findArtistId(db);
-    findArtistId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
-    QSqlQuery linkTrackArtist(db);
-    linkTrackArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
-
-    db.transaction();
-    int inserted = 0;
-    for (const QString &path : paths) {
-        Track t;
-        qint64 fileSize = 0;
-        if (!MusicLibrary::readTrackFromFile(path, t, fileSize)) continue;
-
-        const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
-        insertTrack.bindValue(0, t.title);
-        insertTrack.bindValue(1, t.artist);
-        insertTrack.bindValue(2, t.album);
-        insertTrack.bindValue(3, t.path);
-        insertTrack.bindValue(4, t.duration);
-        insertTrack.bindValue(5, searchText);
-        insertTrack.bindValue(6, t.trackNo);
-        insertTrack.bindValue(7, t.techInfo);
-        insertTrack.bindValue(8, fileSize);
-        insertTrack.bindValue(9, t.albumArtist);
-        if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
-            MusicLibrary::linkTrackToArtistsPrepared(
-                insertTrack.lastInsertId().toLongLong(),
-                t.artist,
-                upsertArtist, findArtistId, linkTrackArtist);
-            ++inserted;
-        }
-    }
-    db.commit();
-    return inserted;
-}
-
-int deleteTrackRowsBatch(QSqlDatabase &db, const QStringList &paths) {
-    if (paths.isEmpty()) return 0;
-    QSqlQuery del(db);
-    del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
-
-    db.transaction();
-    int removed = 0;
-    for (const QString &p : paths) {
-        del.bindValue(0, p);
-        if (del.exec()) removed += del.numRowsAffected();
-    }
-    db.commit();
-    if (removed > 0) MusicLibrary::pruneOrphanArtists(db);
-    return removed;
-}
-
-bool updateTrackPath(QSqlDatabase &db, const QString &oldPath, const QString &newPath) {
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral("UPDATE tracks SET path = ? WHERE path = ?"));
-    q.addBindValue(newPath);
-    q.addBindValue(oldPath);
-    if (!q.exec()) return false;
-    return q.numRowsAffected() > 0;
-}
 
 bool loadDbSignature(QSqlQuery &q, const QString &path, qint64 &size, int &duration) {
     q.bindValue(0, path);
@@ -107,13 +37,7 @@ QStringList listAudioFilesIn(const QString &dir) {
     QDir d(dir);
     if (!d.exists()) return out;
     const auto entries = d.entryInfoList(
-        {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
-         QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
-         QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
-         QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
-         QStringLiteral("*.opus"), QStringLiteral("*.wma"),
-         QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
-         QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
+        AudioFormats::nameFilters(),
         QDir::Files | QDir::NoSymLinks);
     out.reserve(entries.size());
     for (const auto &e : entries) out.append(e.absoluteFilePath());
@@ -125,8 +49,8 @@ QStringList dbPathsInDir(QSqlDatabase &db, const QString &dir) {
     QString prefix = dir;
     if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? || '%'"));
-    q.addBindValue(prefix);
+    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
+    q.addBindValue(SqlUtils::prefixPattern(prefix));
     if (!q.exec()) return out;
     while (q.next()) {
         const QString p = q.value(0).toString();
@@ -142,8 +66,8 @@ QStringList dbPathsUnder(QSqlDatabase &db, const QString &root) {
     QString prefix = root;
     if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? || '%'"));
-    q.addBindValue(prefix);
+    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
+    q.addBindValue(SqlUtils::prefixPattern(prefix));
     if (!q.exec()) return out;
     while (q.next()) out.append(q.value(0).toString());
     return out;
@@ -184,7 +108,7 @@ bool applyDiskDbDiff(QSqlDatabase &db,
         const auto key = qMakePair(sz, t.duration);
         const auto it = removalIndex.find(key);
         if (it != removalIndex.end()) {
-            updateTrackPath(db, it.value(), add);
+            ScannerHelpers::updateTrackPath(db, it.value(), add);
             matchedRemovals.insert(it.value());
             removalIndex.erase(it);
         } else {
@@ -198,8 +122,9 @@ bool applyDiskDbDiff(QSqlDatabase &db,
     for (const QString &p : removals) {
         if (!matchedRemovals.contains(p)) toDelete.append(p);
     }
-    if (!toDelete.isEmpty() && deleteTrackRowsBatch(db, toDelete) > 0) changed = true;
-    if (!unmatchedAdditions.isEmpty() && insertTrackRowsBatch(db, unmatchedAdditions) > 0) changed = true;
+    if (!toDelete.isEmpty() && ScannerHelpers::deleteTracksByPath(db, toDelete) > 0) changed = true;
+    if (!unmatchedAdditions.isEmpty()
+        && ScannerHelpers::insertTracksFromPaths(db, unmatchedAdditions).inserted > 0) changed = true;
     return changed;
 }
 
@@ -358,23 +283,13 @@ void LibraryWatcher::flushPending() {
     m_reconcileRunning = true;
 
     m_workerPool.start([this, pending]() {
-        const QString connName = QStringLiteral("yamp_lw_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QSqlDatabase db;
+        const QString connName = LibraryDb::openScopedConnection(QStringLiteral("lw"), db);
         ReconcileResult result;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
-            db.setDatabaseName(MusicLibrary::databasePath());
-            if (db.open()) {
-                QSqlQuery pragma(db);
-                pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-                pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
-                pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
-                pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-                pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
-                result = reconcileDirsBlocking(db, pending);
-                db.close();
-            }
+        if (!connName.isEmpty()) {
+            result = reconcileDirsBlocking(db, pending);
         }
-        QSqlDatabase::removeDatabase(connName);
+        LibraryDb::closeScopedConnection(connName, db);
 
         QMetaObject::invokeMethod(this, [this, result]() {
             for (const QString &sub : result.newSubdirsToWatch) {
@@ -437,40 +352,23 @@ void LibraryWatcher::unwatchTree(const QString &root) {
 
 void LibraryWatcher::initialReconcileAsync(const QString &root) {
     m_workerPool.start([this, root]() {
-        const QString connName = QStringLiteral("yamp_lw_init_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QSqlDatabase db;
+        const QString connName = LibraryDb::openScopedConnection(QStringLiteral("lwInit"), db);
         bool changed = false;
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
-            db.setDatabaseName(MusicLibrary::databasePath());
-            if (db.open()) {
-                QSqlQuery pragma(db);
-                pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-                pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
-                pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
-                pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-                pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
+        if (!connName.isEmpty()) {
+            QSet<QString> diskFiles;
+            QDirIterator it(root,
+                            AudioFormats::nameFilters(),
+                            QDir::Files | QDir::NoSymLinks,
+                            QDirIterator::Subdirectories);
+            while (it.hasNext()) diskFiles.insert(it.next());
 
-                QSet<QString> diskFiles;
-                QDirIterator it(root,
-                                {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
-                                 QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
-                                 QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
-                                 QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
-                                 QStringLiteral("*.opus"), QStringLiteral("*.wma"),
-                                 QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
-                                 QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
-                                QDir::Files | QDir::NoSymLinks,
-                                QDirIterator::Subdirectories);
-                while (it.hasNext()) diskFiles.insert(it.next());
+            const QStringList dbList = dbPathsUnder(db, root);
+            const QSet<QString> dbFiles(dbList.begin(), dbList.end());
 
-                const QStringList dbList = dbPathsUnder(db, root);
-                const QSet<QString> dbFiles(dbList.begin(), dbList.end());
-
-                changed = applyDiskDbDiff(db, diskFiles, dbFiles);
-                db.close();
-            }
+            changed = applyDiskDbDiff(db, diskFiles, dbFiles);
         }
-        QSqlDatabase::removeDatabase(connName);
+        LibraryDb::closeScopedConnection(connName, db);
 
         if (changed) {
             QMetaObject::invokeMethod(this, [this]() {

@@ -1,15 +1,6 @@
 #include "ArtistModel.h"
 
-namespace {
-QString sqlLikeEscape(const QString &raw) {
-    QString out = raw;
-    out.replace(QLatin1Char('\\'), QLatin1String("\\\\"));
-    out.replace(QLatin1Char('%'),  QLatin1String("\\%"));
-    out.replace(QLatin1Char('_'),  QLatin1String("\\_"));
-    out.replace(QLatin1Char('\''), QLatin1String("''"));
-    return out;
-}
-}
+#include "SqlUtils.h"
 
 ArtistModel::ArtistModel(QObject *parent) : QSqlQueryModel(parent) {}
 
@@ -36,8 +27,8 @@ QHash<int, QByteArray> ArtistModel::roleNames() const {
 void ArtistModel::refresh() {
     QString where;
     if (!m_search.isEmpty()) {
-        const QString safe = sqlLikeEscape(m_search.toLower());
-        where = QStringLiteral("WHERE LOWER(a.name) LIKE '%%%1%%' ESCAPE '\\' ").arg(safe);
+        const QString pattern = SqlUtils::containsPattern(m_search.toLower());
+        where = QStringLiteral("WHERE LOWER(a.name) LIKE %1 ESCAPE '\\' ").arg(pattern);
     }
     setQuery(QStringLiteral(
         "SELECT a.name, "
@@ -55,4 +46,3 @@ void ArtistModel::setSearch(const QString &query) {
     m_search = query;
     refresh();
 }
-

@@ -36,6 +36,9 @@ qt_add_qml_module(appyamp
         qml/QueuePanel.qml
         qml/SortableHeader.qml
         qml/SettingsWindow.qml
+        qml/ScrollableViewHelper.qml
+        qml/SmoothScrollBar.qml
+        qml/DetailHeader.qml
     SOURCES
         src/Track.h
         src/TrackQueue.h
@@ -54,20 +57,34 @@ qt_add_qml_module(appyamp
         src/CoverImageProvider.cpp
         src/MusicLibrary.h
         src/MusicLibrary.cpp
+        src/LibraryDb.h
+        src/LibraryDb.cpp
+        src/ScannerHelpers.h
+        src/ScannerHelpers.cpp
+        src/SqlUtils.h
+        src/AudioFormats.h
         src/LibraryWatcher.h
         src/LibraryWatcher.cpp
         src/ScanSession.h
         src/ScanSession.cpp
+        src/ScanCoordinator.h
+        src/ScanCoordinator.cpp
+        src/CoverCacheService.h
+        src/CoverCacheService.cpp
+        src/AlsaDevicesService.h
+        src/AlsaDevicesService.cpp
         src/PlayerBackend.h
         src/PlayerBackend.cpp
+        src/AppController.h
+        src/AppController.cpp
         src/PaVolumeController.h
         src/PaVolumeController.cpp
         src/MprisAdaptor.h
         src/MprisAdaptor.cpp
         src/LastFmScrobbler.h
         src/LastFmScrobbler.cpp
-        src/settings.h
-        src/settings.cpp
+        src/Settings.h
+        src/Settings.cpp
 )
 
 set_target_properties(appyamp PROPERTIES
@@ -99,4 +116,3 @@ install(TARGETS appyamp
 install(FILES ${CMAKE_SOURCE_DIR}/yamp.desktop
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
 )
-

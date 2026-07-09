@@ -15,29 +15,9 @@ GridView {
     cacheBuffer: 600
     model: playerBackend.albumModel
 
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.NoButton
-        onWheel: (wheel) => {
-            const multiplier = 3.0
-            const step = (wheel.angleDelta.y / 120) * 120 * multiplier
-            const minY = albumsGrid.originY
-            const maxY = Math.max(minY, albumsGrid.contentHeight - albumsGrid.height + albumsGrid.originY)
-            albumsGrid.contentY = Math.max(minY, Math.min(albumsGrid.contentY - step, maxY))
-        }
-    }
+    ScrollableViewHelper { target: albumsGrid }
 
-    ScrollBar.vertical: ScrollBar {
-        id: vBar
-        policy: ScrollBar.AlwaysOn
-        background: Item { implicitWidth: 8 }
-        contentItem: Rectangle {
-            implicitWidth: 8
-            radius: 4
-            color: sysPalette.highlight
-            opacity: (vBar.hovered || vBar.pressed || albumsGrid.moving) ? 1.0 : 0.4
-        }
-    }
+    ScrollBar.vertical: SmoothScrollBar { flickable: albumsGrid }
 
     delegate: Item {
         id: tile

@@ -12,14 +12,11 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.margins: 30
-            Layout.topMargin: 40
-            spacing: 30
+        DetailHeader {
+            title: root.selectedArtist || "Unknown Artist"
 
-            Rectangle {
-                width: 220; height: 220
+            avatarContent: Rectangle {
+                anchors.fill: parent
                 radius: width / 2
                 color: root.colorForName(root.selectedArtist)
 
@@ -32,53 +29,15 @@ Item {
                 }
             }
 
-            ColumnLayout {
-                spacing: 10
-                Layout.alignment: Qt.AlignBottom
-
-                Text {
-                    text: root.selectedArtist || "Unknown Artist"
-                    font.pixelSize: 42
-                    font.bold: true
-                    color: sysPalette.text
-                }
-
-                RowLayout {
-                    spacing: 15
-                    Layout.topMargin: 10
-
-                    ToolButton {
-                        id: backButton
-                        icon.name: "go-previous"
-                        background: Rectangle {
-                            implicitWidth: 48; implicitHeight: 48
-                            radius: 24
-                            color: backButton.hovered ? sysPalette.mid : "transparent"
-                        }
-                        onClicked: {
-                            playerBackend.filterByArtist("")
-                            root.currentView = "artists"
-                        }
-                    }
-
-                    ToolButton {
-                        id: playArtistButton
-                        icon.name: "media-playback-start"
-                        icon.width: 32; icon.height: 32
-                        background: Rectangle {
-                            implicitWidth: 64; implicitHeight: 64
-                            radius: 32
-                            color: playArtistButton.hovered ? sysPalette.mid : "transparent"
-                        }
-                        onClicked: {
-                            playerBackend.shuffle = false
-                            const firstPath = playerBackend.trackModel.pathForRow(0)
-                            if (firstPath) playerBackend.playMusic(firstPath)
-                        }
-                    }
-                }
+            onBackRequested: {
+                playerBackend.filterByArtist("")
+                root.currentView = "artists"
             }
-            Item { Layout.fillWidth: true }
+            onPlayRequested: {
+                playerBackend.shuffle = false
+                const firstPath = playerBackend.trackModel.pathForRow(0)
+                if (firstPath) playerBackend.playMusic(firstPath)
+            }
         }
 
         Tracklist {
@@ -87,4 +46,3 @@ Item {
         }
     }
 }
-

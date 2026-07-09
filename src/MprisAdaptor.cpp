@@ -62,6 +62,7 @@ void MprisPlayerAdaptor::emitProperties(const QVariantMap &props) {
 }
 
 QString MprisPlayerAdaptor::playbackStatus() const {
+    if (m_backend->currentPath().isEmpty()) return QStringLiteral("Stopped");
     return m_backend->isPlaying() ? QStringLiteral("Playing") : QStringLiteral("Paused");
 }
 

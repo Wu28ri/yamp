@@ -1,24 +1,41 @@
 #include "TrackModel.h"
 
-#include <QSqlError>
 #include <QSqlQuery>
+#include <QSqlRecord>
 
 TrackModel::TrackModel(QObject *parent) : QSqlTableModel(parent) {}
 
-int TrackModel::columnForRole(int role) {
+void TrackModel::setTable(const QString &tableName) {
+    QSqlTableModel::setTable(tableName);
+    rebuildColumnCache();
+}
+
+void TrackModel::rebuildColumnCache() {
+    m_columnIndex.clear();
+    const QSqlRecord rec = record();
+    for (int i = 0; i < rec.count(); ++i) {
+        m_columnIndex.insert(rec.fieldName(i), i);
+    }
+}
+
+int TrackModel::columnFor(const QString &columnName) const {
+    return m_columnIndex.value(columnName, -1);
+}
+
+int TrackModel::columnFromRole(int role) const {
     switch (role) {
-    case TitleRole:    return TitleColumn;
-    case ArtistRole:   return ArtistColumn;
-    case AlbumRole:    return AlbumColumn;
-    case PathRole:     return PathColumn;
-    case DurationRole: return DurationColumn;
+    case TitleRole:    return columnFor(QStringLiteral("title"));
+    case ArtistRole:   return columnFor(QStringLiteral("artist"));
+    case AlbumRole:    return columnFor(QStringLiteral("album"));
+    case PathRole:     return columnFor(QStringLiteral("path"));
+    case DurationRole: return columnFor(QStringLiteral("duration"));
     default:           return -1;
     }
 }
 
 QVariant TrackModel::data(const QModelIndex &index, int role) const {
     if (role < Qt::UserRole) return QSqlTableModel::data(index, role);
-    const int column = columnForRole(role);
+    const int column = columnFromRole(role);
     if (column < 0) return {};
     return QSqlTableModel::data(this->index(index.row(), column), Qt::DisplayRole);
 }
@@ -53,4 +70,3 @@ void TrackModel::ensureFetchedTo(int row) {
         fetchMore();
     }
 }
-

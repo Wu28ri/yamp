@@ -13,7 +13,23 @@ std::mt19937& rng() {
 Track TrackQueue::current() const {
     if (m_currentIndex < 0 || m_currentIndex >= static_cast<int>(m_playOrder.size()))
         return {};
-    return m_tracks[m_playOrder[m_currentIndex]];
+    const int globalId = m_playOrder[m_currentIndex];
+    if (globalId < 0 || globalId >= m_tracks.size()) return {};
+    return m_tracks[globalId];
+}
+
+bool TrackQueue::containsPath(const QString &path) const {
+    return !path.isEmpty() && m_pathToGlobalId.contains(path);
+}
+
+int TrackQueue::positionOfPath(const QString &path) const {
+    const auto it = m_pathToGlobalId.constFind(path);
+    if (it == m_pathToGlobalId.constEnd()) return -1;
+    const int globalId = it.value();
+    for (size_t i = 0; i < m_playOrder.size(); ++i) {
+        if (m_playOrder[i] == globalId) return static_cast<int>(i);
+    }
+    return -1;
 }
 
 void TrackQueue::setTracks(const QList<Track> &tracks) {
@@ -158,10 +174,8 @@ void TrackQueue::setIndexByPath(const QString &path) {
 }
 
 Track TrackQueue::next() {
-    if (m_playOrder.empty()) return {};
-    if (m_currentIndex < static_cast<int>(m_playOrder.size()) - 1) {
-        ++m_currentIndex;
-    }
+    if (m_currentIndex >= static_cast<int>(m_playOrder.size()) - 1) return {};
+    ++m_currentIndex;
     return current();
 }
 

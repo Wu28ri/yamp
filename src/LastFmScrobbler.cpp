@@ -1,7 +1,7 @@
 #include "LastFmScrobbler.h"
 
 #include "PlayerBackend.h"
-#include "settings.h"
+#include "Settings.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>

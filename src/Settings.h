@@ -30,9 +30,12 @@ public:
     enum ReplayGainMode { RgModeTrack = 0, RgModeAlbum = 1 };
     Q_ENUM(ReplayGainMode)
 
+    static constexpr qreal kReplayGainPreampMinDb = -15.0;
+    static constexpr qreal kReplayGainPreampMaxDb =  15.0;
+
     explicit Settings(QObject *parent = nullptr);
 
-    QStringList musicFolders() const;
+    QStringList musicFolders() const { return m_folders; }
 
     qreal   volume()              const { return m_volume; }
     bool    shuffle()             const { return m_shuffle; }
@@ -103,6 +106,9 @@ signals:
     void lastfmUsernameChanged();
 
 private:
+    template <typename T>
+    void store(T &member, const T &value, const char *key, void (Settings::*changed)());
+
     QStringList m_folders;
     QSettings   m_settings;
 

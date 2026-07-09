@@ -207,7 +207,10 @@ Rectangle {
         }
 
         ToolButton {
+            id: muteButton
             readonly property bool effectivelyMuted: playerBackend.isMuted || playerBackend.volume <= 0
+            property real volumeBeforeMute: 1.0
+
             icon.name: effectivelyMuted ? "audio-volume-muted" : "audio-volume-high"
             opacity: enabled ? 0.8 : 0.35
             enabled: playerBackend.volumeControllable
@@ -216,23 +219,30 @@ Rectangle {
             onClicked: {
                 if (effectivelyMuted) {
                     playerBackend.isMuted = false
-                    playerBackend.volume = 1.0
+                    if (playerBackend.volume <= 0) {
+                        playerBackend.volume = volumeBeforeMute > 0 ? volumeBeforeMute : 1.0
+                    }
                 } else {
+                    volumeBeforeMute = playerBackend.volume
                     playerBackend.isMuted = true
-                    playerBackend.volume = 0
                 }
             }
         }
 
         Slider {
             id: volumeSlider
-            width: 150
+            Layout.preferredWidth: 150
             from: 0
             to: 100
-            value: playerBackend.volume * 100
             enabled: playerBackend.volumeControllable
             opacity: enabled ? 1.0 : 0.4
             onMoved: playerBackend.volume = value / 100
+
+            Binding {
+                volumeSlider.value: playerBackend.volume * 100
+                when: !volumeSlider.pressed
+                restoreMode: Binding.RestoreBindingOrValue
+            }
 
             ToolTip {
                 parent: volumeSlider.handle

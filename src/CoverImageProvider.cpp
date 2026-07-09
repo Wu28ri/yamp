@@ -26,6 +26,13 @@ QString dirSignature(const QString &dirPath) {
 
 const QByteArray kPlaceholderHash = QByteArrayLiteral("__placeholder__");
 
+constexpr int kMaxHashEntries = 65536;
+
+template <typename Hash>
+void capHash(Hash &hash) {
+    if (hash.size() > kMaxHashEntries) hash.clear();
+}
+
 QByteArray makeSourceKey(const QByteArray &contentHash, int maxEdge) {
     QByteArray key;
     key.reserve(contentHash.size() + 8);
@@ -212,6 +219,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     if (cover.image.isNull()) {
         QWriteLocker locker(&m_lock);
+        capHash(m_pathToHash);
         m_pathToHash.insert(pathKey, kPlaceholderHash);
 
         QImage img = makePlaceholder();
@@ -238,11 +246,15 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         m_sources.insert(sourceKey,
                          new SourceEntry{source, imageKb(source)},
                          qMax(imageKb(source), 16));
+        capHash(m_pathToHash);
+        capHash(m_dirToHash);
         m_pathToHash.insert(pathKey, contentHash);
 
         if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     } else {
         QWriteLocker locker(&m_lock);
+        capHash(m_pathToHash);
+        capHash(m_dirToHash);
         m_pathToHash.insert(pathKey, contentHash);
         if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     }

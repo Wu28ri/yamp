@@ -4,12 +4,12 @@ Item {
     id: header
 
     property string label: ""
-    property int    sortColumn: 0
-    property int    activeColumn: -1
+    property string sortColumn: ""
+    property string activeColumn: ""
     property bool   ascending: true
     property int    alignment: Qt.AlignLeft
 
-    signal toggled(int column)
+    signal toggled(string column)
 
     implicitWidth: row.implicitWidth
 

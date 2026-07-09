@@ -1,5 +1,9 @@
 #include "MusicLibrary.h"
 
+#include "AudioFormats.h"
+#include "LibraryDb.h"
+#include "ScannerHelpers.h"
+
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -7,10 +11,8 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSqlDatabase>
-#include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
-#include <QUuid>
 #include <QVariant>
 
 #include <taglib/aiffproperties.h>
@@ -75,13 +77,9 @@ bool initialize() {
     }
     if (!db.isOpen() && !db.open()) return false;
 
-    QSqlQuery pragma(db);
-    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
-    pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-    pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
-    pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
-    pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-    pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
+    QSqlQuery wal(db);
+    wal.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    LibraryDb::applyConnectionPragmas(db);
 
     QSqlQuery q(db);
     if (!q.exec(QStringLiteral(
@@ -106,8 +104,6 @@ bool initialize() {
         "CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks(duration)"));
     q.exec(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tracks_track_no ON tracks(track_no)"));
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"));
 
     QSqlQuery wq(db);
     if (!wq.exec(QStringLiteral(
@@ -129,6 +125,8 @@ bool initialize() {
             "PRIMARY KEY (track_id, artist_id))"))) {
         return false;
     }
+    q.exec(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"));
     q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)"));
     q.exec(QStringLiteral(
         "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
@@ -313,13 +311,7 @@ void LibraryScanner::run() {
     QStringList allFiles;
     {
         QDirIterator it(m_rootPath,
-                        {QStringLiteral("*.flac"), QStringLiteral("*.mp3"),
-                         QStringLiteral("*.wav"),  QStringLiteral("*.m4a"),
-                         QStringLiteral("*.mp4"),  QStringLiteral("*.aac"),
-                         QStringLiteral("*.ogg"),  QStringLiteral("*.oga"),
-                         QStringLiteral("*.opus"), QStringLiteral("*.wma"),
-                         QStringLiteral("*.aiff"), QStringLiteral("*.aif"),
-                         QStringLiteral("*.ape"),  QStringLiteral("*.alac")},
+                        AudioFormats::nameFilters(),
                         QDir::Files,
                         QDirIterator::Subdirectories);
         while (it.hasNext()) allFiles.append(it.next());
@@ -335,36 +327,16 @@ void LibraryScanner::run() {
     constexpr int  kBatchMaxMs       = 800;
     constexpr int  kProgressEveryN   = 10;
 
-    const QString connName = QStringLiteral("yamp_scan_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QSqlDatabase db;
+    const QString connName = LibraryDb::openScopedConnection(QStringLiteral("scan"), db);
+    if (connName.isEmpty()) {
+        emit finished({});
+        return;
+    }
+
     QList<Track> newTracks;
     {
-        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName);
-        db.setDatabaseName(MusicLibrary::databasePath());
-        if (!db.open()) {
-            QSqlDatabase::removeDatabase(connName);
-            emit finished({});
-            return;
-        }
-
-        QSqlQuery pragma(db);
-        pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
-        pragma.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
-        pragma.exec(QStringLiteral("PRAGMA cache_size=-32000"));
-        pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
-
-        QSqlQuery insertTrack(db);
-        insertTrack.prepare(QStringLiteral(
-            "INSERT OR IGNORE INTO tracks "
-            "(title, artist, album, path, duration, search_text, track_no, tech_info, "
-            " file_size, album_artist) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
-
-        QSqlQuery upsertArtist(db);
-        upsertArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
-        QSqlQuery findArtistId(db);
-        findArtistId.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
-        QSqlQuery linkTrackArtist(db);
-        linkTrackArtist.prepare(QStringLiteral("INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
+        ScannerHelpers::TrackInserter inserter(db);
 
         db.transaction();
 
@@ -382,26 +354,7 @@ void LibraryScanner::run() {
                 continue;
             }
 
-            const QString searchText = (t.title + QLatin1Char(' ') + t.artist + QLatin1Char(' ') + t.album).toLower();
-
-            insertTrack.bindValue(0, t.title);
-            insertTrack.bindValue(1, t.artist);
-            insertTrack.bindValue(2, t.album);
-            insertTrack.bindValue(3, t.path);
-            insertTrack.bindValue(4, t.duration);
-            insertTrack.bindValue(5, searchText);
-            insertTrack.bindValue(6, t.trackNo);
-            insertTrack.bindValue(7, t.techInfo);
-            insertTrack.bindValue(8, fileSize);
-            insertTrack.bindValue(9, t.albumArtist);
-
-            if (insertTrack.exec() && insertTrack.numRowsAffected() > 0) {
-                MusicLibrary::linkTrackToArtistsPrepared(
-                    insertTrack.lastInsertId().toLongLong(),
-                    t.artist,
-                    upsertArtist, findArtistId, linkTrackArtist);
-                newTracks.append(t);
-            }
+            if (inserter.insert(t, fileSize)) newTracks.append(t);
 
             ++processed;
             ++batchInTx;
@@ -420,9 +373,8 @@ void LibraryScanner::run() {
 
         db.commit();
         emit batchReady();
-        db.close();
     }
-    QSqlDatabase::removeDatabase(connName);
+    LibraryDb::closeScopedConnection(connName, db);
 
     emit finished(newTracks);
 }

@@ -2,20 +2,14 @@
 
 #include "AlbumModel.h"
 #include "ArtistModel.h"
-#include "LibraryWatcher.h"
-#include "PaVolumeController.h"
 #include "QueueModel.h"
+#include "Settings.h"
 #include "TrackModel.h"
 #include "TrackQueue.h"
 
 #include <QAbstractItemModel>
-#include <QByteArray>
-#include <QHash>
 #include <QObject>
-#include <QPair>
 #include <QString>
-#include <QThreadPool>
-#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -23,7 +17,11 @@ struct mpv_handle;
 struct mpv_event_property;
 struct mpv_event_end_file;
 
-class ScanSession;
+class QTimer;
+class CoverCacheService;
+class LibraryWatcher;
+class PaVolumeController;
+class ScanCoordinator;
 
 class PlayerBackend : public QObject {
     Q_OBJECT
@@ -61,11 +59,7 @@ public:
     explicit PlayerBackend(QObject *parent = nullptr);
     ~PlayerBackend() override;
 
-    enum ReplayGainMode {
-        RgModeTrack = 0,
-        RgModeAlbum = 1,
-    };
-    Q_ENUM(ReplayGainMode)
+    using ReplayGainMode = Settings::ReplayGainMode;
 
     QString currentTitle()    const { return m_currentTitle;  }
     QString currentArtist()   const { return m_currentArtist; }
@@ -77,17 +71,17 @@ public:
 
     bool   isMuted()  const;
     qreal  volume()   const;
-    bool   shuffle()  const { return m_queue.isShuffle();      }
+    bool   shuffle()  const { return m_queue.isShuffle();     }
     bool   isPlaying() const { return m_hasFile && !m_paused; }
     qint64 position() const;
     qint64 duration() const { return m_durationMs; }
 
-    QString audioDevice()          const { return m_audioDevice; }
-    bool    softwareVolume()       const { return m_softwareVolume; }
-    bool    bitPerfect()           const { return m_bitPerfectEnabled; }
-    bool    volumeControllable()   const { return !m_bitPerfectEnabled || m_softwareVolume; }
+    QString audioDevice()        const { return m_audioDevice; }
+    bool    softwareVolume()     const { return m_softwareVolume; }
+    bool    bitPerfect()         const { return m_bitPerfectEnabled; }
+    bool    volumeControllable() const { return !m_bitPerfectEnabled || m_softwareVolume; }
 
-    int currentIndex()         const { return m_currentIndex; }
+    int currentIndex()         const { return m_queue.currentGlobalId(); }
     int currentQueuePosition() const { return m_queue.currentPosition(); }
 
     QAbstractItemModel* trackModel()  const { return m_trackModel; }
@@ -95,9 +89,9 @@ public:
     QAbstractItemModel* artistModel() const { return m_artistModel; }
     QAbstractItemModel* queueModel()  const { return m_queueModel; }
 
-    bool scanInProgress() const { return !m_scanProgresses.isEmpty(); }
-    int  scanProgress()   const { return m_scanProgressCached; }
-    int  scanTotal()      const { return m_scanTotalCached; }
+    bool scanInProgress() const;
+    int  scanProgress() const;
+    int  scanTotal() const;
 
     void setMuted(bool muted);
     void setVolume(qreal v);
@@ -127,7 +121,7 @@ public:
     Q_INVOKABLE void searchArtists(const QString &query);
     Q_INVOKABLE void filterByAlbum(const QString &albumName, const QString &artistName = QString());
     Q_INVOKABLE void filterByArtist(const QString &artistName);
-    Q_INVOKABLE void sortTracks(int column, bool ascending = true);
+    Q_INVOKABLE void sortTracks(const QString &columnName, bool ascending = true);
     Q_INVOKABLE int  getRowForPath(const QString &path);
     Q_INVOKABLE void addPlayNext(const QString &path);
     Q_INVOKABLE void openInFileManager(const QString &path);
@@ -156,21 +150,14 @@ signals:
     void bitPerfectChanged();
 
 private:
-    void initDatabase();
+    bool usingSoftwareVolume() const { return m_bitPerfectEnabled && m_softwareVolume; }
     void loadTrack(const Track &track);
     void rebuildQueueFromCurrentFilter();
-    void refreshAlbumModel();
-    void refreshArtistModel();
     void refreshAllModels();
     void resetPlaybackState();
-    void recomputeScanTotals();
     void applyFilter();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
-    static QString coverCacheDir();
-    static QString coverPathForHash(const QByteArray &hash, const QString &ext);
-    static bool writeCoverAtomic(const QString &targetPath, const QByteArray &data);
-    static void pruneCoverCache(int keepCount);
     void setupMpris();
     void applyReplayGainSettings();
     void applyAudioDeviceToMpv();
@@ -189,14 +176,15 @@ private:
     qint64      m_lastPositionMs = -1;
     qint64      m_durationMs     = 0;
 
-    PaVolumeController *m_paVolume    = nullptr;
-    TrackModel         *m_trackModel  = nullptr;
-    AlbumModel     *m_albumModel    = nullptr;
-    ArtistModel    *m_artistModel   = nullptr;
-    QueueModel     *m_queueModel    = nullptr;
-    LibraryWatcher *m_libraryWatcher = nullptr;
-    TrackQueue      m_queue;
-    QThreadPool     m_coverPool;
+    PaVolumeController *m_paVolume        = nullptr;
+    TrackModel         *m_trackModel      = nullptr;
+    AlbumModel         *m_albumModel      = nullptr;
+    ArtistModel        *m_artistModel     = nullptr;
+    QueueModel         *m_queueModel      = nullptr;
+    LibraryWatcher     *m_libraryWatcher  = nullptr;
+    ScanCoordinator    *m_scanCoordinator = nullptr;
+    CoverCacheService  *m_coverService    = nullptr;
+    TrackQueue          m_queue;
 
     QString m_currentPath;
     QString m_currentTitle;
@@ -206,18 +194,18 @@ private:
     QString m_currentCoverPath;
     QString m_categoryFilter;
     QString m_searchFilter;
-    int     m_currentIndex = -1;
-    quint64 m_coverGen     = 0;
-    int           m_sortColumn = -1;
+    quint64 m_coverGen = 0;
+    QString       m_sortColumn = QStringLiteral("title");
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
-    QHash<ScanSession*, QPair<int, int>> m_scanProgresses;
-    int     m_scanProgressCached = 0;
-    int     m_scanTotalCached    = 0;
+    QString       m_queueBuiltFromFilter;
+    QString       m_queueBuiltFromSort;
+    Qt::SortOrder m_queueBuiltFromOrder = Qt::AscendingOrder;
+
     QTimer *m_scanRefreshTimer = nullptr;
 
     bool    m_rgEnabled      = false;
-    int     m_rgMode         = RgModeTrack;
+    int     m_rgMode         = ReplayGainMode::RgModeTrack;
     qreal   m_rgPreampDb     = 0.0;
     bool    m_rgClipProtect  = true;
     QString m_audioDevice    = QStringLiteral("auto");
@@ -227,4 +215,3 @@ private:
     bool    m_swMuted        = false;
     Track   m_currentTrack;
 };
-
