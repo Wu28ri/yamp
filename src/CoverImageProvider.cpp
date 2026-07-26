@@ -2,7 +2,6 @@
 #include "CoverExtractor.h"
 
 #include <QCryptographicHash>
-#include <QDir>
 #include <QFileInfo>
 #include <QReadLocker>
 #include <QUrl>
@@ -275,4 +274,3 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     }
     return out;
 }
-

@@ -1,28 +1,34 @@
 #pragma once
 
-#include <QFileSystemWatcher>
 #include <QObject>
 #include <QSet>
 #include <QString>
 #include <QStringList>
 #include <QThreadPool>
-#include <QTimer>
+
+#include <atomic>
+
+class QFileSystemWatcher;
+class QTimer;
 
 class LibraryWatcher : public QObject {
     Q_OBJECT
 public:
+    enum class RegisterResult { Ready, AlreadyCovered, Retry };
+
     explicit LibraryWatcher(QObject *parent = nullptr);
     ~LibraryWatcher() override;
 
     void start();
 
-    void registerScannedRoot(const QString &path);
+    RegisterResult registerScannedRoot(const QString &path);
 
     void removeRoot(const QString &path);
 
     void clearAll();
 
-    void rescanAll();
+    void rescanAll(const QSet<QString> &excludedRoots = {});
+    void rescanRoot(const QString &root);
 
     QStringList roots() const;
 
@@ -34,9 +40,8 @@ private slots:
     void flushPending();
 
 private:
-    void persistRoot(const QString &root);
     QStringList loadRoots();
-    QString attachRoot(const QString &path);
+    QString attachRoot(const QString &path, bool *retry);
 
     void watchTreeRecursive(const QString &root);
     void unwatchTree(const QString &root);
@@ -49,5 +54,6 @@ private:
     QSet<QString> m_roots;
     QThreadPool m_workerPool;
     bool m_reconcileRunning = false;
+    std::atomic<quint64> m_generation{0};
+    std::atomic_bool m_stopping{false};
 };
-

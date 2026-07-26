@@ -63,7 +63,6 @@ Rectangle {
     }
 
     Text {
-        id: positionLabel
         anchors {
             left:           parent.left
             verticalCenter: progressSlider.verticalCenter
@@ -79,7 +78,6 @@ Rectangle {
     }
 
     Text {
-        id: durationLabel
         anchors {
             right:          parent.right
             verticalCenter: progressSlider.verticalCenter
@@ -149,7 +147,6 @@ Rectangle {
         spacing: 15
 
         ToolButton {
-            id: shuffleButton
             icon.name: "media-playlist-shuffle"
             icon.color: playerBackend.shuffle ? sysPalette.highlight : sysPalette.windowText
             opacity: playerBackend.shuffle ? 1.0 : 0.5
@@ -207,7 +204,6 @@ Rectangle {
         }
 
         ToolButton {
-            id: muteButton
             readonly property bool effectivelyMuted: playerBackend.isMuted || playerBackend.volume <= 0
             property real volumeBeforeMute: 1.0
 
@@ -215,7 +211,7 @@ Rectangle {
             opacity: enabled ? 0.8 : 0.35
             enabled: playerBackend.volumeControllable
             ToolTip.visible: hovered && !enabled
-            ToolTip.text: "Volume is locked in bit-perfect mode\n(enable Software volume in Audio settings)"
+            ToolTip.text: "Volume is locked in direct ALSA mode\n(enable Software volume in Audio settings)"
             onClicked: {
                 if (effectivelyMuted) {
                     playerBackend.isMuted = false
@@ -252,4 +248,3 @@ Rectangle {
         }
     }
 }
-

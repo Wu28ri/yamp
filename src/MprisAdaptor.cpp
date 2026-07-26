@@ -3,6 +3,7 @@
 #include "PlayerBackend.h"
 
 #include <QUrl>
+#include <QTimer>
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
 
@@ -62,8 +63,19 @@ void MprisPlayerAdaptor::emitProperties(const QVariantMap &props) {
 }
 
 QString MprisPlayerAdaptor::playbackStatus() const {
-    if (m_backend->currentPath().isEmpty()) return QStringLiteral("Stopped");
+    if (!m_backend->hasFile()) return QStringLiteral("Stopped");
     return m_backend->isPlaying() ? QStringLiteral("Playing") : QStringLiteral("Paused");
+}
+
+QString MprisPlayerAdaptor::currentTrackIdPath() const {
+    const QString path = m_backend->currentPath();
+    if (path != m_lastTrackIdPath) {
+        m_lastTrackIdPath = path;
+        ++m_trackIdCounter;
+    }
+    return path.isEmpty()
+        ? QStringLiteral("/org/mpris/MediaPlayer2/TrackList/NoTrack")
+        : QStringLiteral("/org/yamp/Track/%1").arg(m_trackIdCounter);
 }
 
 QVariantMap MprisPlayerAdaptor::metadata() const {
@@ -71,14 +83,7 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
 
     QVariantMap dict;
 
-    const QString path = m_backend->currentPath();
-    if (path != m_lastTrackIdPath) {
-        m_lastTrackIdPath = path;
-        ++m_trackIdCounter;
-    }
-    const QString trackIdPath = path.isEmpty()
-        ? QStringLiteral("/org/mpris/MediaPlayer2/TrackList/NoTrack")
-        : QStringLiteral("/org/yamp/Track/%1").arg(m_trackIdCounter);
+    const QString trackIdPath = currentTrackIdPath();
     dict.insert(QStringLiteral("mpris:trackid"),
                 QVariant::fromValue(QDBusObjectPath(trackIdPath)));
 
@@ -132,9 +137,9 @@ void MprisPlayerAdaptor::Seek(qlonglong offsetUs) {
 }
 
 void MprisPlayerAdaptor::SetPosition(const QDBusObjectPath &trackId, qlonglong positionUs) {
-    Q_UNUSED(trackId);
-    if (positionUs < 0) return;
+    if (trackId.path() != currentTrackIdPath()) return;
+    const qlonglong durationUs = static_cast<qlonglong>(m_backend->duration()) * 1000;
+    if (positionUs < 0 || positionUs > durationUs) return;
     m_backend->setPosition(positionUs / 1000);
     emit Seeked(static_cast<qlonglong>(m_backend->position()) * 1000);
 }
-

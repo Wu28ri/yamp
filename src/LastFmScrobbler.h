@@ -2,6 +2,8 @@
 
 #include "Track.h"
 
+#include <QElapsedTimer>
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QMap>
@@ -17,7 +19,6 @@ class LastFmScrobbler : public QObject {
     Q_PROPERTY(bool    enabled        READ enabled       WRITE setEnabled NOTIFY enabledChanged)
     Q_PROPERTY(bool    authenticated  READ authenticated NOTIFY authStateChanged)
     Q_PROPERTY(QString username       READ username      NOTIFY authStateChanged)
-    Q_PROPERTY(QString status         READ status        NOTIFY statusChanged)
     Q_PROPERTY(bool    awaitingAuth   READ awaitingAuth  NOTIFY awaitingAuthChanged)
 
 public:
@@ -27,8 +28,7 @@ public:
     bool    enabled()       const { return m_enabled; }
     bool    authenticated() const { return !m_sessionKey.isEmpty(); }
     QString username()      const { return m_username; }
-    QString status()        const { return m_status; }
-    bool    awaitingAuth()  const { return !m_pendingToken.isEmpty(); }
+    bool    awaitingAuth()  const { return m_authActive; }
 
     void setEnabled(bool enabled);
 
@@ -40,23 +40,29 @@ public slots:
 signals:
     void enabledChanged();
     void authStateChanged();
-    void statusChanged();
     void awaitingAuthChanged();
 
 private slots:
-    void onMetadataChanged();
+    void onTrackStarted(const Track &track);
     void onPlaybackStateChanged();
     void onPositionChanged();
     void pollAuthSession();
 
 private:
-    void setStatus(const QString &s);
     void setPendingToken(const QString &t);
+    void setAuthActive(bool active);
+    void finishAuth();
+    void scheduleAuthPoll();
     void resetTrackedTrack();
+    void startTracking(const Track &track);
     void accumulatePlayTime();
     void maybeScrobble();
-    void sendNowPlaying(const Track &t);
-    void sendScrobble(const Track &t, qint64 startedAtUnix);
+    void maybeSendNowPlaying();
+    void processScrobbleQueue();
+    void scheduleScrobbleRetry();
+    void invalidateSession(const QString &expectedKey);
+    void restoreScrobbleQueue();
+    void saveScrobbleQueue();
 
     QString signature(const QMap<QString, QString> &params) const;
     QNetworkReply* postSigned(QMap<QString, QString> params);
@@ -66,20 +72,38 @@ private:
     Settings              *m_settings      = nullptr;
     QNetworkAccessManager *m_nam           = nullptr;
     QTimer                *m_authPollTimer = nullptr;
-    int                    m_authPollsLeft = 0;
+    QTimer                *m_nowPlayingRetryTimer = nullptr;
+    QTimer                *m_scrobbleRetryTimer = nullptr;
+    QNetworkReply         *m_authReply = nullptr;
+    QElapsedTimer          m_authElapsed;
+    quint64                m_authGeneration = 0;
+    bool                   m_authActive = false;
 
     QString m_sessionKey;
     QString m_username;
     QString m_pendingToken;
-    QString m_status;
 
     bool m_enabled = false;
 
     Track   m_trackedTrack;
+    QString m_trackedOwner;
     qint64  m_trackedStartedAtUnix = 0;
     qint64  m_accumulatedMs        = 0;
-    qint64  m_lastPlayingWallMs    = 0;
+    QElapsedTimer m_playTimer;
+    quint64 m_playbackGeneration = 0;
     bool    m_isPlaying            = false;
     bool    m_nowPlayingSent       = false;
-    bool    m_scrobbled            = false;
+    bool    m_nowPlayingInFlight   = false;
+    bool    m_scrobbleQueued       = false;
+
+    struct PendingScrobble {
+        quint64 id = 0;
+        Track track;
+        QString owner;
+        qint64 startedAtUnix = 0;
+        int retryCount = 0;
+    };
+    QList<PendingScrobble> m_pendingScrobbles;
+    quint64 m_nextScrobbleId = 0;
+    quint64 m_scrobbleInFlightId = 0;
 };

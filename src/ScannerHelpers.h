@@ -2,11 +2,8 @@
 
 #include "Track.h"
 
-#include <QList>
 #include <QSqlDatabase>
 #include <QSqlQuery>
-#include <QString>
-#include <QStringList>
 
 namespace ScannerHelpers {
 
@@ -15,23 +12,14 @@ public:
     explicit TrackInserter(QSqlDatabase &db);
 
     bool insert(const Track &track, qint64 fileSize);
+    bool hasError() const { return m_error; }
 
 private:
     QSqlQuery m_insertTrack;
     QSqlQuery m_upsertArtist;
     QSqlQuery m_findArtistId;
     QSqlQuery m_linkTrackArtist;
+    bool m_error = false;
 };
-
-struct InsertOutcome {
-    int inserted = 0;
-    QList<Track> tracks;
-};
-
-InsertOutcome insertTracksFromPaths(QSqlDatabase &db, const QStringList &paths);
-
-int deleteTracksByPath(QSqlDatabase &db, const QStringList &paths);
-
-bool updateTrackPath(QSqlDatabase &db, const QString &oldPath, const QString &newPath);
 
 }

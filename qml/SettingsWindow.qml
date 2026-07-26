@@ -5,10 +5,15 @@ import QtQuick.Dialogs
 
 Window {
     id: settingsWindow
-    width: 600
-    height: 450
+    width: 640
+    height: 480
+    minimumWidth: 560
+    minimumHeight: 400
     title: "Settings — YAMP"
     color: sysPalette.window
+
+    readonly property int labelWidth: 160
+    readonly property int pageSpacing: 14
 
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
@@ -30,52 +35,47 @@ Window {
 
             TabButton {
                 text: "General"
+                width: settingsTabBar.width / settingsTabBar.count
             }
             TabButton {
                 text: "Audio"
+                width: settingsTabBar.width / settingsTabBar.count
             }
             TabButton {
                 text: "Library"
+                width: settingsTabBar.width / settingsTabBar.count
             }
             TabButton {
                 text: "Performance"
+                width: settingsTabBar.width / settingsTabBar.count
             }
             TabButton {
                 text: "Last.fm"
+                width: settingsTabBar.width / settingsTabBar.count
             }
         }
 
         StackLayout {
-            id: settingsStack
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.margins: 20
+            Layout.margins: 24
             currentIndex: settingsTabBar.currentIndex
 
             ColumnLayout {
-                id: generalTab
-                spacing: 18
+                spacing: settingsWindow.pageSpacing
 
                 Label {
                     text: "ReplayGain"
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.bold: true
                     color: sysPalette.text
-                }
-
-                Label {
-                    text: "Normalize playback loudness using ReplayGain tags embedded in your files. Tracks without tags play at their original level."
-                    color: sysPalette.windowText
-                    opacity: 0.7
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 10
 
-                    CheckBox {
+                    Switch {
                         id: rgEnabledBox
                         text: "Enable ReplayGain"
                         checked: appSettings.replayGainEnabled
@@ -90,14 +90,26 @@ Window {
                     spacing: 10
                     enabled: rgEnabledBox.checked
 
+                    Switch {
+                        text: "Prevent clipping"
+                        enabled: rgEnabledBox.checked
+                        checked: appSettings.replayGainClipProtect
+                        onToggled: appSettings.replayGainClipProtect = checked
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: rgEnabledBox.checked
+
                     Label {
                         text: "Mode"
                         color: sysPalette.text
-                        Layout.preferredWidth: 180
+                        Layout.preferredWidth: settingsWindow.labelWidth
                     }
 
                     ComboBox {
-                        id: rgModeBox
                         Layout.preferredWidth: 160
                         model: ["Track gain", "Album gain"]
                         currentIndex: appSettings.replayGainMode
@@ -115,11 +127,10 @@ Window {
                     Label {
                         text: "Pre-amp"
                         color: sysPalette.text
-                        Layout.preferredWidth: 180
+                        Layout.preferredWidth: settingsWindow.labelWidth
                     }
 
                     SpinBox {
-                        id: rgPreampBox
                         Layout.preferredWidth: 120
                         from: -1500
                         to: 1500
@@ -143,29 +154,15 @@ Window {
                     Item { Layout.fillWidth: true }
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 10
-                    enabled: rgEnabledBox.checked
-
-                    CheckBox {
-                        id: rgClipBox
-                        text: "Prevent clipping (use peak tags to cap gain)"
-                        checked: appSettings.replayGainClipProtect
-                        onToggled: appSettings.replayGainClipProtect = checked
-                    }
-                }
-
                 Item { Layout.fillHeight: true }
             }
 
             ColumnLayout {
-                id: audioTab
-                spacing: 18
+                spacing: settingsWindow.pageSpacing
 
                 Label {
                     text: "Audio Output"
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.bold: true
                     color: sysPalette.text
                 }
@@ -175,7 +172,7 @@ Window {
                     spacing: 10
 
                     Label {
-                        text: "Bit-perfect output (ALSA)"
+                        text: "Direct ALSA"
                         color: sysPalette.text
                         Layout.fillWidth: true
                     }
@@ -188,7 +185,6 @@ Window {
                 }
 
                 ColumnLayout {
-                    id: bitPerfectBlock
                     Layout.fillWidth: true
                     spacing: 12
                     visible: bitPerfectSwitch.checked
@@ -201,7 +197,7 @@ Window {
                         Label {
                             text: "Hardware device"
                             color: sysPalette.text
-                            Layout.preferredWidth: 180
+                            Layout.preferredWidth: settingsWindow.labelWidth
                         }
 
                         ComboBox {
@@ -249,74 +245,44 @@ Window {
                         Layout.fillWidth: true
                         spacing: 10
 
-                        CheckBox {
-                            id: swVolumeBox
+                        Label {
                             text: "Software volume"
+                            color: sysPalette.text
+                            Layout.fillWidth: true
+                        }
+
+                        Switch {
                             checked: appSettings.audioSoftwareVolume
                             onToggled: appSettings.audioSoftwareVolume = checked
                         }
-
-                        Item { Layout.fillWidth: true }
-
-                        Button {
-                            text: "Lock device to 0 dB"
-                            icon.name: "audio-volume-high"
-                            onClicked: {
-                                const ok = playerBackend.lockDeviceToZeroDb()
-                                lockResultLabel.text = ok
-                                    ? "Hardware mixer set to 0 dB."
-                                    : "Could not set hardware mixer — device may have no software-controllable volume."
-                                lockResultLabel.error = !ok
-                                lockResultTimer.restart()
-                            }
-                        }
                     }
 
-                    Label {
-                        id: lockResultLabel
-                        property bool error: false
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        font.pixelSize: 11
-                        color: error ? "#d35" : sysPalette.windowText
-                        opacity: text.length > 0 ? 0.85 : 0.0
-                        Behavior on opacity { NumberAnimation { duration: 150 } }
-                        Timer {
-                            id: lockResultTimer
-                            interval: 4000
-                            onTriggered: lockResultLabel.text = ""
-                        }
-                    }
                 }
 
                 Item { Layout.fillHeight: true }
             }
 
             ColumnLayout {
-                id: libraryTab
-                spacing: 15
+                spacing: settingsWindow.pageSpacing
 
                 Label {
                     text: "Music Folders"
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.bold: true
                     color: sysPalette.text
                 }
 
-                Rectangle {
+                Frame {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: sysPalette.base
-                    border.color: sysPalette.mid
-                    border.width: 1
-                    radius: 4
-                    clip: true
+                    padding: 0
 
                     ListView {
-                        id: folderList
                         anchors.fill: parent
                         anchors.margins: 5
                         model: appSettings.musicFolders
+                        clip: true
+                        ScrollBar.vertical: ScrollBar {}
 
                         delegate: RowLayout {
                             width: ListView.view.width
@@ -370,22 +336,13 @@ Window {
             }
 
             ColumnLayout {
-                id: performanceTab
-                spacing: 18
+                spacing: settingsWindow.pageSpacing
 
                 Label {
                     text: "Cover Art Cache"
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.bold: true
                     color: sysPalette.text
-                }
-
-                Label {
-                    text: "Lower values reduce memory usage at the cost of more disk reads while scrolling. Changing the resolution clears the in-memory cache."
-                    color: sysPalette.windowText
-                    opacity: 0.7
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
                 }
 
                 RowLayout {
@@ -395,7 +352,7 @@ Window {
                     Label {
                         text: "Cover resolution"
                         color: sysPalette.text
-                        Layout.preferredWidth: 180
+                        Layout.preferredWidth: settingsWindow.labelWidth
                     }
 
                     ComboBox {
@@ -426,11 +383,10 @@ Window {
                     Label {
                         text: "Source cache"
                         color: sysPalette.text
-                        Layout.preferredWidth: 180
+                        Layout.preferredWidth: settingsWindow.labelWidth
                     }
 
                     SpinBox {
-                        id: sourceBudgetBox
                         Layout.preferredWidth: 120
                         from: 4
                         to: 1024
@@ -455,11 +411,10 @@ Window {
                     Label {
                         text: "Scaled cache"
                         color: sysPalette.text
-                        Layout.preferredWidth: 180
+                        Layout.preferredWidth: settingsWindow.labelWidth
                     }
 
                     SpinBox {
-                        id: scaledBudgetBox
                         Layout.preferredWidth: 120
                         from: 2
                         to: 512
@@ -481,26 +436,16 @@ Window {
             }
 
             ColumnLayout {
-                id: lastfmTab
-                spacing: 18
+                spacing: settingsWindow.pageSpacing
 
                 Label {
                     text: "Last.fm Scrobbling"
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.bold: true
                     color: sysPalette.text
                 }
 
-                Label {
-                    text: "Submit your listening history to Last.fm. Tracks shorter than 30 seconds are not scrobbled."
-                    color: sysPalette.windowText
-                    opacity: 0.7
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
-
-                CheckBox {
-                    id: lastfmEnabledBox
+                Switch {
                     text: "Enable scrobbling"
                     checked: lastfm.enabled
                     onToggled: lastfm.enabled = checked

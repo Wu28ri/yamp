@@ -13,8 +13,11 @@ AppController::AppController(PlayerBackend *backend,
 void AppController::applyInitialSettings() {
     m_backend->setAudioDevice(m_settings->audioDevice());
     m_backend->setSoftwareVolume(m_settings->audioSoftwareVolume());
-    m_backend->setBitPerfect(m_settings->audioBitPerfect());
     m_backend->setVolume(m_settings->volume());
+    m_backend->setBitPerfect(m_settings->audioBitPerfect());
+    m_settings->setAudioDevice(m_backend->audioDevice());
+    m_settings->setAudioSoftwareVolume(m_backend->softwareVolume());
+    m_settings->setAudioBitPerfect(m_backend->bitPerfect());
     m_backend->setShuffle(m_settings->shuffle());
     m_backend->setReplayGainEnabled(m_settings->replayGainEnabled());
     m_backend->setReplayGainMode(m_settings->replayGainMode());
@@ -34,10 +37,15 @@ void AppController::wireSignals() {
 
     connect(s, &Settings::requestRescanDatabase, b,
             [b](const QStringList &folders) { b->syncWithFolders(folders); });
-    connect(s, &Settings::requestRemoveFolder,  b, &PlayerBackend::removeFolder);
+    connect(s, &Settings::requestRemoveFolder, b,
+            [b](const QString &folder, const QStringList &remaining) {
+                b->removeFolder(folder, remaining);
+            });
     connect(s, &Settings::requestClearDatabase, b, &PlayerBackend::clearLibrary);
 
-    connect(b, &PlayerBackend::volumeChanged,         s, [s, b]() { s->setVolume(b->volume()); });
+    connect(b, &PlayerBackend::volumeChanged, s, [s, b]() {
+        if (!b->bitPerfect() || b->softwareVolume()) s->setVolume(b->volume());
+    });
     connect(b, &PlayerBackend::shuffleChanged,        s, [s, b]() { s->setShuffle(b->shuffle()); });
     connect(b, &PlayerBackend::audioDeviceChanged,    s, [s, b]() { s->setAudioDevice(b->audioDevice()); });
     connect(b, &PlayerBackend::softwareVolumeChanged, s, [s, b]() { s->setAudioSoftwareVolume(b->softwareVolume()); });

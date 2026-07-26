@@ -79,7 +79,6 @@ Window {
         spacing: 0
 
         SplitView {
-            id: mainSplitter
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
@@ -108,7 +107,6 @@ Window {
             }
 
             Loader {
-                id: mainContentLoader
                 SplitView.fillWidth: true
                 source: {
                     if (root.currentView === "albums") return "Albums.qml"

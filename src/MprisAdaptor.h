@@ -3,11 +3,11 @@
 #include <QCoreApplication>
 #include <QDBusAbstractAdaptor>
 #include <QStringList>
-#include <QTimer>
 #include <QVariantMap>
 #include <QtDBus/QDBusObjectPath>
 
 class PlayerBackend;
+class QTimer;
 
 class MprisRootAdaptor : public QDBusAbstractAdaptor {
     Q_OBJECT
@@ -117,6 +117,7 @@ private:
     void emitProperties(const QVariantMap &props);
     void scheduleMetadataPush();
     void invalidateMetadataCache();
+    QString currentTrackIdPath() const;
 
     PlayerBackend *m_backend;
     QTimer *m_metadataTimer = nullptr;
@@ -127,4 +128,3 @@ private:
     mutable QString     m_lastTrackIdPath;
     mutable quint64     m_trackIdCounter = 0;
 };
-

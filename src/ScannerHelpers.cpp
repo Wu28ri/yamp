@@ -34,56 +34,19 @@ bool TrackInserter::insert(const Track &track, qint64 fileSize) {
     m_insertTrack.bindValue(7, track.techInfo);
     m_insertTrack.bindValue(8, fileSize);
     m_insertTrack.bindValue(9, track.albumArtist);
-    if (!m_insertTrack.exec() || m_insertTrack.numRowsAffected() <= 0) return false;
-    MusicLibrary::linkTrackToArtistsPrepared(
+    if (!m_insertTrack.exec()) {
+        m_error = true;
+        return false;
+    }
+    if (m_insertTrack.numRowsAffected() <= 0) return false;
+    if (!MusicLibrary::linkTrackToArtistsPrepared(
         m_insertTrack.lastInsertId().toLongLong(),
         track.artist,
-        m_upsertArtist, m_findArtistId, m_linkTrackArtist);
+        m_upsertArtist, m_findArtistId, m_linkTrackArtist)) {
+        m_error = true;
+        return false;
+    }
     return true;
-}
-
-InsertOutcome insertTracksFromPaths(QSqlDatabase &db, const QStringList &paths) {
-    InsertOutcome out;
-    if (paths.isEmpty()) return out;
-
-    TrackInserter inserter(db);
-    db.transaction();
-    for (const QString &path : paths) {
-        Track t;
-        qint64 fileSize = 0;
-        if (!MusicLibrary::readTrackFromFile(path, t, fileSize)) continue;
-        if (inserter.insert(t, fileSize)) {
-            ++out.inserted;
-            out.tracks.append(t);
-        }
-    }
-    db.commit();
-    return out;
-}
-
-int deleteTracksByPath(QSqlDatabase &db, const QStringList &paths) {
-    if (paths.isEmpty()) return 0;
-    QSqlQuery del(db);
-    del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
-
-    db.transaction();
-    int removed = 0;
-    for (const QString &p : paths) {
-        del.bindValue(0, p);
-        if (del.exec()) removed += del.numRowsAffected();
-    }
-    db.commit();
-    if (removed > 0) MusicLibrary::pruneOrphanArtists(db);
-    return removed;
-}
-
-bool updateTrackPath(QSqlDatabase &db, const QString &oldPath, const QString &newPath) {
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral("UPDATE tracks SET path = ? WHERE path = ?"));
-    q.addBindValue(newPath);
-    q.addBindValue(oldPath);
-    if (!q.exec()) return false;
-    return q.numRowsAffected() > 0;
 }
 
 }

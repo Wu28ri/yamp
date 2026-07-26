@@ -39,7 +39,6 @@ GridView {
                 Layout.alignment: Qt.AlignHCenter
 
                 Rectangle {
-                    id: coverContainer
                     anchors.centerIn: parent
                     width: parent.width
                     height: parent.height

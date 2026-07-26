@@ -10,6 +10,8 @@
 
 #include <alsa/asoundlib.h>
 
+#include <cmath>
+
 namespace AlsaDevices {
 
 namespace {
@@ -28,7 +30,7 @@ QHash<int, QPair<QString, QString>> loadCardsMap() {
         const int n = m.captured(1).toInt();
         const QString shortId = m.captured(2).trimmed();
         QString descriptive = m.captured(3).trimmed();
-        const int dashIdx = descriptive.indexOf(QStringLiteral(" - "));
+        const qsizetype dashIdx = descriptive.indexOf(QStringLiteral(" - "));
         if (dashIdx > 0 && dashIdx < 24) {
             descriptive = descriptive.mid(dashIdx + 3).trimmed();
         }
@@ -49,24 +51,47 @@ QString extractCardId(const QString &mpvDeviceName) {
     return {};
 }
 
-bool elementToZeroDb(snd_mixer_elem_t *elem) {
-    bool touched = false;
-    if (snd_mixer_selem_has_playback_volume(elem)) {
-        long minDb = 0, maxDb = 0;
-        if (snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0) {
-            snd_mixer_selem_set_playback_dB_all(elem, maxDb, 0);
-        } else {
-            long minV = 0, maxV = 0;
-            if (snd_mixer_selem_get_playback_volume_range(elem, &minV, &maxV) == 0) {
-                snd_mixer_selem_set_playback_volume_all(elem, maxV);
-            }
+int extractDeviceIndex(const QString &mpvDeviceName) {
+    const QString marker = QStringLiteral("DEV=");
+    const qsizetype start = mpvDeviceName.indexOf(marker);
+    if (start < 0) return -1;
+    const qsizetype valueStart = start + marker.size();
+    const qsizetype end = mpvDeviceName.indexOf(QLatin1Char(','), valueStart);
+    bool ok = false;
+    const int result = mpvDeviceName.mid(valueStart, end < 0 ? -1 : end - valueStart).toInt(&ok);
+    return ok ? result : -1;
+}
+
+snd_mixer_elem_t *primaryPlaybackElement(snd_mixer_t *mixer, int deviceIndex) {
+    snd_mixer_elem_t *fallback = nullptr;
+    snd_mixer_elem_t *indexedFallback = nullptr;
+    for (snd_mixer_elem_t *elem = snd_mixer_first_elem(mixer); elem;
+         elem = snd_mixer_elem_next(elem)) {
+        if (snd_mixer_elem_get_type(elem) != SND_MIXER_ELEM_SIMPLE ||
+            !snd_mixer_selem_is_active(elem) ||
+            !snd_mixer_selem_has_playback_volume(elem)) continue;
+        if (!fallback) fallback = elem;
+        if (deviceIndex >= 0 &&
+            static_cast<int>(snd_mixer_selem_get_index(elem)) == deviceIndex) {
+            if (!indexedFallback) indexedFallback = elem;
+            if (snd_mixer_selem_has_playback_switch(elem)) return elem;
         }
-        touched = true;
+        if (deviceIndex < 0 && snd_mixer_selem_has_playback_switch(elem)) return elem;
     }
-    if (snd_mixer_selem_has_playback_switch(elem)) {
-        snd_mixer_selem_set_playback_switch_all(elem, 1);
+    return indexedFallback ? indexedFallback : fallback;
+}
+
+snd_mixer_t *openCardMixer(const QString &cardId) {
+    snd_mixer_t *mixer = nullptr;
+    if (snd_mixer_open(&mixer, 0) < 0) return nullptr;
+    const QByteArray control = ("hw:CARD=" + cardId).toUtf8();
+    if (snd_mixer_attach(mixer, control.constData()) < 0 ||
+        snd_mixer_selem_register(mixer, nullptr, nullptr) < 0 ||
+        snd_mixer_load(mixer) < 0) {
+        snd_mixer_close(mixer);
+        return nullptr;
     }
-    return touched;
+    return mixer;
 }
 
 }
@@ -138,31 +163,76 @@ QVariantList list() {
     return out;
 }
 
-bool lockToZeroDb(const QString &mpvDeviceName) {
+bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted) {
     const QString cardId = extractCardId(mpvDeviceName);
     if (cardId.isEmpty()) return false;
+    snd_mixer_t *mixer = openCardMixer(cardId);
+    if (!mixer) return false;
 
-    snd_mixer_t *mixer = nullptr;
-    if (snd_mixer_open(&mixer, 0) < 0) return false;
-
-    const QByteArray ctlName = ("hw:CARD=" + cardId).toUtf8();
     bool ok = false;
-    do {
-        if (snd_mixer_attach(mixer, ctlName.constData()) < 0) break;
-        if (snd_mixer_selem_register(mixer, nullptr, nullptr) < 0) break;
-        if (snd_mixer_load(mixer) < 0) break;
-
-        int touched = 0;
-        for (snd_mixer_elem_t *elem = snd_mixer_first_elem(mixer);
-             elem;
-             elem = snd_mixer_elem_next(elem)) {
-            if (snd_mixer_elem_get_type(elem) != SND_MIXER_ELEM_SIMPLE) continue;
-            if (!snd_mixer_selem_is_active(elem)) continue;
-            if (elementToZeroDb(elem)) ++touched;
+    if (snd_mixer_elem_t *elem = primaryPlaybackElement(
+            mixer, extractDeviceIndex(mpvDeviceName))) {
+        long minRaw = 0, maxRaw = 0, raw = 0, db = 0;
+        if (snd_mixer_selem_get_playback_volume_range(elem, &minRaw, &maxRaw) == 0 &&
+            snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_FRONT_LEFT, &raw) == 0 &&
+            snd_mixer_selem_get_playback_dB(elem, SND_MIXER_SCHN_FRONT_LEFT, &db) == 0) {
+            volume = raw <= minRaw ? 0.0
+                                   : qBound(0.0, std::pow(10.0, static_cast<double>(db) / 6000.0), 1.0);
+            muted = false;
+            if (snd_mixer_selem_has_playback_switch(elem)) {
+                int enabled = 1;
+                if (snd_mixer_selem_get_playback_switch(
+                        elem, SND_MIXER_SCHN_FRONT_LEFT, &enabled) != 0) {
+                    snd_mixer_close(mixer);
+                    return false;
+                }
+                muted = !enabled;
+            }
+            ok = true;
         }
-        ok = touched > 0;
-    } while (false);
+    }
+    snd_mixer_close(mixer);
+    return ok;
+}
 
+bool setHardwareVolume(const QString &mpvDeviceName, qreal volume) {
+    const QString cardId = extractCardId(mpvDeviceName);
+    if (cardId.isEmpty()) return false;
+    snd_mixer_t *mixer = openCardMixer(cardId);
+    if (!mixer) return false;
+
+    bool ok = false;
+    if (snd_mixer_elem_t *elem = primaryPlaybackElement(
+            mixer, extractDeviceIndex(mpvDeviceName))) {
+        long minRaw = 0, maxRaw = 0, minDb = 0, maxDb = 0;
+        if (snd_mixer_selem_get_playback_volume_range(elem, &minRaw, &maxRaw) == 0 &&
+            snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0) {
+            volume = qBound(0.0, volume, 1.0);
+            if (volume <= 0.0) {
+                ok = snd_mixer_selem_set_playback_volume_all(elem, minRaw) == 0;
+            } else {
+                const long targetDb = qBound(minDb,
+                    static_cast<long>(std::lround(6000.0 * std::log10(volume))), maxDb);
+                ok = snd_mixer_selem_set_playback_dB_all(elem, targetDb, 0) == 0;
+            }
+        }
+    }
+    snd_mixer_close(mixer);
+    return ok;
+}
+
+bool setHardwareMuted(const QString &mpvDeviceName, bool muted) {
+    const QString cardId = extractCardId(mpvDeviceName);
+    if (cardId.isEmpty()) return false;
+    snd_mixer_t *mixer = openCardMixer(cardId);
+    if (!mixer) return false;
+
+    bool ok = false;
+    if (snd_mixer_elem_t *elem = primaryPlaybackElement(
+            mixer, extractDeviceIndex(mpvDeviceName))) {
+        if (snd_mixer_selem_has_playback_switch(elem))
+            ok = snd_mixer_selem_set_playback_switch_all(elem, muted ? 0 : 1) == 0;
+    }
     snd_mixer_close(mixer);
     return ok;
 }

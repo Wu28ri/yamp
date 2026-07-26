@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 Item {
-    id: artistDetailRoot
     anchors.fill: parent
 
     Component.onCompleted: playerBackend.filterByArtist(root.selectedArtist)

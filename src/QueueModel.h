@@ -24,11 +24,10 @@ public:
     Q_INVOKABLE void remove(int position);
 
     void insertTrack(const Track &track);
-    void appendTracks(const QList<Track> &tracks);
+    bool retainPaths(const QSet<QString> &paths);
     void resetAll();
     void notifyCurrentChanged();
 
 private:
     TrackQueue *m_queue;
 };
-

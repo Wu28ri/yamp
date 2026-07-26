@@ -50,7 +50,7 @@ void Settings::removeFolder(int index) {
     m_folders.removeAt(index);
     saveFolders();
     emit musicFoldersChanged();
-    emit requestRemoveFolder(folder);
+    emit requestRemoveFolder(folder, m_folders);
 }
 
 void Settings::clearDatabase()  { emit requestClearDatabase(); }
@@ -130,6 +130,12 @@ void Settings::setLastfmUsername(const QString &name) {
     store(m_lastfmUsername, name, "lastfmUsername", &Settings::lastfmUsernameChanged);
 }
 
+void Settings::setLastfmPendingQueue(const QByteArray &queue) {
+    if (m_lastfmPendingQueue == queue) return;
+    m_lastfmPendingQueue = queue;
+    m_settings.setValue(QStringLiteral("lastfmPendingQueue"), queue);
+}
+
 void Settings::loadSettings() {
     const auto loadPositiveInt = [this](const char *key, int fallback) {
         const int v = m_settings.value(QLatin1String(key), fallback).toInt();
@@ -157,6 +163,7 @@ void Settings::loadSettings() {
     m_lastfmEnabled       = m_settings.value("lastfmEnabled",       false).toBool();
     m_lastfmSessionKey    = m_settings.value("lastfmSessionKey",    QString()).toString();
     m_lastfmUsername      = m_settings.value("lastfmUsername",      QString()).toString();
+    m_lastfmPendingQueue  = m_settings.value("lastfmPendingQueue",  QByteArray()).toByteArray();
 }
 
 void Settings::saveFolders() {

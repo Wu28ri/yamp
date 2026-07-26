@@ -13,6 +13,7 @@
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QThread>
 #include <QVariant>
 
 #include <taglib/aiffproperties.h>
@@ -27,6 +28,8 @@
 #include <taglib/tpropertymap.h>
 #include <taglib/vorbisproperties.h>
 #include <taglib/wavproperties.h>
+
+#include <utility>
 
 namespace {
 
@@ -184,12 +187,12 @@ int pruneOrphanArtists(QSqlDatabase &db) {
     return q.numRowsAffected();
 }
 
-void linkTrackToArtistsPrepared(qint64 trackId,
+bool linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
                                 QSqlQuery &upsertArtist,
                                 QSqlQuery &findArtistId,
                                 QSqlQuery &linkTrackArtist) {
-    if (trackId <= 0) return;
+    if (trackId <= 0) return false;
     const QStringList names = splitArtists(rawArtists);
 
     for (const QString &display : names) {
@@ -198,17 +201,18 @@ void linkTrackToArtistsPrepared(qint64 trackId,
 
         upsertArtist.bindValue(0, display);
         upsertArtist.bindValue(1, norm);
-        if (!upsertArtist.exec()) continue;
+        if (!upsertArtist.exec()) return false;
 
         findArtistId.bindValue(0, norm);
-        if (!findArtistId.exec() || !findArtistId.next()) continue;
+        if (!findArtistId.exec() || !findArtistId.next()) return false;
         const qint64 artistId = findArtistId.value(0).toLongLong();
         findArtistId.finish();
 
         linkTrackArtist.bindValue(0, trackId);
         linkTrackArtist.bindValue(1, artistId);
-        linkTrackArtist.exec();
+        if (!linkTrackArtist.exec()) return false;
     }
+    return true;
 }
 
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
@@ -304,7 +308,7 @@ LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
 void LibraryScanner::run() {
     if (m_rootPath.isEmpty()) {
         emit countDetermined(0);
-        emit finished({});
+        emit finished({}, true);
         return;
     }
 
@@ -314,12 +318,18 @@ void LibraryScanner::run() {
                         AudioFormats::nameFilters(),
                         QDir::Files,
                         QDirIterator::Subdirectories);
-        while (it.hasNext()) allFiles.append(it.next());
+        while (it.hasNext()) {
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                emit finished({}, false);
+                return;
+            }
+            allFiles.append(it.next());
+        }
     }
     emit countDetermined(allFiles.size());
 
     if (allFiles.isEmpty()) {
-        emit finished({});
+        emit finished({}, true);
         return;
     }
 
@@ -330,52 +340,60 @@ void LibraryScanner::run() {
     QSqlDatabase db;
     const QString connName = LibraryDb::openScopedConnection(QStringLiteral("scan"), db);
     if (connName.isEmpty()) {
-        emit finished({});
+        emit finished({}, false);
         return;
     }
 
     QList<Track> newTracks;
-    {
-        ScannerHelpers::TrackInserter inserter(db);
-
-        db.transaction();
-
+    bool dbFailed = false;
+    int processed = 0;
+    while (processed < allFiles.size() &&
+           !QThread::currentThread()->isInterruptionRequested()) {
+        struct PreparedTrack { Track track; qint64 fileSize = 0; };
+        QList<PreparedTrack> prepared;
         QElapsedTimer batchTimer;
         batchTimer.start();
-        int batchInTx = 0;
-        int processed = 0;
-        const int total = allFiles.size();
-
-        for (const QString &filePath : allFiles) {
-            Track t;
-            qint64 fileSize = 0;
-            if (!MusicLibrary::readTrackFromFile(filePath, t, fileSize)) {
-                ++processed;
-                continue;
+        while (processed < allFiles.size() && prepared.size() < kBatchSize) {
+            if (QThread::currentThread()->isInterruptionRequested()) break;
+            PreparedTrack item;
+            if (MusicLibrary::readTrackFromFile(allFiles.at(processed),
+                                                item.track, item.fileSize)) {
+                prepared.append(item);
             }
-
-            if (inserter.insert(t, fileSize)) newTracks.append(t);
-
             ++processed;
-            ++batchInTx;
-            if (processed % kProgressEveryN == 0 || processed == total) {
-                emit progress(processed, total);
-            }
+            if (processed % kProgressEveryN == 0 || processed == allFiles.size())
+                emit progress(processed, allFiles.size());
+            if (batchTimer.elapsed() >= kBatchMaxMs) break;
+        }
+        if (QThread::currentThread()->isInterruptionRequested()) break;
+        if (prepared.isEmpty()) continue;
 
-            if (batchInTx >= kBatchSize || batchTimer.elapsed() >= kBatchMaxMs) {
-                db.commit();
-                emit batchReady();
-                db.transaction();
-                batchInTx = 0;
-                batchTimer.restart();
+        QSqlQuery begin(db);
+        if (!begin.exec(QStringLiteral("BEGIN IMMEDIATE"))) {
+            dbFailed = true;
+            break;
+        }
+        ScannerHelpers::TrackInserter inserter(db);
+        for (const PreparedTrack &item : std::as_const(prepared)) {
+            if (inserter.insert(item.track, item.fileSize)) newTracks.append(item.track);
+            if (inserter.hasError()) {
+                dbFailed = true;
+                break;
             }
         }
-
-        db.commit();
+        if (dbFailed) {
+            db.rollback();
+            break;
+        }
+        if (!db.commit()) {
+            db.rollback();
+            dbFailed = true;
+            break;
+        }
         emit batchReady();
     }
     LibraryDb::closeScopedConnection(connName, db);
 
-    emit finished(newTracks);
+    const bool success = !QThread::currentThread()->isInterruptionRequested() && !dbFailed;
+    emit finished(success ? newTracks : QList<Track>{}, success);
 }
-

@@ -8,7 +8,9 @@
 #include "TrackQueue.h"
 
 #include <QAbstractItemModel>
+#include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <QVariantMap>
@@ -38,12 +40,8 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(qint64  position  READ position  WRITE setPosition NOTIFY positionChanged)
     Q_PROPERTY(qint64  duration  READ duration  NOTIFY durationChanged)
 
-    Q_PROPERTY(bool    bitPerfect           READ bitPerfect           WRITE setBitPerfect    NOTIFY bitPerfectChanged)
-    Q_PROPERTY(QString audioDevice          READ audioDevice          WRITE setAudioDevice   NOTIFY audioDeviceChanged)
-    Q_PROPERTY(bool    softwareVolume       READ softwareVolume       WRITE setSoftwareVolume NOTIFY softwareVolumeChanged)
     Q_PROPERTY(bool    volumeControllable   READ volumeControllable   NOTIFY volumeControllableChanged)
 
-    Q_PROPERTY(int currentIndex         READ currentIndex         NOTIFY currentIndexChanged)
     Q_PROPERTY(int currentQueuePosition READ currentQueuePosition NOTIFY currentQueuePositionChanged)
 
     Q_PROPERTY(QAbstractItemModel* trackModel  READ trackModel  CONSTANT)
@@ -75,13 +73,15 @@ public:
     bool   isPlaying() const { return m_hasFile && !m_paused; }
     qint64 position() const;
     qint64 duration() const { return m_durationMs; }
+    bool   hasFile() const { return m_hasFile; }
 
     QString audioDevice()        const { return m_audioDevice; }
     bool    softwareVolume()     const { return m_softwareVolume; }
     bool    bitPerfect()         const { return m_bitPerfectEnabled; }
-    bool    volumeControllable() const { return !m_bitPerfectEnabled || m_softwareVolume; }
+    bool    volumeControllable() const {
+        return !m_bitPerfectEnabled || m_softwareVolume || m_hardwareVolumeAvailable;
+    }
 
-    int currentIndex()         const { return m_queue.currentGlobalId(); }
     int currentQueuePosition() const { return m_queue.currentPosition(); }
 
     QAbstractItemModel* trackModel()  const { return m_trackModel; }
@@ -108,10 +108,10 @@ public:
     void setReplayGainClipProtect(bool enabled);
 
     Q_INVOKABLE void togglePlayback();
-    Q_INVOKABLE void play();
-    Q_INVOKABLE void pause();
-    Q_INVOKABLE void stop();
-    Q_INVOKABLE void scanFolder(const QUrl &folderUrl);
+    void play();
+    void pause();
+    void stop();
+    void scanFolder(const QUrl &folderUrl);
     Q_INVOKABLE void playMusic(const QString &filePath);
     Q_INVOKABLE void playFromQueue(int position);
     Q_INVOKABLE void playNext();
@@ -127,10 +127,9 @@ public:
     Q_INVOKABLE void openInFileManager(const QString &path);
     Q_INVOKABLE QVariantMap trackContextForPath(const QString &path);
     Q_INVOKABLE QVariantList listHardwareDevices();
-    Q_INVOKABLE bool         lockDeviceToZeroDb();
 
     void clearLibrary();
-    void removeFolder(const QString &folder);
+    void removeFolder(const QString &folder, const QStringList &remainingFolders = {});
     void syncWithFolders(const QStringList &folders);
 
 signals:
@@ -148,12 +147,23 @@ signals:
     void softwareVolumeChanged();
     void volumeControllableChanged();
     void bitPerfectChanged();
+    void trackStarted(const Track &track);
 
 private:
     bool usingSoftwareVolume() const { return m_bitPerfectEnabled && m_softwareVolume; }
+    bool usingHardwareVolume() const {
+        return m_bitPerfectEnabled && !m_softwareVolume && m_hardwareVolumeAvailable;
+    }
     void loadTrack(const Track &track);
+    void loadTrackIntoMpv(const Track &track);
+    void requestExclusiveForPlayback();
+    void releaseExclusiveDevice();
+    void continuePendingPlayback();
     void rebuildQueueFromCurrentFilter();
     void refreshAllModels();
+    void pruneQueueToLibrary();
+    void clearLibraryDatabase();
+    void removeFolderFromDatabase(const QString &folder);
     void resetPlaybackState();
     void applyFilter();
     QString combinedFilter() const;
@@ -162,6 +172,7 @@ private:
     void applyReplayGainSettings();
     void applyAudioDeviceToMpv();
     void applyMpvVolume();
+    void refreshHardwareVolume();
     void initMpv();
     void shutdownMpv();
     static void mpvWakeupCallback(void *ctx);
@@ -171,10 +182,14 @@ private:
 
     mpv_handle *m_mpv = nullptr;
     QTimer     *m_positionPollTimer = nullptr;
+    QTimer     *m_hardwareVolumeTimer = nullptr;
     bool        m_paused    = true;
     bool        m_hasFile   = false;
     qint64      m_lastPositionMs = -1;
     qint64      m_durationMs     = 0;
+    QHash<qint64, Track> m_mpvEntryTracks;
+    qint64 m_loadingMpvEntryId = -1;
+    qint64 m_currentMpvEntryId = -1;
 
     PaVolumeController *m_paVolume        = nullptr;
     TrackModel         *m_trackModel      = nullptr;
@@ -203,6 +218,9 @@ private:
     Qt::SortOrder m_queueBuiltFromOrder = Qt::AscendingOrder;
 
     QTimer *m_scanRefreshTimer = nullptr;
+    bool m_clearPending = false;
+    QStringList m_desiredFolders;
+    QSet<QString> m_deferredScanFolders;
 
     bool    m_rgEnabled      = false;
     int     m_rgMode         = ReplayGainMode::RgModeTrack;
@@ -213,5 +231,15 @@ private:
     bool    m_softwareVolume = false;
     qreal   m_swVolume       = 1.0;
     bool    m_swMuted        = false;
+    bool    m_hardwareVolumeAvailable = false;
+    qreal   m_hardwareVolume = 1.0;
+    bool    m_hardwareMuted = false;
+    QString m_pendingAudioDevice;
+    bool    m_reenableBitPerfectAfterRestore = false;
+    bool    m_audioExclusiveTransition = false;
+    bool    m_audioExclusiveHeld = false;
+    int     m_audioRestoreRetries = 0;
+    bool    m_resumeAfterExclusive = false;
+    Track   m_pendingExclusiveTrack;
     Track   m_currentTrack;
 };

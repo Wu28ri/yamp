@@ -7,6 +7,16 @@
 
 namespace LibraryDb {
 
+NonBlockingWrite::NonBlockingWrite(const QSqlDatabase &db) : m_db(db) {
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("PRAGMA busy_timeout=0"));
+}
+
+NonBlockingWrite::~NonBlockingWrite() {
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
+}
+
 void applyConnectionPragmas(QSqlDatabase &db) {
     QSqlQuery pragma(db);
     pragma.exec(QStringLiteral("PRAGMA synchronous=NORMAL"));

@@ -4,18 +4,15 @@
 
 #include <QHash>
 #include <QList>
+#include <QSet>
 #include <vector>
 
 class TrackQueue {
 public:
-    int  currentPosition() const { return m_currentIndex; }
+    int  currentPosition() const { return m_currentDetached ? -1 : m_currentIndex; }
+    int  nextInsertionPosition() const;
     int  count()           const { return static_cast<int>(m_playOrder.size()); }
     bool isShuffle()       const { return m_shuffle; }
-
-    int  currentGlobalId() const {
-        if (m_currentIndex < 0 || m_currentIndex >= static_cast<int>(m_playOrder.size())) return -1;
-        return m_playOrder[m_currentIndex];
-    }
 
     bool containsPath(const QString &path) const;
     int  positionOfPath(const QString &path) const;
@@ -26,9 +23,9 @@ public:
     Track current() const;
 
     void setTracks(const QList<Track> &tracks);
-    void addTrack(const Track &track);
     void insertNext(const Track &track);
     void removeTrack(int position);
+    void retainPaths(const QSet<QString> &paths);
     void moveTrack(int from, int to);
 
     void setShuffle(bool enabled);
@@ -46,6 +43,7 @@ private:
     std::vector<int> m_playOrder;
     QHash<QString, int> m_pathToGlobalId;
     int m_currentIndex = -1;
+    int m_detachedPosition = -1;
+    bool m_currentDetached = false;
     bool m_shuffle = false;
 };
-

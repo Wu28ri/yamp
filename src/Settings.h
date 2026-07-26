@@ -1,4 +1,5 @@
 #pragma once
+#include <QByteArray>
 #include <QObject>
 #include <QSettings>
 #include <QStringList>
@@ -7,8 +8,6 @@
 class Settings : public QObject {
     Q_OBJECT
     Q_PROPERTY(QStringList musicFolders READ musicFolders NOTIFY musicFoldersChanged)
-    Q_PROPERTY(qreal   volume     READ volume     WRITE setVolume     NOTIFY volumeChanged)
-    Q_PROPERTY(bool    shuffle    READ shuffle    WRITE setShuffle    NOTIFY shuffleChanged)
     Q_PROPERTY(int     sidebarWidth      READ sidebarWidth      WRITE setSidebarWidth      NOTIFY sidebarWidthChanged)
     Q_PROPERTY(int     queuePanelWidth   READ queuePanelWidth   WRITE setQueuePanelWidth   NOTIFY queuePanelWidthChanged)
     Q_PROPERTY(bool    queuePanelOpen    READ queuePanelOpen    WRITE setQueuePanelOpen    NOTIFY queuePanelOpenChanged)
@@ -22,9 +21,6 @@ class Settings : public QObject {
     Q_PROPERTY(int     replayGainMode    READ replayGainMode    WRITE setReplayGainMode    NOTIFY replayGainModeChanged)
     Q_PROPERTY(qreal   replayGainPreampDb    READ replayGainPreampDb    WRITE setReplayGainPreampDb    NOTIFY replayGainPreampDbChanged)
     Q_PROPERTY(bool    replayGainClipProtect READ replayGainClipProtect WRITE setReplayGainClipProtect NOTIFY replayGainClipProtectChanged)
-    Q_PROPERTY(bool    lastfmEnabled     READ lastfmEnabled    WRITE setLastfmEnabled    NOTIFY lastfmEnabledChanged)
-    Q_PROPERTY(QString lastfmSessionKey  READ lastfmSessionKey WRITE setLastfmSessionKey NOTIFY lastfmSessionKeyChanged)
-    Q_PROPERTY(QString lastfmUsername    READ lastfmUsername   WRITE setLastfmUsername   NOTIFY lastfmUsernameChanged)
 
 public:
     enum ReplayGainMode { RgModeTrack = 0, RgModeAlbum = 1 };
@@ -55,6 +51,7 @@ public:
     bool    lastfmEnabled()         const { return m_lastfmEnabled; }
     QString lastfmSessionKey()      const { return m_lastfmSessionKey; }
     QString lastfmUsername()        const { return m_lastfmUsername; }
+    QByteArray lastfmPendingQueue() const { return m_lastfmPendingQueue; }
 
     void setVolume(qreal v);
     void setShuffle(bool s);
@@ -74,6 +71,7 @@ public:
     void setLastfmEnabled(bool enabled);
     void setLastfmSessionKey(const QString &key);
     void setLastfmUsername(const QString &name);
+    void setLastfmPendingQueue(const QByteArray &queue);
 
 public slots:
     void addFolder(const QUrl &folderUrl);
@@ -85,7 +83,7 @@ signals:
     void musicFoldersChanged();
     void requestClearDatabase();
     void requestRescanDatabase(const QStringList &folders);
-    void requestRemoveFolder(const QString &folder);
+    void requestRemoveFolder(const QString &folder, const QStringList &remainingFolders);
     void volumeChanged();
     void shuffleChanged();
     void sidebarWidthChanged();
@@ -130,6 +128,7 @@ private:
     bool    m_lastfmEnabled       = false;
     QString m_lastfmSessionKey;
     QString m_lastfmUsername;
+    QByteArray m_lastfmPendingQueue;
 
     void loadSettings();
     void saveFolders();

@@ -9,9 +9,15 @@ ScanSession::ScanSession(const QString &path, QObject *parent)
 
 ScanSession::~ScanSession() {
     if (m_thread && m_thread->isRunning()) {
+        m_thread->requestInterruption();
         m_thread->quit();
         m_thread->wait();
     }
+}
+
+void ScanSession::cancel() {
+    m_cancelled = true;
+    if (m_thread) m_thread->requestInterruption();
 }
 
 void ScanSession::start() {
@@ -34,8 +40,10 @@ void ScanSession::start() {
 
     connect(m_scanner, &LibraryScanner::batchReady, this, &ScanSession::batchReady);
 
-    connect(m_scanner, &LibraryScanner::finished, this, [this](const QList<Track> &newTracks) {
-        emit finished(m_rootPath, newTracks);
+    connect(m_scanner, &LibraryScanner::finished, this,
+            [this](const QList<Track> &newTracks, bool success) {
+        m_failed = !success && !m_cancelled;
+        emit finished(m_rootPath, newTracks, success);
         m_thread->quit();
     });
     connect(m_thread, &QThread::finished, m_scanner, &QObject::deleteLater);
@@ -48,4 +56,3 @@ void ScanSession::start() {
 
     m_thread->start();
 }
-

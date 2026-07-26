@@ -24,7 +24,7 @@ QHash<int, QByteArray> ArtistModel::roleNames() const {
     };
 }
 
-void ArtistModel::refresh() {
+void ArtistModel::reload() {
     QString where;
     if (!m_search.isEmpty()) {
         const QString pattern = SqlUtils::containsPattern(m_search.toLower());
@@ -44,5 +44,5 @@ void ArtistModel::refresh() {
 void ArtistModel::setSearch(const QString &query) {
     if (m_search == query) return;
     m_search = query;
-    refresh();
+    reload();
 }

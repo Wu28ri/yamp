@@ -19,6 +19,7 @@ QVariant QueueModel::data(const QModelIndex &index, int role) const {
     case ArtistRole:    return t.artist;
     case PathRole:      return t.path;
     case IsCurrentRole: return index.row() == m_queue->currentPosition();
+    default:            break;
     }
     return {};
 }
@@ -52,9 +53,7 @@ void QueueModel::remove(int position) {
 }
 
 void QueueModel::insertTrack(const Track &track) {
-    const int pos = m_queue->currentPosition();
-    const int insertIdx =
-        (pos >= 0 && pos < m_queue->count()) ? pos + 1 : m_queue->count();
+    const int insertIdx = m_queue->nextInsertionPosition();
 
     beginInsertRows({}, insertIdx, insertIdx);
     m_queue->insertNext(track);
@@ -62,14 +61,21 @@ void QueueModel::insertTrack(const Track &track) {
     notifyCurrentChanged();
 }
 
-void QueueModel::appendTracks(const QList<Track> &tracks) {
-    if (tracks.isEmpty()) return;
-    const int first = m_queue->count();
-    const int last  = first + static_cast<int>(tracks.size()) - 1;
-    beginInsertRows({}, first, last);
-    for (const Track &t : tracks) m_queue->addTrack(t);
-    endInsertRows();
-    notifyCurrentChanged();
+bool QueueModel::retainPaths(const QSet<QString> &paths) {
+    bool hasMissingPath = false;
+    for (int globalId : m_queue->playOrder()) {
+        if (globalId < 0 || globalId >= m_queue->tracks().size() ||
+            !paths.contains(m_queue->tracks().at(globalId).path)) {
+            hasMissingPath = true;
+            break;
+        }
+    }
+    if (!hasMissingPath) return false;
+
+    beginResetModel();
+    m_queue->retainPaths(paths);
+    endResetModel();
+    return true;
 }
 
 void QueueModel::resetAll() {
@@ -81,4 +87,3 @@ void QueueModel::notifyCurrentChanged() {
     if (rowCount() == 0) return;
     emit dataChanged(index(0), index(rowCount() - 1), {IsCurrentRole});
 }
-

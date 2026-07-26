@@ -2,6 +2,7 @@
 
 #include "AlsaDevicesService.h"
 #include "CoverCacheService.h"
+#include "LibraryDb.h"
 #include "LibraryWatcher.h"
 #include "MprisAdaptor.h"
 #include "MusicLibrary.h"
@@ -19,6 +20,7 @@
 
 #include <clocale>
 #include <cstring>
+#include <utility>
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusMessage>
@@ -71,10 +73,10 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_trackModel->select();
 
     m_albumModel = new AlbumModel(this);
-    m_albumModel->refresh();
+    m_albumModel->reload();
 
     m_artistModel = new ArtistModel(this);
-    m_artistModel->refresh();
+    m_artistModel->reload();
 
     m_queueModel = new QueueModel(&m_queue, this);
 
@@ -92,10 +94,10 @@ PlayerBackend::PlayerBackend(QObject *parent)
     connect(m_scanCoordinator, &ScanCoordinator::progressChanged,
             this, &PlayerBackend::scanProgressChanged);
     connect(m_scanCoordinator, &ScanCoordinator::newTracksAvailable, this,
-            [this](const QList<Track> &newTracks) {
+            [this](const QList<Track> &) {
                 m_scanRefreshTimer->stop();
-                m_queueModel->appendTracks(newTracks);
                 refreshAllModels();
+                if (m_queue.count() == 0) rebuildQueueFromCurrentFilter();
             });
     connect(m_scanCoordinator, &ScanCoordinator::batchReady, this, [this]() {
         if (!m_scanRefreshTimer->isActive()) m_scanRefreshTimer->start();
@@ -117,6 +119,107 @@ PlayerBackend::PlayerBackend(QObject *parent)
             this, [this]() { if (!m_bitPerfectEnabled) emit volumeChanged(); });
     connect(m_paVolume, &PaVolumeController::mutedChanged,
             this, [this]() { if (!m_bitPerfectEnabled) emit mutedChanged(); });
+    connect(m_paVolume, &PaVolumeController::hardwareDeviceExclusiveChanged,
+            this, [this](bool exclusive, bool success) {
+        if (!m_audioExclusiveTransition) return;
+        if (exclusive && !success) {
+            if (m_softwareVolume && m_paVolume) {
+                m_paVolume->setVolume(m_swVolume);
+                m_paVolume->setMuted(m_swMuted);
+            }
+            m_bitPerfectEnabled = false;
+            m_audioExclusiveHeld = false;
+            applyAudioDeviceToMpv();
+            applyMpvVolume();
+            applyReplayGainSettings();
+            emit bitPerfectChanged();
+            emit volumeControllableChanged();
+            emit volumeChanged();
+            emit mutedChanged();
+            if (m_paVolume)
+                m_paVolume->setHardwareDeviceExclusive(m_audioDevice, false);
+            return;
+        }
+        if (exclusive) {
+            m_audioExclusiveHeld = true;
+            m_audioExclusiveTransition = false;
+            if (!m_pendingAudioDevice.isEmpty()) {
+                m_reenableBitPerfectAfterRestore = true;
+                releaseExclusiveDevice();
+                return;
+            }
+            if (!m_pendingExclusiveTrack.isValid() && !m_resumeAfterExclusive &&
+                (!m_hasFile || m_paused)) {
+                releaseExclusiveDevice();
+                return;
+            }
+            QTimer::singleShot(150, this, [this]() {
+                if (m_bitPerfectEnabled && m_audioExclusiveHeld &&
+                    !m_audioExclusiveTransition) {
+                    applyAudioDeviceToMpv();
+                    continuePendingPlayback();
+                    if (!m_softwareVolume) m_hardwareVolumeTimer->start();
+                }
+            });
+            return;
+        }
+        if (!success) {
+            if (++m_audioRestoreRetries > 8) {
+                m_audioExclusiveHeld = false;
+                m_audioExclusiveTransition = false;
+                if (m_reenableBitPerfectAfterRestore) {
+                    m_reenableBitPerfectAfterRestore = false;
+                    m_audioDevice = std::exchange(m_pendingAudioDevice, {});
+                    refreshHardwareVolume();
+                    emit audioDeviceChanged();
+                }
+                continuePendingPlayback();
+                return;
+            }
+            QTimer::singleShot(250, this, [this]() {
+                if (m_audioExclusiveTransition && m_paVolume)
+                    m_paVolume->setHardwareDeviceExclusive(m_audioDevice, false);
+            });
+            return;
+        }
+
+        m_audioExclusiveHeld = false;
+        m_audioExclusiveTransition = false;
+        m_audioRestoreRetries = 0;
+        if (m_reenableBitPerfectAfterRestore) {
+            m_reenableBitPerfectAfterRestore = false;
+            m_audioDevice = std::exchange(m_pendingAudioDevice, {});
+            refreshHardwareVolume();
+            emit audioDeviceChanged();
+        }
+        if (m_bitPerfectEnabled &&
+            (m_pendingExclusiveTrack.isValid() || m_resumeAfterExclusive ||
+             (m_hasFile && !m_paused))) {
+            requestExclusiveForPlayback();
+        } else {
+            if (m_hardwareVolumeAvailable && !m_softwareVolume && m_paVolume) {
+                const qreal volume = m_hardwareVolume;
+                const bool muted = m_hardwareMuted;
+                const QString device = m_audioDevice;
+                QTimer::singleShot(50, this, [this, device, volume, muted]() {
+                    if (m_paVolume)
+                        m_paVolume->setHardwareDeviceVolume(device, volume, muted);
+                });
+                QTimer::singleShot(250, this, [this]() {
+                    if (m_bitPerfectEnabled && !m_softwareVolume) {
+                        refreshHardwareVolume();
+                        m_hardwareVolumeTimer->start();
+                    }
+                });
+            }
+            if (!m_bitPerfectEnabled) continuePendingPlayback();
+        }
+    });
+
+    m_hardwareVolumeTimer = new QTimer(this);
+    m_hardwareVolumeTimer->setInterval(500);
+    connect(m_hardwareVolumeTimer, &QTimer::timeout,
+            this, &PlayerBackend::refreshHardwareVolume);
 
     setupMpris();
 
@@ -214,6 +317,18 @@ void PlayerBackend::processMpvEvents() {
         case MPV_EVENT_END_FILE:
             handleMpvEndFile(static_cast<mpv_event_end_file*>(e->data));
             break;
+        case MPV_EVENT_START_FILE: {
+            auto *start = static_cast<mpv_event_start_file*>(e->data);
+            m_loadingMpvEntryId = start ? start->playlist_entry_id : -1;
+            break;
+        }
+        case MPV_EVENT_FILE_LOADED: {
+            const auto it = m_mpvEntryTracks.constFind(m_loadingMpvEntryId);
+            if (m_loadingMpvEntryId == m_currentMpvEntryId &&
+                it != m_mpvEntryTracks.constEnd() && it->path == m_currentPath)
+                emit trackStarted(it.value());
+            break;
+        }
         default:
             break;
         }
@@ -229,6 +344,7 @@ void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
             m_paused = newPaused;
             if (m_paused) {
                 m_positionPollTimer->stop();
+                if (m_bitPerfectEnabled) releaseExclusiveDevice();
             } else if (m_hasFile) {
                 m_positionPollTimer->start();
             }
@@ -266,11 +382,18 @@ void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
 
 void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
     if (!ev) return;
+    m_mpvEntryTracks.remove(ev->playlist_entry_id);
+    if (m_loadingMpvEntryId == ev->playlist_entry_id) m_loadingMpvEntryId = -1;
+    if (ev->playlist_entry_id != m_currentMpvEntryId) return;
+    m_currentMpvEntryId = -1;
     switch (ev->reason) {
     case MPV_END_FILE_REASON_EOF:
         playNext();
         break;
     case MPV_END_FILE_REASON_ERROR:
+        qWarning("[mpv] playback failed: %s", mpv_error_string(ev->error));
+        if (m_bitPerfectEnabled && ev->error == MPV_ERROR_AO_INIT_FAILED)
+            setBitPerfect(false);
         resetPlaybackState();
         break;
     default:
@@ -302,6 +425,10 @@ void PlayerBackend::setMuted(bool muted) {
         emit mutedChanged();
         return;
     }
+    if (usingHardwareVolume()) {
+        if (AlsaDevices::setHardwareMuted(m_audioDevice, muted)) refreshHardwareVolume();
+        return;
+    }
     if (m_bitPerfectEnabled) return;
     m_paVolume->setMuted(muted);
 }
@@ -315,29 +442,75 @@ void PlayerBackend::setVolume(qreal v) {
         emit volumeChanged();
         return;
     }
+    if (usingHardwareVolume()) {
+        if (AlsaDevices::setHardwareVolume(m_audioDevice, v)) refreshHardwareVolume();
+        return;
+    }
     if (m_bitPerfectEnabled) return;
     m_paVolume->setVolume(v);
 }
 
 bool PlayerBackend::isMuted() const {
-    if (m_bitPerfectEnabled) return m_softwareVolume ? m_swMuted : false;
+    if (usingSoftwareVolume()) return m_swMuted;
+    if (usingHardwareVolume()) return m_hardwareMuted;
+    if (m_bitPerfectEnabled) return false;
     return m_paVolume ? m_paVolume->isMuted() : false;
 }
 
 qreal PlayerBackend::volume() const {
-    if (m_bitPerfectEnabled) return m_softwareVolume ? m_swVolume : 1.0;
+    if (usingSoftwareVolume()) return m_swVolume;
+    if (usingHardwareVolume()) return m_hardwareVolume;
+    if (m_bitPerfectEnabled) return 1.0;
     return m_paVolume ? m_paVolume->volume() : m_swVolume;
 }
 
 void PlayerBackend::setBitPerfect(bool enabled) {
+    if (m_audioExclusiveTransition) {
+        emit bitPerfectChanged();
+        return;
+    }
     if (m_bitPerfectEnabled == enabled) return;
+    if (enabled) {
+        const QVariantList devices = AlsaDevices::list();
+        if (devices.isEmpty()) {
+            qWarning("[mpv] bit-perfect output requires a hardware ALSA device");
+            emit bitPerfectChanged();
+            return;
+        }
+        bool deviceAvailable = false;
+        for (const QVariant &device : devices) {
+            if (device.toMap().value(QStringLiteral("name")).toString() == m_audioDevice) {
+                deviceAvailable = true;
+                break;
+            }
+        }
+        if (!deviceAvailable) {
+            m_audioDevice = devices.constFirst().toMap().value(QStringLiteral("name")).toString();
+            emit audioDeviceChanged();
+        }
+    }
+    if (!enabled && m_softwareVolume && m_paVolume) {
+        m_paVolume->setVolume(m_swVolume);
+        m_paVolume->setMuted(m_swMuted);
+    }
     m_bitPerfectEnabled = enabled;
     if (enabled && m_paVolume) {
         m_swVolume = m_paVolume->volume();
         m_swMuted  = m_paVolume->isMuted();
     }
-    applyAudioDeviceToMpv();
+    if (enabled) {
+        refreshHardwareVolume();
+        if (!m_softwareVolume) m_hardwareVolumeTimer->start();
+    } else {
+        m_hardwareVolumeTimer->stop();
+    }
+    if (enabled && m_hasFile && !m_paused) requestExclusiveForPlayback();
+    if (!enabled && m_audioExclusiveHeld) releaseExclusiveDevice();
+    if (!enabled && !m_audioExclusiveHeld) applyAudioDeviceToMpv();
+    if (m_mpv)
+        mpv_set_property_string(m_mpv, "gapless-audio", enabled ? "no" : "weak");
     applyMpvVolume();
+    applyReplayGainSettings();
     emit bitPerfectChanged();
     emit volumeControllableChanged();
     emit volumeChanged();
@@ -346,20 +519,39 @@ void PlayerBackend::setBitPerfect(bool enabled) {
 
 void PlayerBackend::setAudioDevice(const QString &device) {
     const QString normalized = device.isEmpty() ? QStringLiteral("auto") : device;
+    if (m_audioExclusiveTransition) {
+        m_pendingAudioDevice = normalized;
+        m_reenableBitPerfectAfterRestore = true;
+        return;
+    }
     if (m_audioDevice == normalized) return;
+    if (m_bitPerfectEnabled && m_audioExclusiveHeld) {
+        m_pendingAudioDevice = normalized;
+        m_reenableBitPerfectAfterRestore = true;
+        releaseExclusiveDevice();
+        return;
+    }
     m_audioDevice = normalized;
-    if (m_bitPerfectEnabled) applyAudioDeviceToMpv();
+    refreshHardwareVolume();
     emit audioDeviceChanged();
 }
 
 void PlayerBackend::setSoftwareVolume(bool enabled) {
     if (m_softwareVolume == enabled) return;
     m_softwareVolume = enabled;
-    if (enabled && m_paVolume && !m_bitPerfectEnabled) {
+    if (enabled && m_paVolume) {
         m_swVolume = m_paVolume->volume();
         m_swMuted  = m_paVolume->isMuted();
     }
     applyMpvVolume();
+    if (m_bitPerfectEnabled) {
+        if (enabled) {
+            m_hardwareVolumeTimer->stop();
+        } else {
+            refreshHardwareVolume();
+            m_hardwareVolumeTimer->start();
+        }
+    }
     emit softwareVolumeChanged();
     emit volumeControllableChanged();
     emit volumeChanged();
@@ -368,10 +560,64 @@ void PlayerBackend::setSoftwareVolume(bool enabled) {
 
 void PlayerBackend::applyAudioDeviceToMpv() {
     if (!m_mpv) return;
-    const QString eff = (m_bitPerfectEnabled && m_audioDevice != QStringLiteral("auto"))
+    const QString eff = (m_bitPerfectEnabled && m_audioExclusiveHeld &&
+                         m_audioDevice != QStringLiteral("auto"))
         ? m_audioDevice
         : QStringLiteral("auto");
-    mpv_set_property_string(m_mpv, "audio-device", eff.toUtf8().constData());
+    const QByteArray device = eff.toUtf8();
+    const int result = mpv_set_property_string(m_mpv, "audio-device", device.constData());
+    if (result < 0) {
+        qWarning("[mpv] could not select audio device %s: %s",
+                 device.constData(), mpv_error_string(result));
+    }
+}
+
+void PlayerBackend::requestExclusiveForPlayback() {
+    if (!m_bitPerfectEnabled || m_audioExclusiveHeld || m_audioExclusiveTransition)
+        return;
+    m_audioExclusiveTransition = true;
+    m_hardwareVolumeTimer->stop();
+    if (m_paVolume) m_paVolume->setHardwareDeviceExclusive(m_audioDevice, true);
+}
+
+void PlayerBackend::releaseExclusiveDevice() {
+    if (!m_audioExclusiveHeld || m_audioExclusiveTransition) return;
+    m_audioExclusiveHeld = false;
+    m_hardwareVolumeTimer->stop();
+    m_audioExclusiveTransition = true;
+    m_audioRestoreRetries = 0;
+    applyAudioDeviceToMpv();
+    if (m_paVolume) m_paVolume->setHardwareDeviceExclusive(m_audioDevice, false);
+}
+
+void PlayerBackend::continuePendingPlayback() {
+    const Track pending = std::exchange(m_pendingExclusiveTrack, {});
+    const bool resume = std::exchange(m_resumeAfterExclusive, false);
+    if (pending.isValid()) {
+        loadTrackIntoMpv(pending);
+    } else if (resume && m_mpv && m_hasFile) {
+        int paused = 0;
+        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
+    }
+}
+
+void PlayerBackend::refreshHardwareVolume() {
+    if (m_audioExclusiveTransition) return;
+    qreal volume = 1.0;
+    bool muted = false;
+    const bool available = AlsaDevices::hardwareVolume(m_audioDevice, volume, muted);
+    const bool availabilityChanged = available != m_hardwareVolumeAvailable;
+    const bool volumeChanged = available &&
+        !qFuzzyCompare(m_hardwareVolume + 1.0, volume + 1.0);
+    const bool muteChanged = available && muted != m_hardwareMuted;
+    m_hardwareVolumeAvailable = available;
+    if (available) {
+        m_hardwareVolume = volume;
+        m_hardwareMuted = muted;
+    }
+    if (availabilityChanged) emit volumeControllableChanged();
+    if (availabilityChanged || volumeChanged) emit PlayerBackend::volumeChanged();
+    if (availabilityChanged || muteChanged) emit mutedChanged();
 }
 
 void PlayerBackend::applyMpvVolume() {
@@ -385,10 +631,6 @@ void PlayerBackend::applyMpvVolume() {
 
 QVariantList PlayerBackend::listHardwareDevices() {
     return AlsaDevices::list();
-}
-
-bool PlayerBackend::lockDeviceToZeroDb() {
-    return AlsaDevices::lockToZeroDb(m_audioDevice);
 }
 
 void PlayerBackend::setShuffle(bool enabled) {
@@ -429,13 +671,14 @@ void PlayerBackend::applyReplayGainSettings() {
     if (!m_mpv) return;
 
     const char *mode = "no";
-    if (m_rgEnabled) mode = (m_rgMode == ReplayGainMode::RgModeAlbum) ? "album" : "track";
+    if (m_rgEnabled)
+        mode = (m_rgMode == ReplayGainMode::RgModeAlbum) ? "album" : "track";
     mpv_set_property_string(m_mpv, "replaygain", mode);
 
     double preamp = m_rgPreampDb;
     mpv_set_property(m_mpv, "replaygain-preamp", MPV_FORMAT_DOUBLE, &preamp);
 
-    mpv_set_property_string(m_mpv, "replaygain-clip", m_rgClipProtect ? "yes" : "no");
+    mpv_set_property_string(m_mpv, "replaygain-clip", m_rgClipProtect ? "no" : "yes");
 }
 
 qint64 PlayerBackend::position() const {
@@ -450,7 +693,7 @@ qint64 PlayerBackend::position() const {
 void PlayerBackend::setPosition(qint64 ms) {
     if (!m_mpv) return;
     if (ms < 0) ms = 0;
-    double t = ms / 1000.0;
+    double t = static_cast<double>(ms) / 1000.0;
     if (mpv_set_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
         m_lastPositionMs = ms;
         emit positionChanged();
@@ -459,30 +702,49 @@ void PlayerBackend::setPosition(qint64 ms) {
 
 void PlayerBackend::play() {
     if (!m_mpv) return;
+    if (!m_hasFile && m_currentTrack.isValid()) {
+        loadTrack(m_currentTrack);
+        return;
+    }
+    if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
+        m_resumeAfterExclusive = m_hasFile;
+        requestExclusiveForPlayback();
+        return;
+    }
     int p = 0;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
 }
 
 void PlayerBackend::pause() {
     if (!m_mpv) return;
+    m_pendingExclusiveTrack = Track();
+    m_resumeAfterExclusive = false;
     int p = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
+    if (m_bitPerfectEnabled) releaseExclusiveDevice();
 }
 
 void PlayerBackend::stop() {
     if (!m_mpv) return;
+    m_pendingExclusiveTrack = Track();
+    m_resumeAfterExclusive = false;
     const char *cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
+    if (m_bitPerfectEnabled) releaseExclusiveDevice();
 }
 
 void PlayerBackend::togglePlayback() {
     if (!m_mpv) return;
     if (m_hasFile) {
-        int p = m_paused ? 0 : 1;
-        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
+        if (m_paused) play();
+        else pause();
         return;
     }
-    if (m_queue.count() > 0) playFromQueue(0);
+    if (m_currentTrack.isValid()) {
+        loadTrack(m_currentTrack);
+    } else if (m_queue.count() > 0) {
+        playFromQueue(0);
+    }
 }
 
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
@@ -501,12 +763,15 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
 }
 
 void PlayerBackend::rebuildQueueFromCurrentFilter() {
+    const QString currentPath = m_currentPath;
     QString orderBy;
     if (!m_sortColumn.isEmpty()) {
         orderBy = m_sortColumn + (m_sortOrder == Qt::AscendingOrder
                                   ? QStringLiteral(" ASC") : QStringLiteral(" DESC"));
     }
     m_queue.setTracks(queryTracks(m_categoryFilter, orderBy));
+    if (!currentPath.isEmpty() && m_queue.containsPath(currentPath))
+        m_queue.setIndexByPath(currentPath);
     m_queueBuiltFromFilter = m_categoryFilter;
     m_queueBuiltFromSort   = m_sortColumn;
     m_queueBuiltFromOrder  = m_sortOrder;
@@ -524,7 +789,12 @@ void PlayerBackend::playMusic(const QString &filePath) {
                                    m_queueBuiltFromOrder  == m_sortOrder);
     const int existing = queueMatchesView ? m_queue.positionOfPath(path) : -1;
     if (existing >= 0) {
-        m_queue.jumpToPosition(existing);
+        if (m_queue.isShuffle()) {
+            m_queue.setIndexByPath(path);
+            m_queueModel->resetAll();
+        } else {
+            m_queue.jumpToPosition(existing);
+        }
     } else {
         rebuildQueueFromCurrentFilter();
         m_queue.setIndexByPath(path);
@@ -538,11 +808,26 @@ void PlayerBackend::playFromQueue(int position) {
     loadTrack(m_queue.current());
 }
 
-void PlayerBackend::playNext()     { loadTrack(m_queue.next()); }
+void PlayerBackend::playNext() {
+    const Track next = m_queue.next();
+    if (next.isValid()) loadTrack(next);
+    else if (m_bitPerfectEnabled) releaseExclusiveDevice();
+}
 void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
 
 void PlayerBackend::loadTrack(const Track &t) {
     if (!t.isValid()) return;
+
+    pruneQueueToLibrary();
+    if (!QFileInfo::exists(t.path)) {
+        const int missingPosition = m_queue.positionOfPath(t.path);
+        if (missingPosition >= 0) {
+            m_queue.removeTrack(missingPosition);
+            m_queueModel->resetAll();
+        }
+        QTimer::singleShot(0, this, &PlayerBackend::playNext);
+        return;
+    }
 
     m_currentTrack    = t;
     m_currentPath     = t.path;
@@ -552,12 +837,11 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_currentTechInfo = t.techInfo;
     m_currentCoverPath.clear();
 
-    if (m_mpv) {
-        int p = 0;
-        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
-        const QByteArray path = t.path.toUtf8();
-        const char *cmd[] = {"loadfile", path.constData(), nullptr};
-        mpv_command(m_mpv, cmd);
+    if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
+        m_pendingExclusiveTrack = t;
+        requestExclusiveForPlayback();
+    } else {
+        loadTrackIntoMpv(t);
     }
 
     m_queueModel->notifyCurrentChanged();
@@ -568,9 +852,28 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_coverService->requestCoverFor(t.path, ++m_coverGen);
 }
 
+void PlayerBackend::loadTrackIntoMpv(const Track &track) {
+    if (!m_mpv || !track.isValid()) return;
+    int paused = 0;
+    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
+    const QByteArray path = track.path.toUtf8();
+    const char *command[] = {"loadfile", path.constData(), nullptr};
+    if (mpv_command(m_mpv, command) < 0) return;
+
+    int64_t entryId = -1;
+    if (mpv_get_property(m_mpv, "playlist/0/id", MPV_FORMAT_INT64, &entryId) >= 0) {
+        m_mpvEntryTracks.insert(entryId, track);
+        m_currentMpvEntryId = entryId;
+    }
+}
+
 void PlayerBackend::scanFolder(const QUrl &folderUrl) {
     const QString path = folderUrl.toLocalFile();
     if (path.isEmpty()) return;
+    if (m_clearPending) {
+        m_deferredScanFolders.insert(QDir(path).absolutePath());
+        return;
+    }
     m_scanCoordinator->startScan(path);
 }
 
@@ -731,27 +1034,62 @@ void PlayerBackend::openInFileManager(const QString &path) {
 
 void PlayerBackend::refreshAllModels() {
     m_trackModel->select();
-    m_albumModel->refresh();
-    m_artistModel->refresh();
+    m_albumModel->reload();
+    m_artistModel->reload();
+
+    pruneQueueToLibrary();
+}
+
+void PlayerBackend::pruneQueueToLibrary() {
+    QSqlQuery query;
+    if (!query.exec(QStringLiteral("SELECT path FROM tracks"))) return;
+
+    QSet<QString> paths;
+    while (query.next()) paths.insert(query.value(0).toString());
+    if (m_hasFile && !m_currentPath.isEmpty()) paths.insert(m_currentPath);
+    if (m_queueModel->retainPaths(paths)) {
+        emit currentIndexChanged();
+        emit currentQueuePositionChanged();
+    }
 }
 
 void PlayerBackend::resetPlaybackState() {
+    const bool stateChanged = m_hasFile || !m_paused;
+    m_pendingExclusiveTrack = Track();
+    m_resumeAfterExclusive = false;
+    if (m_bitPerfectEnabled) releaseExclusiveDevice();
     if (m_mpv) {
         const char *cmd[] = {"stop", nullptr};
         mpv_command(m_mpv, cmd);
     }
     m_currentTrack = Track();
+    m_currentMpvEntryId = -1;
     m_currentPath.clear();
     m_currentTitle  = kDefaultTitle;
     m_currentArtist = kDefaultArtist;
     m_currentAlbum  = kDefaultAlbum;
     m_currentTechInfo.clear();
     m_currentCoverPath.clear();
+    m_hasFile = false;
+    m_paused = true;
+    m_positionPollTimer->stop();
+    if (m_durationMs != 0) {
+        m_durationMs = 0;
+        emit durationChanged();
+    }
+    if (m_lastPositionMs != 0) {
+        m_lastPositionMs = 0;
+        emit positionChanged();
+    }
     emit metadataChanged();
     emit currentIndexChanged();
+    if (stateChanged) emit playbackStateChanged();
 }
 
 void PlayerBackend::clearLibrary() {
+    if (m_clearPending) return;
+    m_clearPending = true;
+    m_scanCoordinator->cancelAll();
     resetPlaybackState();
 
     m_queue.setTracks({});
@@ -759,47 +1097,122 @@ void PlayerBackend::clearLibrary() {
 
     m_libraryWatcher->clearAll();
 
+    clearLibraryDatabase();
+}
+
+void PlayerBackend::clearLibraryDatabase() {
     QSqlDatabase db = QSqlDatabase::database();
-    db.transaction();
+    LibraryDb::NonBlockingWrite nonBlocking(db);
+    if (!db.transaction()) {
+        QTimer::singleShot(250, this, &PlayerBackend::clearLibraryDatabase);
+        return;
+    }
     QSqlQuery q(db);
-    q.exec(QStringLiteral("DELETE FROM tracks"));
-    q.exec(QStringLiteral("DELETE FROM track_artists"));
-    q.exec(QStringLiteral("DELETE FROM artists"));
-    q.exec(QStringLiteral("DELETE FROM watch_roots"));
-    db.commit();
+    const bool cleared = q.exec(QStringLiteral("DELETE FROM tracks")) &&
+                         q.exec(QStringLiteral("DELETE FROM track_artists")) &&
+                         q.exec(QStringLiteral("DELETE FROM artists")) &&
+                         q.exec(QStringLiteral("DELETE FROM watch_roots"));
+    if (!cleared || !db.commit()) {
+        db.rollback();
+        QTimer::singleShot(250, this, &PlayerBackend::clearLibraryDatabase);
+        return;
+    }
 
     m_categoryFilter.clear();
     m_searchFilter.clear();
     m_trackModel->setFilter(QString());
     refreshAllModels();
 
+    m_clearPending = false;
+    const QSet<QString> deferred = std::exchange(m_deferredScanFolders, {});
+    for (const QString &folder : deferred) scanFolder(QUrl::fromLocalFile(folder));
     emit currentQueuePositionChanged();
 }
 
-void PlayerBackend::removeFolder(const QString &folder) {
+void PlayerBackend::removeFolder(const QString &folder, const QStringList &remainingFolders) {
     if (folder.isEmpty()) return;
     const QString clean = QDir(folder).absolutePath();
     if (clean.isEmpty()) return;
+    m_desiredFolders = remainingFolders;
+    if (m_clearPending) {
+        m_deferredScanFolders.remove(clean);
+        m_scanCoordinator->cancelRoot(clean);
+        return;
+    }
 
+    m_scanCoordinator->cancelRoot(clean);
     m_libraryWatcher->removeRoot(clean);
+    m_libraryWatcher->rescanAll(m_scanCoordinator->activeRoots());
+
+    removeFolderFromDatabase(clean);
+}
+
+void PlayerBackend::removeFolderFromDatabase(const QString &clean) {
+    const QStringList roots = m_libraryWatcher->roots();
+    if (roots.contains(clean)) return;
+    bool removeTracks = true;
+    for (const QString &root : roots) {
+        if (clean.startsWith(root + QLatin1Char('/'))) {
+            removeTracks = false;
+            break;
+        }
+    }
 
     {
         QSqlDatabase db = QSqlDatabase::database();
-        db.transaction();
+        LibraryDb::NonBlockingWrite nonBlocking(db);
+        if (!db.transaction()) {
+            QTimer::singleShot(250, this, [this, clean]() {
+                removeFolderFromDatabase(clean);
+            });
+            return;
+        }
         QSqlQuery del(db);
-        del.prepare(QStringLiteral(
-            "DELETE FROM tracks WHERE path = ? OR path LIKE ? ESCAPE '\\'"));
-        del.addBindValue(clean);
-        del.addBindValue(SqlUtils::prefixPattern(clean + QLatin1Char('/')));
-        del.exec();
-        db.commit();
-        MusicLibrary::pruneOrphanArtists(db);
+        if (removeTracks) {
+            QString sql = QStringLiteral(
+                "DELETE FROM tracks WHERE (path = ? OR path LIKE ? ESCAPE '\\')");
+            QStringList descendants;
+            for (const QString &root : roots) {
+                if (root.startsWith(clean + QLatin1Char('/'))) {
+                    sql += QStringLiteral(
+                        " AND NOT (path = ? OR path LIKE ? ESCAPE '\\')");
+                    descendants.append(root);
+                }
+            }
+            del.prepare(sql);
+            del.addBindValue(clean);
+            del.addBindValue(SqlUtils::prefixPattern(clean + QLatin1Char('/')));
+            for (const QString &root : descendants) {
+                del.addBindValue(root);
+                del.addBindValue(SqlUtils::prefixPattern(root + QLatin1Char('/')));
+            }
+        }
+        QSqlQuery delRoot(db);
+        delRoot.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
+        delRoot.addBindValue(clean);
+        if ((removeTracks && !del.exec()) || !delRoot.exec() || !db.commit()) {
+            db.rollback();
+            QTimer::singleShot(250, this, [this, clean]() {
+                removeFolderFromDatabase(clean);
+            });
+            return;
+        }
+        if (removeTracks) MusicLibrary::pruneOrphanArtists(db);
     }
+
+    if (!removeTracks) return;
 
     const QString prefix = clean + QLatin1Char('/');
     const bool currentInRemoved = !m_currentPath.isEmpty() &&
-                                  (m_currentPath == clean || m_currentPath.startsWith(prefix));
-    if (currentInRemoved) {
+                                   (m_currentPath == clean || m_currentPath.startsWith(prefix));
+    bool currentPreserved = false;
+    for (const QString &root : roots) {
+        if (m_currentPath == root || m_currentPath.startsWith(root + QLatin1Char('/'))) {
+            currentPreserved = true;
+            break;
+        }
+    }
+    if (currentInRemoved && !currentPreserved) {
         resetPlaybackState();
     }
 
@@ -807,9 +1220,11 @@ void PlayerBackend::removeFolder(const QString &folder) {
 
     rebuildQueueFromCurrentFilter();
     emit currentQueuePositionChanged();
+    if (!m_desiredFolders.isEmpty()) syncWithFolders(m_desiredFolders);
 }
 
 void PlayerBackend::syncWithFolders(const QStringList &folders) {
+    m_desiredFolders = folders;
     QSet<QString> desired;
     for (const QString &raw : folders) {
         const QString clean = QDir(raw).absolutePath();
@@ -820,11 +1235,10 @@ void PlayerBackend::syncWithFolders(const QStringList &folders) {
     const QSet<QString> currentSet(currentRoots.begin(), currentRoots.end());
 
     for (const QString &existing : currentSet) {
-        if (!desired.contains(existing)) removeFolder(existing);
+        if (!desired.contains(existing)) removeFolder(existing, folders);
     }
     for (const QString &want : desired) {
         if (!currentSet.contains(want)) scanFolder(QUrl::fromLocalFile(want));
     }
-
-    m_libraryWatcher->rescanAll();
+    m_libraryWatcher->rescanAll(m_scanCoordinator->activeRoots());
 }

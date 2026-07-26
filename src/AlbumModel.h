@@ -17,10 +17,9 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    void refresh();
+    void reload();
     void setSearch(const QString &query);
 
 private:
     QString m_search;
 };
-

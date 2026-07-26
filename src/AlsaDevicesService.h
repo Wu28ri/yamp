@@ -6,6 +6,8 @@
 namespace AlsaDevices {
 
 QVariantList list();
-bool lockToZeroDb(const QString &mpvDeviceName);
+bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted);
+bool setHardwareVolume(const QString &mpvDeviceName, qreal volume);
+bool setHardwareMuted(const QString &mpvDeviceName, bool muted);
 
 }

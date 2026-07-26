@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QLatin1String>
 #include <QStringList>
 
 namespace AudioFormats {

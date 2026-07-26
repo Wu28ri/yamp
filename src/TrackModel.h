@@ -23,7 +23,7 @@ public:
     QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    Q_INVOKABLE int columnFor(const QString &columnName) const;
+    int columnFor(const QString &columnName) const;
     Q_INVOKABLE QString pathForRow(int row);
     Q_INVOKABLE void ensureFetchedTo(int row);
 

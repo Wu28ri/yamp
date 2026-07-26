@@ -94,7 +94,6 @@ Rectangle {
             property Item draggedDelegate: null
 
             FrameAnimation {
-                id: autoScrollAnim
                 running: queueList.draggedDelegate !== null
 
                 readonly property real edgeSize: 56
@@ -304,4 +303,3 @@ Rectangle {
         }
     }
 }
-

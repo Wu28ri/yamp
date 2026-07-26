@@ -19,7 +19,7 @@ signals:
     void countDetermined(int totalFiles);
     void progress(int processed, int total);
     void batchReady();
-    void finished(const QList<Track> &newTracks);
+    void finished(const QList<Track> &newTracks, bool success);
 
 private:
     QString m_rootPath;
@@ -35,7 +35,7 @@ QStringList splitArtists(const QString &raw);
 QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist);
 int pruneOrphanArtists(QSqlDatabase &db);
 
-void linkTrackToArtistsPrepared(qint64 trackId,
+bool linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
                                 QSqlQuery &upsertArtist,
                                 QSqlQuery &findArtistId,
@@ -44,4 +44,3 @@ void linkTrackToArtistsPrepared(qint64 trackId,
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize);
 
 }
-

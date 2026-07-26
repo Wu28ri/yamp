@@ -39,7 +39,6 @@ GridView {
                 Layout.alignment: Qt.AlignHCenter
 
                 Rectangle {
-                    id: avatar
                     anchors.centerIn: parent
                     width: parent.width
                     height: parent.height

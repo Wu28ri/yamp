@@ -24,7 +24,7 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
     };
 }
 
-void AlbumModel::refresh() {
+void AlbumModel::reload() {
     QString where;
     if (!m_search.isEmpty()) {
         const QString pattern = SqlUtils::containsPattern(m_search.toLower());
@@ -45,5 +45,5 @@ void AlbumModel::refresh() {
 void AlbumModel::setSearch(const QString &query) {
     if (m_search == query) return;
     m_search = query;
-    refresh();
+    reload();
 }
