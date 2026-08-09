@@ -9,6 +9,7 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QDebug>
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QMetaObject>
@@ -21,42 +22,27 @@ namespace {
 
 constexpr int kDebounceMs = 350;
 
-QStringList listAudioFilesIn(const QString &dir) {
-    QStringList out;
-    QDir d(dir);
-    if (!d.exists()) return out;
-    const auto entries = d.entryInfoList(
-        AudioFormats::nameFilters(),
-        QDir::Files | QDir::NoSymLinks);
-    out.reserve(entries.size());
-    for (const auto &e : entries) out.append(e.absoluteFilePath());
-    return out;
-}
+struct FileState {
+    qint64 size = 0;
+    qint64 modifiedTime = 0;
 
-bool appendDbPathsInDir(QSqlDatabase &db, const QString &dir, QSet<QString> &out) {
-    QString prefix = dir;
-    if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
-    q.addBindValue(SqlUtils::prefixPattern(prefix));
-    if (!q.exec()) return false;
-    while (q.next()) {
-        const QString p = q.value(0).toString();
-        if (p.lastIndexOf(QLatin1Char('/')) == prefix.size() - 1) {
-            out.insert(p);
-        }
-    }
-    return true;
-}
+    bool operator==(const FileState &) const = default;
+};
 
-bool loadDbPathsUnder(QSqlDatabase &db, const QString &root, QSet<QString> &out) {
+using FileStates = QHash<QString, FileState>;
+
+bool loadDbFilesUnder(QSqlDatabase &db, const QString &root, FileStates &out) {
     QString prefix = root;
     if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT path FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
+    q.prepare(QStringLiteral(
+        "SELECT path, file_size, file_mtime FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
     q.addBindValue(SqlUtils::prefixPattern(prefix));
     if (!q.exec()) return false;
-    while (q.next()) out.insert(q.value(0).toString());
+    while (q.next()) {
+        out.insert(q.value(0).toString(),
+                   FileState{q.value(1).toLongLong(), q.value(2).toLongLong()});
+    }
     return true;
 }
 
@@ -70,6 +56,7 @@ struct ReconcileResult {
 struct PreparedTrack {
     Track track;
     qint64 fileSize = 0;
+    qint64 modifiedTime = 0;
 };
 
 struct PreparedTracks {
@@ -77,16 +64,18 @@ struct PreparedTracks {
     QSet<QString> attemptedPaths;
 };
 
-PreparedTracks prepareAdditions(const QSet<QString> &diskFiles,
-                                const QSet<QString> &dbFiles,
-                                const std::atomic_bool &stopping) {
+PreparedTracks prepareWrites(const FileStates &diskFiles,
+                             const FileStates &dbFiles,
+                             const std::atomic_bool &stopping) {
     PreparedTracks result;
-    for (const QString &path : diskFiles) {
+    for (auto it = diskFiles.cbegin(); it != diskFiles.cend(); ++it) {
         if (stopping.load(std::memory_order_relaxed)) break;
-        if (dbFiles.contains(path)) continue;
+        const QString &path = it.key();
+        if (dbFiles.value(path) == it.value() && dbFiles.contains(path)) continue;
         result.attemptedPaths.insert(path);
         PreparedTrack prepared;
-        if (MusicLibrary::readTrackFromFile(path, prepared.track, prepared.fileSize))
+        if (MusicLibrary::readTrackFromFile(path, prepared.track, prepared.fileSize,
+                                            prepared.modifiedTime))
             result.tracks.insert(path, prepared);
     }
     return result;
@@ -99,17 +88,22 @@ struct ApplyResult {
 };
 
 ApplyResult applyPreparedDiff(QSqlDatabase &db,
-                              const QSet<QString> &diskFiles,
-                              const QSet<QString> &dbFiles,
+                              const FileStates &diskFiles,
+                              const FileStates &dbFiles,
                               const PreparedTracks &prepared) {
     ApplyResult result;
     QStringList removals;
-    for (const QString &p : dbFiles) if (!diskFiles.contains(p)) removals.append(p);
-    QStringList additions;
-    for (const QString &p : diskFiles) if (!dbFiles.contains(p)) additions.append(p);
+    for (auto it = dbFiles.cbegin(); it != dbFiles.cend(); ++it) {
+        if (!diskFiles.contains(it.key())) removals.append(it.key());
+    }
+    QStringList writes;
+    for (auto it = diskFiles.cbegin(); it != diskFiles.cend(); ++it) {
+        if (!dbFiles.contains(it.key()) || dbFiles.value(it.key()) != it.value())
+            writes.append(it.key());
+    }
     constexpr int kMaxChangesPerTransaction = 250;
 
-    for (const QString &path : additions) {
+    for (const QString &path : writes) {
         if (!prepared.attemptedPaths.contains(path)) {
             result.success = false;
             result.retry = true;
@@ -121,6 +115,11 @@ ApplyResult applyPreparedDiff(QSqlDatabase &db,
     del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
     int changesProcessed = 0;
     for (const QString &path : removals) {
+        if (QFileInfo::exists(path)) {
+            result.success = false;
+            result.retry = true;
+            return result;
+        }
         if (changesProcessed >= kMaxChangesPerTransaction) {
             result.retry = true;
             break;
@@ -135,22 +134,36 @@ ApplyResult applyPreparedDiff(QSqlDatabase &db,
     }
 
     ScannerHelpers::TrackInserter inserter(db);
-    for (const QString &path : additions) {
+    for (const QString &path : writes) {
         if (changesProcessed >= kMaxChangesPerTransaction) {
             result.retry = true;
             break;
         }
         const auto it = prepared.tracks.constFind(path);
-        if (it == prepared.tracks.constEnd()) continue;
-        if (!inserter.insert(it->track, it->fileSize)) {
-            if (!inserter.hasError()) continue;
+        if (it == prepared.tracks.constEnd()) {
+            result.success = false;
+            result.retry = true;
+            return result;
+        }
+        const QFileInfo current(path);
+        const FileState currentState{current.size(),
+                                     current.lastModified().toMSecsSinceEpoch()};
+        if (!current.exists() || !current.isFile() ||
+            currentState != diskFiles.value(path)) {
+            result.success = false;
+            result.retry = true;
+            return result;
+        }
+        const auto writeResult = inserter.upsert(
+            it->track, it->fileSize, it->modifiedTime);
+        if (writeResult == ScannerHelpers::TrackWriteResult::Error) {
             result.success = false;
             return result;
         }
         result.changed = true;
         ++changesProcessed;
     }
-    if (!removals.isEmpty()) MusicLibrary::pruneOrphanArtists(db);
+    if (result.changed) MusicLibrary::pruneOrphanArtists(db);
     return result;
 }
 
@@ -171,48 +184,45 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
                                       const std::atomic_bool &stopping) {
     ReconcileResult result;
 
-    QSet<QString> diskFiles;
-    QSet<QString> dbSnapshot;
+    FileStates diskFiles;
+    FileStates dbSnapshot;
 
-    QSet<QString> visited;
-    QStringList queue;
-    queue.reserve(dirs.size());
-    for (const QString &d : dirs) queue.append(d);
-
-    while (!queue.isEmpty()) {
+    for (const QString &dir : dirs) {
         if (stopping.load(std::memory_order_relaxed)) return result;
-        const QString dir = queue.takeFirst();
-        if (visited.contains(dir)) continue;
-        visited.insert(dir);
-
         QDir qdir(dir);
         if (qdir.exists()) {
-            const auto subs = qdir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-            for (const auto &s : subs) {
-                const QString subPath = s.absoluteFilePath();
-                result.newSubdirsToWatch.append(subPath);
-                if (!visited.contains(subPath)) queue.append(subPath);
+            QDirIterator subdirs(dir,
+                                 QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                                 QDirIterator::Subdirectories);
+            while (subdirs.hasNext()) result.newSubdirsToWatch.append(subdirs.next());
+
+            QDirIterator files(dir,
+                               AudioFormats::nameFilters(),
+                               QDir::Files | QDir::NoSymLinks,
+                               QDirIterator::Subdirectories);
+            while (files.hasNext()) {
+                const QFileInfo info(files.next());
+                diskFiles.insert(info.absoluteFilePath(),
+                                 FileState{info.size(),
+                                           info.lastModified().toMSecsSinceEpoch()});
             }
         }
-
-        const QStringList disk = listAudioFilesIn(dir);
-        for (const QString &p : disk) diskFiles.insert(p);
-        if (!appendDbPathsInDir(db, dir, dbSnapshot)) {
+        if (!loadDbFilesUnder(db, dir, dbSnapshot)) {
             result.retry = true;
             return result;
         }
     }
 
-    const PreparedTracks prepared = prepareAdditions(diskFiles, dbSnapshot, stopping);
+    const PreparedTracks prepared = prepareWrites(diskFiles, dbSnapshot, stopping);
     if (stopping.load(std::memory_order_relaxed)) return result;
 
     if (!beginWriteIfCurrent(db, expectedGeneration, generation)) {
         result.retry = generation.load(std::memory_order_relaxed) == expectedGeneration;
         return result;
     }
-    QSet<QString> currentDbFiles;
-    for (const QString &dir : visited) {
-        if (!appendDbPathsInDir(db, dir, currentDbFiles)) {
+    FileStates currentDbFiles;
+    for (const QString &dir : dirs) {
+        if (!loadDbFilesUnder(db, dir, currentDbFiles)) {
             db.rollback();
             result.retry = true;
             return result;
@@ -455,8 +465,11 @@ void LibraryWatcher::watchTreeRecursive(const QString &root) {
     for (const QString &p : toAdd) {
         if (!alreadySet.contains(p)) filtered.append(p);
     }
-    if (!filtered.isEmpty())
-        m_watcher->addPaths(filtered);
+    if (!filtered.isEmpty()) {
+        const QStringList failed = m_watcher->addPaths(filtered);
+        if (!failed.isEmpty())
+            qWarning() << "[LibraryWatcher] could not watch directories" << failed;
+    }
 }
 
 void LibraryWatcher::unwatchTree(const QString &root) {
@@ -478,24 +491,28 @@ void LibraryWatcher::initialReconcileAsync(const QString &root) {
         bool changed = false;
         bool retry = false;
         if (!connName.isEmpty()) {
-            QSet<QString> diskFiles;
+            FileStates diskFiles;
             QDirIterator it(root,
                             AudioFormats::nameFilters(),
                             QDir::Files | QDir::NoSymLinks,
                             QDirIterator::Subdirectories);
-            while (it.hasNext() && !m_stopping.load(std::memory_order_relaxed))
-                diskFiles.insert(it.next());
+            while (it.hasNext() && !m_stopping.load(std::memory_order_relaxed)) {
+                const QFileInfo info(it.next());
+                diskFiles.insert(info.absoluteFilePath(),
+                                 FileState{info.size(),
+                                           info.lastModified().toMSecsSinceEpoch()});
+            }
 
-            QSet<QString> dbSnapshot;
-            if (!loadDbPathsUnder(db, root, dbSnapshot)) {
+            FileStates dbSnapshot;
+            if (!loadDbFilesUnder(db, root, dbSnapshot)) {
                 retry = true;
             }
-            const PreparedTracks prepared = prepareAdditions(diskFiles, dbSnapshot, m_stopping);
+            const PreparedTracks prepared = prepareWrites(diskFiles, dbSnapshot, m_stopping);
 
             if (!retry && !m_stopping.load(std::memory_order_relaxed) &&
                 beginWriteIfCurrent(db, generation, m_generation)) {
-                QSet<QString> currentDbFiles;
-                if (!loadDbPathsUnder(db, root, currentDbFiles)) {
+                FileStates currentDbFiles;
+                if (!loadDbFilesUnder(db, root, currentDbFiles)) {
                     db.rollback();
                     retry = true;
                 } else {

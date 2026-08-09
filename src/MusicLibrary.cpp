@@ -6,11 +6,13 @@
 
 #include <QDir>
 #include <QDirIterator>
+#include <QDebug>
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QThread>
@@ -78,62 +80,182 @@ bool initialize() {
         db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"));
         db.setDatabaseName(databasePath());
     }
-    if (!db.isOpen() && !db.open()) return false;
+    if (!db.isOpen() && !db.open()) {
+        qWarning() << "[MusicLibrary] failed to open database" << databasePath()
+                   << db.lastError().text();
+        return false;
+    }
 
     QSqlQuery wal(db);
     wal.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    wal.finish();
     LibraryDb::applyConnectionPragmas(db);
 
     QSqlQuery q(db);
-    if (!q.exec(QStringLiteral(
+    const auto execRequired = [&q](const QString &sql, const char *operation) {
+        if (q.exec(sql)) return true;
+        qWarning() << "[MusicLibrary]" << operation << q.lastError().text();
+        return false;
+    };
+    if (!execRequired(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS tracks ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "title TEXT, artist TEXT, album TEXT, "
             "path TEXT UNIQUE, duration INTEGER, "
             "search_text TEXT, track_no INTEGER, "
             "tech_info TEXT, file_size INTEGER DEFAULT 0, "
-            "album_artist TEXT)"))) {
+            "album_artist TEXT, file_mtime INTEGER DEFAULT 0)"),
+            "create tracks table")) return false;
+
+    QSet<QString> trackColumns;
+    if (!q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
+        qWarning() << "[MusicLibrary] inspect tracks schema" << q.lastError().text();
         return false;
     }
-
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
-        "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"));
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE)"));
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist COLLATE NOCASE)"));
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks(duration)"));
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_tracks_track_no ON tracks(track_no)"));
-
-    QSqlQuery wq(db);
-    if (!wq.exec(QStringLiteral(
-            "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"))) {
+    while (q.next()) trackColumns.insert(q.value(1).toString());
+    const auto addTrackColumn = [&db, &trackColumns](const QString &name,
+                                                     const QString &definition) {
+        if (trackColumns.contains(name)) return true;
+        QSqlQuery alter(db);
+        if (alter.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN ") + definition)) {
+            trackColumns.insert(name);
+            return true;
+        }
+        qWarning() << "[MusicLibrary] add tracks column" << name
+                   << alter.lastError().text();
         return false;
-    }
+    };
+    if (!addTrackColumn(QStringLiteral("file_size"),
+                        QStringLiteral("file_size INTEGER DEFAULT 0")) ||
+        !addTrackColumn(QStringLiteral("album_artist"),
+                        QStringLiteral("album_artist TEXT")) ||
+        !addTrackColumn(QStringLiteral("file_mtime"),
+                        QStringLiteral("file_mtime INTEGER DEFAULT 0"))) return false;
 
-    if (!q.exec(QStringLiteral(
+    if (!execRequired(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"),
+            "create watch_roots table") ||
+        !execRequired(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS artists ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "name TEXT NOT NULL, "
-            "name_norm TEXT NOT NULL UNIQUE)"))) {
-        return false;
-    }
-    if (!q.exec(QStringLiteral(
+            "name_norm TEXT NOT NULL UNIQUE)"),
+            "create artists table") ||
+        !execRequired(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS track_artists ("
             "track_id INTEGER NOT NULL, "
             "artist_id INTEGER NOT NULL, "
-            "PRIMARY KEY (track_id, artist_id))"))) {
+            "PRIMARY KEY (track_id, artist_id))"),
+            "create track_artists table")) return false;
+
+    if (!execRequired(QStringLiteral(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "
+        "ON tracks(album COLLATE NOCASE, album_artist COLLATE NOCASE)"),
+        "create album index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title COLLATE NOCASE)"),
+            "create title index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist COLLATE NOCASE)"),
+            "create artist index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_duration ON tracks(duration)"),
+            "create duration index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_track_no ON tracks(track_no)"),
+            "create track number index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"),
+            "create normalized artist index") ||
+        !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)"),
+            "create track artist index") ||
+        !execRequired(QStringLiteral(
+        "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
+        "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"),
+        "create track cleanup trigger")) return false;
+
+    int userVersion = 0;
+    if (!q.exec(QStringLiteral("PRAGMA user_version")) || !q.next()) {
+        qWarning() << "[MusicLibrary] read schema version" << q.lastError().text();
         return false;
     }
-    q.exec(QStringLiteral(
-        "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_track_artists_artist ON track_artists(artist_id)"));
-    q.exec(QStringLiteral(
-        "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
-        "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"));
+    userVersion = q.value(0).toInt();
+    q.finish();
+    if (userVersion < 5) {
+        if (!db.transaction()) {
+            qWarning() << "[MusicLibrary] begin schema migration" << db.lastError().text();
+            return false;
+        }
+
+        QSqlQuery albumTracks(db);
+        QSqlQuery updateAlbumArtist(db);
+        updateAlbumArtist.prepare(QStringLiteral(
+            "UPDATE tracks SET album_artist = ? WHERE id = ?"));
+        if (!albumTracks.exec(QStringLiteral(
+                "SELECT id, artist FROM tracks "
+                "WHERE album_artist IS NULL OR album_artist = ''"))) {
+            qWarning() << "[MusicLibrary] select album artists for migration"
+                       << albumTracks.lastError().text();
+            db.rollback();
+            return false;
+        }
+        while (albumTracks.next()) {
+            updateAlbumArtist.bindValue(
+                0, pickAlbumArtist(QString(), albumTracks.value(1).toString()));
+            updateAlbumArtist.bindValue(1, albumTracks.value(0));
+            if (!updateAlbumArtist.exec()) {
+                qWarning() << "[MusicLibrary] backfill album artists"
+                           << updateAlbumArtist.lastError().text();
+                db.rollback();
+                return false;
+            }
+        }
+        albumTracks.finish();
+        updateAlbumArtist.finish();
+
+        QSqlQuery tracks(db);
+        QSqlQuery upsertArtist(db);
+        QSqlQuery findArtistId(db);
+        QSqlQuery linkTrackArtist(db);
+        upsertArtist.prepare(QStringLiteral(
+            "INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
+        findArtistId.prepare(QStringLiteral(
+            "SELECT id FROM artists WHERE name_norm = ?"));
+        linkTrackArtist.prepare(QStringLiteral(
+            "INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
+        if (!tracks.exec(QStringLiteral(
+                "SELECT id, artist FROM tracks WHERE NOT EXISTS "
+                "(SELECT 1 FROM track_artists WHERE track_id = tracks.id)"))) {
+            qWarning() << "[MusicLibrary] select tracks for artist migration"
+                       << tracks.lastError().text();
+            db.rollback();
+            return false;
+        }
+        while (tracks.next()) {
+            if (!linkTrackToArtistsPrepared(tracks.value(0).toLongLong(),
+                                            tracks.value(1).toString(),
+                                            upsertArtist, findArtistId,
+                                            linkTrackArtist)) {
+                qWarning() << "[MusicLibrary] migrate track artists";
+                db.rollback();
+                return false;
+            }
+        }
+        tracks.finish();
+        upsertArtist.finish();
+        findArtistId.finish();
+        linkTrackArtist.finish();
+        if (!db.commit()) {
+            qWarning() << "[MusicLibrary] commit schema migration" << db.lastError().text();
+            db.rollback();
+            return false;
+        }
+        if (!q.exec(QStringLiteral("PRAGMA user_version = 5"))) {
+            qWarning() << "[MusicLibrary] store schema version" << q.lastError().text();
+            return false;
+        }
+    }
 
     return true;
 }
@@ -183,7 +305,10 @@ int pruneOrphanArtists(QSqlDatabase &db) {
     QSqlQuery q(db);
     if (!q.exec(QStringLiteral(
             "DELETE FROM artists WHERE id NOT IN "
-            "(SELECT DISTINCT artist_id FROM track_artists)"))) return 0;
+            "(SELECT DISTINCT artist_id FROM track_artists)"))) {
+        qWarning() << "[MusicLibrary] prune orphan artists" << q.lastError().text();
+        return 0;
+    }
     return q.numRowsAffected();
 }
 
@@ -215,10 +340,12 @@ bool linkTrackToArtistsPrepared(qint64 trackId,
     return true;
 }
 
-bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize) {
+bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
+                       qint64 &modifiedTime) {
     QFileInfo info(filePath);
     if (!info.exists() || !info.isFile()) return false;
     fileSize = info.size();
+    modifiedTime = info.lastModified().toMSecsSinceEpoch();
 
     const QByteArray pathBytes = filePath.toUtf8();
     TagLib::FileRef f(pathBytes.constData());
@@ -316,7 +443,7 @@ void LibraryScanner::run() {
     {
         QDirIterator it(m_rootPath,
                         AudioFormats::nameFilters(),
-                        QDir::Files,
+                        QDir::Files | QDir::NoSymLinks,
                         QDirIterator::Subdirectories);
         while (it.hasNext()) {
             if (QThread::currentThread()->isInterruptionRequested()) {
@@ -349,15 +476,19 @@ void LibraryScanner::run() {
     int processed = 0;
     while (processed < allFiles.size() &&
            !QThread::currentThread()->isInterruptionRequested()) {
-        struct PreparedTrack { Track track; qint64 fileSize = 0; };
+        struct PreparedTrack {
+            Track track;
+            qint64 fileSize = 0;
+            qint64 modifiedTime = 0;
+        };
         QList<PreparedTrack> prepared;
         QElapsedTimer batchTimer;
         batchTimer.start();
         while (processed < allFiles.size() && prepared.size() < kBatchSize) {
             if (QThread::currentThread()->isInterruptionRequested()) break;
             PreparedTrack item;
-            if (MusicLibrary::readTrackFromFile(allFiles.at(processed),
-                                                item.track, item.fileSize)) {
+            if (MusicLibrary::readTrackFromFile(allFiles.at(processed), item.track,
+                                                item.fileSize, item.modifiedTime)) {
                 prepared.append(item);
             }
             ++processed;
@@ -375,8 +506,22 @@ void LibraryScanner::run() {
         }
         ScannerHelpers::TrackInserter inserter(db);
         for (const PreparedTrack &item : std::as_const(prepared)) {
-            if (inserter.insert(item.track, item.fileSize)) newTracks.append(item.track);
-            if (inserter.hasError()) {
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                dbFailed = true;
+                break;
+            }
+            const QFileInfo current(item.track.path);
+            if (!current.exists() || !current.isFile() ||
+                current.size() != item.fileSize ||
+                current.lastModified().toMSecsSinceEpoch() != item.modifiedTime) {
+                dbFailed = true;
+                break;
+            }
+            const auto writeResult = inserter.upsert(
+                item.track, item.fileSize, item.modifiedTime);
+            if (writeResult == ScannerHelpers::TrackWriteResult::Inserted)
+                newTracks.append(item.track);
+            if (writeResult == ScannerHelpers::TrackWriteResult::Error) {
                 dbFailed = true;
                 break;
             }
@@ -385,6 +530,11 @@ void LibraryScanner::run() {
             db.rollback();
             break;
         }
+        if (QThread::currentThread()->isInterruptionRequested()) {
+            db.rollback();
+            break;
+        }
+        MusicLibrary::pruneOrphanArtists(db);
         if (!db.commit()) {
             db.rollback();
             dbFailed = true;

@@ -2,6 +2,8 @@
 
 #include "MusicLibrary.h"
 
+#include <QDebug>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
 
@@ -32,6 +34,9 @@ QString openScopedConnection(const QString &purpose, QSqlDatabase &outDb) {
     outDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
     outDb.setDatabaseName(MusicLibrary::databasePath());
     if (!outDb.open()) {
+        qWarning() << "[LibraryDb] failed to open scoped connection"
+                   << purpose << outDb.lastError().text();
+        outDb = QSqlDatabase();
         QSqlDatabase::removeDatabase(name);
         return {};
     }

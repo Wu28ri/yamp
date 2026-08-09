@@ -7,19 +7,21 @@
 
 namespace ScannerHelpers {
 
+enum class TrackWriteResult { Inserted, Updated, Error };
+
 class TrackInserter {
 public:
     explicit TrackInserter(QSqlDatabase &db);
 
-    bool insert(const Track &track, qint64 fileSize);
-    bool hasError() const { return m_error; }
+    TrackWriteResult upsert(const Track &track, qint64 fileSize, qint64 modifiedTime);
 
 private:
-    QSqlQuery m_insertTrack;
+    QSqlQuery m_upsertTrack;
+    QSqlQuery m_findTrackId;
+    QSqlQuery m_deleteTrackArtists;
     QSqlQuery m_upsertArtist;
     QSqlQuery m_findArtistId;
     QSqlQuery m_linkTrackArtist;
-    bool m_error = false;
 };
 
 }

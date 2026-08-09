@@ -27,8 +27,10 @@ QHash<int, QByteArray> ArtistModel::roleNames() const {
 void ArtistModel::reload() {
     QString where;
     if (!m_search.isEmpty()) {
-        const QString pattern = SqlUtils::containsPattern(m_search.toLower());
-        where = QStringLiteral("WHERE LOWER(a.name) LIKE %1 ESCAPE '\\' ").arg(pattern);
+        const QString pattern =
+            SqlUtils::containsPattern(SqlUtils::normalizeSearch(m_search));
+        where = QStringLiteral("WHERE %1 LIKE %2 ESCAPE '\\' ")
+            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("a.name")), pattern);
     }
     setQuery(QStringLiteral(
         "SELECT a.name, "

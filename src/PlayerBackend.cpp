@@ -64,7 +64,8 @@ PlayerBackend::PlayerBackend(QObject *parent)
       m_currentArtist(kDefaultArtist),
       m_currentAlbum(kDefaultAlbum) {
 
-    MusicLibrary::initialize();
+    if (!MusicLibrary::initialize())
+        qFatal("[PlayerBackend] music library database initialization failed");
 
     m_trackModel = new TrackModel(this);
     m_trackModel->setTable(QStringLiteral("tracks"));
@@ -939,8 +940,9 @@ void PlayerBackend::filterByArtist(const QString &artistName) {
 void PlayerBackend::searchTracks(const QString &query) {
     QString newFilter;
     if (!query.isEmpty()) {
-        newFilter = QStringLiteral("search_text LIKE %1 ESCAPE '\\'")
-            .arg(SqlUtils::containsPattern(query.toLower()));
+        newFilter = QStringLiteral("%1 LIKE %2 ESCAPE '\\'")
+            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("search_text")),
+                 SqlUtils::containsPattern(SqlUtils::normalizeSearch(query)));
     }
     if (newFilter == m_searchFilter) return;
     m_searchFilter = newFilter;

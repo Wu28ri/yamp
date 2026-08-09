@@ -27,10 +27,15 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
 void AlbumModel::reload() {
     QString where;
     if (!m_search.isEmpty()) {
-        const QString pattern = SqlUtils::containsPattern(m_search.toLower());
+        const QString pattern =
+            SqlUtils::containsPattern(SqlUtils::normalizeSearch(m_search));
         where = QStringLiteral(
-            "WHERE LOWER(album) LIKE %1 ESCAPE '\\' "
-            "OR LOWER(COALESCE(NULLIF(album_artist, ''), artist)) LIKE %1 ESCAPE '\\' ").arg(pattern);
+            "WHERE %1 LIKE %3 ESCAPE '\\' "
+            "OR %2 LIKE %3 ESCAPE '\\' ")
+            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("album")),
+                 SqlUtils::normalizedSearchExpression(QStringLiteral(
+                     "COALESCE(NULLIF(album_artist, ''), artist)")),
+                 pattern);
     }
     setQuery(QStringLiteral(
         "SELECT album, "

@@ -41,6 +41,7 @@ bool linkTrackToArtistsPrepared(qint64 trackId,
                                 QSqlQuery &findArtistId,
                                 QSqlQuery &linkTrackArtist);
 
-bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize);
+bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
+                       qint64 &modifiedTime);
 
 }
