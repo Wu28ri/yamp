@@ -77,17 +77,3 @@ YAMP is released under the GPL-3.0-only license. See [LICENSE](LICENSE) for
 the complete terms, [COPYRIGHT](COPYRIGHT) for copyright and asset notices, and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the libraries used by the
 application.
-
-## Online services
-
-Last.fm integration is disabled by default. When enabled and connected, YAMP
-sends the current track metadata and scrobble timestamps to Last.fm and stores
-the Last.fm session locally. Pending scrobbles can also store the Last.fm user
-name, local file path, track metadata, and playback timestamp until submitted
-or cleared. Use of this integration is subject to the
-[Last.fm API Terms](https://www.last.fm/api/tos) and is intended for
-non-commercial use; distributors are responsible for obtaining any approval
-required for their use. Last.fm's terms also require its supplied “powered by
-AudioScrobbler” button and prior approval of public placements; the upstream
-resources page is currently unavailable, so the in-app text button is not a
-claim that those requirements have been approved by Last.fm.
