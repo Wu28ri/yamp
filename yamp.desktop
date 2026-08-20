@@ -2,7 +2,7 @@
 Name=YAMP
 GenericName=Music Player
 Comment=yet another music player
-Exec=/usr/bin/appyamp
+Exec=appyamp
 Icon=yamp
 Terminal=false
 Type=Application

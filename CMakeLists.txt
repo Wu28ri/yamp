@@ -92,6 +92,7 @@ set_target_properties(appyamp PROPERTIES
     MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE
+    INSTALL_RPATH ""
 )
 
 target_link_libraries(appyamp
@@ -107,6 +108,9 @@ target_link_libraries(appyamp
 )
 
 include(GNUInstallDirs)
+set(YAMP_LICENSE_INSTALL_DIR
+    "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}"
+    CACHE STRING "Install directory for YAMP license notices")
 install(TARGETS appyamp
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -115,4 +119,23 @@ install(TARGETS appyamp
 
 install(FILES ${CMAKE_SOURCE_DIR}/yamp.desktop
     DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
+)
+foreach(size IN ITEMS 16 22 24 32 48 64 96 128 192 256 512)
+    install(FILES ${CMAKE_SOURCE_DIR}/icons/yamp-${size}.png
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps
+        RENAME yamp.png
+    )
+endforeach()
+install(FILES ${CMAKE_SOURCE_DIR}/icons/yamp.svg
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
+)
+install(FILES ${CMAKE_SOURCE_DIR}/icons/yamp-symbolic.svg
+    DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/symbolic/apps
+)
+install(FILES
+    ${CMAKE_SOURCE_DIR}/LICENSE
+    ${CMAKE_SOURCE_DIR}/COPYRIGHT
+    ${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md
+    ${CMAKE_SOURCE_DIR}/licenses/LGPL-2.1.txt
+    DESTINATION ${YAMP_LICENSE_INSTALL_DIR}
 )

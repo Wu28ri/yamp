@@ -25,6 +25,7 @@ namespace {
 constexpr const char *kApiKey       = "1af929173f9ea4c2116ed32d25f8db59";
 constexpr const char *kSharedSecret = "515f52b0aa9f97182aa4641ce1660d15";
 constexpr const char *kApiRoot      = "https://ws.audioscrobbler.com/2.0/";
+constexpr const char *kUserAgent    = "YAMP/0.2 (+https://github.com/Wu28ri/yamp)";
 
 constexpr int kRequestTimeoutMs = 15000;
 constexpr int kAuthPollMs       = 2500;
@@ -184,6 +185,7 @@ QNetworkReply *LastFmScrobbler::postSigned(QMap<QString, QString> params) {
 
     QNetworkRequest request{QUrl(QString::fromLatin1(kApiRoot))};
     request.setTransferTimeout(kRequestTimeoutMs);
+    request.setRawHeader("User-Agent", kUserAgent);
     request.setHeader(QNetworkRequest::ContentTypeHeader,
                       QStringLiteral("application/x-www-form-urlencoded"));
     QNetworkReply *reply = m_nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
@@ -204,6 +206,7 @@ QNetworkReply *LastFmScrobbler::getSigned(QMap<QString, QString> params) {
 
     QNetworkRequest request(url);
     request.setTransferTimeout(kRequestTimeoutMs);
+    request.setRawHeader("User-Agent", kUserAgent);
     QNetworkReply *reply = m_nam->get(request);
     armHardTimeout(reply);
     return reply;

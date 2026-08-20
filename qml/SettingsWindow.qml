@@ -32,6 +32,7 @@ Window {
         TabBar {
             id: settingsTabBar
             Layout.fillWidth: true
+            implicitWidth: 0
 
             TabButton {
                 text: "General"
@@ -51,6 +52,10 @@ Window {
             }
             TabButton {
                 text: "Last.fm"
+                width: settingsTabBar.width / settingsTabBar.count
+            }
+            TabButton {
+                text: "About"
                 width: settingsTabBar.width / settingsTabBar.count
             }
         }
@@ -480,6 +485,56 @@ Window {
                         visible: lastfm.authenticated
                         onClicked: lastfm.logout()
                     }
+                }
+
+                RowLayout {
+                    Button {
+                        text: "Scrobbling powered by AudioScrobbler / Last.fm"
+                        onClicked: Qt.openUrlExternally("https://www.last.fm/")
+                    }
+
+                    Button {
+                        text: "API Terms"
+                        flat: true
+                        onClicked: Qt.openUrlExternally("https://www.last.fm/api/tos")
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
+            }
+
+            ColumnLayout {
+                spacing: settingsWindow.pageSpacing
+
+                Label {
+                    text: "YAMP 0.2"
+                    font.pixelSize: 18
+                    font.bold: true
+                    color: sysPalette.text
+                }
+
+                Label {
+                    text: "Copyright (C) 2026 Wu28ri"
+                    color: sysPalette.text
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Licensed under GPL-3.0-only. This program comes with absolutely no warranty."
+                    wrapMode: Text.WordWrap
+                    color: sysPalette.windowText
+                    opacity: 0.75
+                }
+
+                Button {
+                    text: "Source code and license"
+                    onClicked: Qt.openUrlExternally("https://github.com/Wu28ri/yamp")
+                }
+
+                Button {
+                    text: "Third-party notices"
+                    onClicked: Qt.openUrlExternally(
+                        "https://github.com/Wu28ri/yamp/blob/main/THIRD_PARTY_NOTICES.md")
                 }
 
                 Item { Layout.fillHeight: true }

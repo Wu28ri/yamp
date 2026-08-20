@@ -8,7 +8,7 @@
 
 A performance-oriented, ultra-lightweight music player built with C++, Qt 6 and QML.
 
-[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 [![AUR version](https://img.shields.io/aur/version/yamp-git?label=AUR)](https://aur.archlinux.org/packages/yamp-git)
 [![Made with Qt](https://img.shields.io/badge/Qt-6.8+-41CD52?logo=qt&logoColor=white)](https://www.qt.io/)
 
@@ -55,7 +55,7 @@ yay -S yamp-git
 ### From source — `makepkg`
 
 ```bash
-sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative mpv taglib
+sudo pacman -S --needed base-devel cmake git ninja qt6-base qt6-declarative mpv taglib libpulse alsa-lib
 git clone https://github.com/Wu28ri/yamp.git
 cd yamp
 makepkg -si
@@ -73,4 +73,21 @@ cmake --build build
 
 ## License
 
-YAMP is released under the GPLv3 license. See [LICENSE](LICENSE) for details.
+YAMP is released under the GPL-3.0-only license. See [LICENSE](LICENSE) for
+the complete terms, [COPYRIGHT](COPYRIGHT) for copyright and asset notices, and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the libraries used by the
+application.
+
+## Online services
+
+Last.fm integration is disabled by default. When enabled and connected, YAMP
+sends the current track metadata and scrobble timestamps to Last.fm and stores
+the Last.fm session locally. Pending scrobbles can also store the Last.fm user
+name, local file path, track metadata, and playback timestamp until submitted
+or cleared. Use of this integration is subject to the
+[Last.fm API Terms](https://www.last.fm/api/tos) and is intended for
+non-commercial use; distributors are responsible for obtaining any approval
+required for their use. Last.fm's terms also require its supplied “powered by
+AudioScrobbler” button and prior approval of public placements; the upstream
+resources page is currently unavailable, so the in-app text button is not a
+claim that those requirements have been approved by Last.fm.

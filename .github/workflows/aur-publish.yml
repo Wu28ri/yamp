@@ -16,7 +16,7 @@ jobs:
 
       - name: Update pkgver in PKGBUILD
         run: |
-          NEW_PKGVER="r$(git rev-list --count HEAD).g$(git rev-parse --short HEAD)"
+          NEW_PKGVER="r$(git rev-list --count HEAD).$(git rev-parse --short HEAD)"
           sed -i "s/^pkgver=.*/pkgver=$NEW_PKGVER/" PKGBUILD
 
       - name: Publish yamp-git to AUR
