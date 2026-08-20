@@ -14,6 +14,7 @@ ListView {
     property int  pendingScrollIdx: -1
     property bool persistScroll: false
     property bool suppressSave: false
+    property real contentYBeforeReset: 0
 
     Timer {
         id: suppressTimer
@@ -23,9 +24,22 @@ ListView {
 
     Connections {
         target: playerBackend.trackModel
-        function onModelReset() {
+        function onModelAboutToBeReset() {
+            listView.contentYBeforeReset = listView.contentY
             listView.suppressSave = true
-            suppressTimer.restart()
+        }
+        function onModelReset() {
+            const y = listView.contentYBeforeReset
+            const targetRow = Math.ceil(Math.max(0, y) / 56) + 30
+            playerBackend.trackModel.ensureFetchedTo(targetRow)
+            Qt.callLater(function() {
+                listView.forceLayout()
+                const minY = listView.originY
+                const maxY = Math.max(minY,
+                    listView.contentHeight - listView.height + minY)
+                listView.contentY = Math.max(minY, Math.min(y, maxY))
+                suppressTimer.restart()
+            })
         }
     }
 
@@ -102,6 +116,7 @@ ListView {
                 listView.ignoreNextScroll = false
                 return
             }
+            if (listView.persistScroll) return
             scrollDebounce.restart()
         }
     }
@@ -357,4 +372,3 @@ ListView {
         }
     }
 }
-

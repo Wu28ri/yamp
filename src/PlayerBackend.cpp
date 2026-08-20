@@ -963,6 +963,13 @@ void PlayerBackend::sortTracks(const QString &columnName, bool ascending) {
     m_sortOrder  = ascending ? Qt::AscendingOrder : Qt::DescendingOrder;
     m_trackModel->setSort(m_trackModel->columnFor(m_sortColumn), m_sortOrder);
     m_trackModel->select();
+    if (m_queue.isShuffle()) {
+        m_queueBuiltFromSort = m_sortColumn;
+        m_queueBuiltFromOrder = m_sortOrder;
+        return;
+    }
+    rebuildQueueFromCurrentFilter();
+    emit currentQueuePositionChanged();
 }
 
 int PlayerBackend::getRowForPath(const QString &path) {
@@ -1050,7 +1057,6 @@ void PlayerBackend::pruneQueueToLibrary() {
     while (query.next()) paths.insert(query.value(0).toString());
     if (m_hasFile && !m_currentPath.isEmpty()) paths.insert(m_currentPath);
     if (m_queueModel->retainPaths(paths)) {
-        emit currentIndexChanged();
         emit currentQueuePositionChanged();
     }
 }
