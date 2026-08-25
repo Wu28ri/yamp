@@ -18,7 +18,37 @@ Window {
     property string selectedAlbum: ""
     property string selectedAlbumPath: ""
     property string selectedArtist: ""
+    property string viewBeforeLyrics: "tracks"
     property real   savedTracklistContentY: 0
+    property bool   sidebarSearchExpanded: false
+    property real   sidebarWidthBeforeSearch: 56
+
+    function toggleLyrics() {
+        if (currentView === "lyrics") {
+            currentView = viewBeforeLyrics
+        } else {
+            viewBeforeLyrics = currentView
+            currentView = "lyrics"
+        }
+    }
+
+    function deepestItemAt(item, scenePosition) {
+        const local = item.mapFromItem(null, scenePosition.x, scenePosition.y)
+        const child = item.childAt(local.x, local.y)
+        return child ? deepestItemAt(child, scenePosition) : item
+    }
+
+    function keepsSearchOpen(item) {
+        while (item) {
+            if (item.keepsSearchOpen === true)
+                return true
+            if (item.down !== undefined && item.checkable !== undefined
+                    && item.clicked !== undefined)
+                return true
+            item = item.parent
+        }
+        return false
+    }
 
     function coverSource(path) {
         return path ? "image://cover/" + encodeURI(path) : ""
@@ -69,6 +99,18 @@ Window {
         onActivated: playerBackend.volume = Math.max(0.0, playerBackend.volume - 0.05)
     }
 
+    TapHandler {
+        id: closeSearchTap
+        acceptedButtons: Qt.LeftButton
+        onPressedChanged: {
+            if (!pressed || !sideBar.searchOpen)
+                return
+            const item = root.deepestItemAt(root.contentItem, closeSearchTap.point.scenePosition)
+            if (!root.keepsSearchOpen(item))
+                sideBar.clearSearch()
+        }
+    }
+
     SettingsWindow {
         id: settingsWindow
         visible: false
@@ -90,10 +132,23 @@ Window {
 
             SideBar {
                 id: sideBar
-                SplitView.preferredWidth: appSettings.sidebarWidth
-                SplitView.minimumWidth: 150
+                SplitView.preferredWidth: root.sidebarSearchExpanded ? 180 : appSettings.sidebarWidth
+                SplitView.minimumWidth: 56
                 SplitView.maximumWidth: 400
                 onSettingsClicked: settingsWindow.show()
+                onExpandRequested: {
+                    if (!root.sidebarSearchExpanded) {
+                        sidebarSaveTimer.stop()
+                        root.sidebarWidthBeforeSearch = sideBar.width
+                        root.sidebarSearchExpanded = true
+                    }
+                }
+                onRestoreRequested: {
+                    if (root.sidebarSearchExpanded) {
+                        appSettings.sidebarWidth = root.sidebarWidthBeforeSearch
+                        root.sidebarSearchExpanded = false
+                    }
+                }
 
                 onWidthChanged: sidebarSaveTimer.restart()
             }
@@ -102,7 +157,8 @@ Window {
                 id: sidebarSaveTimer
                 interval: 400
                 onTriggered: {
-                    if (sideBar.width >= 50) appSettings.sidebarWidth = sideBar.width
+                    if (!root.sidebarSearchExpanded && sideBar.width >= 50)
+                        appSettings.sidebarWidth = sideBar.width
                 }
             }
 
@@ -111,9 +167,10 @@ Window {
                 source: {
                     if (root.currentView === "albums") return "Albums.qml"
                     if (root.currentView === "albumDetail") return "AlbumDetail.qml"
-                    if (root.currentView === "artists") return "Artists.qml"
-                    if (root.currentView === "artistDetail") return "ArtistDetail.qml"
-                    return "Tracklist.qml"
+                     if (root.currentView === "artists") return "Artists.qml"
+                     if (root.currentView === "artistDetail") return "ArtistDetail.qml"
+                     if (root.currentView === "lyrics") return "Lyrics.qml"
+                     return "Tracklist.qml"
                 }
             }
 

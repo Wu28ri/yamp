@@ -7,6 +7,21 @@ Rectangle {
     implicitHeight: 105
     color: sysPalette.mid
 
+    Menu {
+        id: metadataTextMenu
+        property var editor: null
+
+        MenuItem {
+            text: "Copy"
+            enabled: metadataTextMenu.editor && metadataTextMenu.editor.selectedText.length > 0
+            onTriggered: metadataTextMenu.editor.copy()
+        }
+        MenuItem {
+            text: "Select all"
+            onTriggered: metadataTextMenu.editor.selectAll()
+        }
+    }
+
     function formatTime(ms) {
         if (!ms || ms < 0 || isNaN(ms)) return "0:00"
         const totalSec = Math.floor(ms / 1000)
@@ -104,7 +119,8 @@ Rectangle {
         spacing: 10
 
         Rectangle {
-            width: 60; height: 60
+            Layout.preferredWidth: 60
+            Layout.preferredHeight: 60
             color: sysPalette.base
             radius: 4
             clip: true
@@ -120,19 +136,83 @@ Rectangle {
         ColumnLayout {
             spacing: 2
             Layout.fillWidth: true
-            Text {
-                text: playerBackend.currentTitle
-                color: sysPalette.text
-                font.bold: true
+
+            Item {
                 Layout.fillWidth: true
-                elide: Text.ElideRight
+                Layout.preferredHeight: 20
+
+                TextMetrics {
+                    id: titleMetrics
+                    text: titleField.text
+                    font: titleField.font
+                }
+
+                TextEdit {
+                    id: titleField
+                    width: Math.min(Math.ceil(titleMetrics.advanceWidth) + 6, parent.width)
+                    height: parent.height
+                    text: playerBackend.currentTitle
+                    color: sysPalette.text
+                    font.bold: true
+                    textFormat: Text.PlainText
+                    readOnly: true
+                    selectByMouse: true
+                    persistentSelection: true
+                    clip: true
+                    verticalAlignment: TextEdit.AlignVCenter
+                    renderType: Text.NativeRendering
+                    onActiveFocusChanged: {
+                        if (activeFocus) artistAlbumField.deselect()
+                    }
+
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: {
+                            if (titleField.selectedText.length === 0) titleField.selectAll()
+                            metadataTextMenu.editor = titleField
+                            metadataTextMenu.popup()
+                        }
+                    }
+                }
             }
-            Text {
-                text: playerBackend.currentArtist + (playerBackend.currentAlbum ? " — " + playerBackend.currentAlbum : "")
-                color: sysPalette.windowText
-                font.pixelSize: 12
+
+            Item {
                 Layout.fillWidth: true
-                elide: Text.ElideRight
+                Layout.preferredHeight: 18
+
+                TextMetrics {
+                    id: artistAlbumMetrics
+                    text: artistAlbumField.text
+                    font: artistAlbumField.font
+                }
+
+                TextEdit {
+                    id: artistAlbumField
+                    width: Math.min(Math.ceil(artistAlbumMetrics.advanceWidth) + 6, parent.width)
+                    height: parent.height
+                    text: playerBackend.currentArtist + (playerBackend.currentAlbum ? " — " + playerBackend.currentAlbum : "")
+                    color: sysPalette.windowText
+                    font.pixelSize: 12
+                    textFormat: Text.PlainText
+                    readOnly: true
+                    selectByMouse: true
+                    persistentSelection: true
+                    clip: true
+                    verticalAlignment: TextEdit.AlignVCenter
+                    renderType: Text.NativeRendering
+                    onActiveFocusChanged: {
+                        if (activeFocus) titleField.deselect()
+                    }
+
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        onTapped: {
+                            if (artistAlbumField.selectedText.length === 0) artistAlbumField.selectAll()
+                            metadataTextMenu.editor = artistAlbumField
+                            metadataTextMenu.popup()
+                        }
+                    }
+                }
             }
         }
     }
@@ -192,6 +272,16 @@ Rectangle {
             font.pixelSize: 10
             font.family: "Monospace"
             Layout.alignment: Qt.AlignVCenter
+        }
+
+        ToolButton {
+            icon.name: "format-justify-left"
+            icon.color: root.currentView === "lyrics" ? sysPalette.highlight : sysPalette.windowText
+            opacity: root.currentView === "lyrics" ? 1.0 : 0.6
+            enabled: playerBackend.currentPath !== ""
+            onClicked: root.toggleLyrics()
+            ToolTip.visible: hovered
+            ToolTip.text: "Lyrics"
         }
 
         ToolButton {

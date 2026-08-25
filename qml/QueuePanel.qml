@@ -9,6 +9,51 @@ Rectangle {
 
     property bool opened: false
 
+    Menu {
+        id: queueTrackMenu
+        property int queuePosition: -1
+        property string trackPath: ""
+
+        MenuItem {
+            text: "Play"
+            onTriggered: {
+                queueList.ignoreNextScroll = true
+                playerBackend.playFromQueue(queueTrackMenu.queuePosition)
+            }
+        }
+        MenuItem {
+            text: "Play next"
+            onTriggered: playerBackend.addPlayNext(queueTrackMenu.trackPath)
+        }
+        MenuSeparator { }
+        MenuItem {
+            text: "Go to artist"
+            onTriggered: {
+                const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
+                if (!ctx || !ctx.artist) return
+                root.selectedArtist = ctx.artist
+                root.currentView = "artistDetail"
+            }
+        }
+        MenuItem {
+            text: "Go to album"
+            onTriggered: {
+                const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
+                if (!ctx || !ctx.album) return
+                root.selectedAlbum = ctx.album
+                root.selectedArtist = ctx.albumArtist
+                root.selectedAlbumPath = queueTrackMenu.trackPath
+                root.currentView = "albumDetail"
+            }
+        }
+        MenuSeparator { }
+        MenuItem {
+            text: "Show in file manager"
+            icon.name: "folder-open"
+            onTriggered: playerBackend.openInFileManager(queueTrackMenu.trackPath)
+        }
+    }
+
     Behavior on SplitView.preferredWidth {
         NumberAnimation { duration: 300; easing.type: Easing.OutQuint }
     }
@@ -29,57 +74,6 @@ Rectangle {
         anchors.margins: 16
         spacing: 16
         visible: queuePanel.width > 50
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-            visible: playerBackend.currentPath !== ""
-
-            Rectangle {
-                width: 52; height: 52
-                color: sysPalette.base; radius: 6; clip: true
-                Image {
-                    anchors.fill: parent
-                    fillMode: Image.PreserveAspectCrop
-                    source: root.coverSource(playerBackend.currentPath)
-                    sourceSize: Qt.size(52, 52)
-                    asynchronous: true
-                }
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 2
-                Text {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 18
-                    text: playerBackend.currentTitle
-                    color: sysPalette.text
-                    font.bold: true; font.pixelSize: 14
-                    renderType: Text.NativeRendering
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 16
-                    text: playerBackend.currentArtist
-                    color: sysPalette.windowText
-                    opacity: 0.6; font.pixelSize: 12
-                    renderType: Text.NativeRendering
-                    elide: Text.ElideRight
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            height: 1
-            color: sysPalette.windowText
-            opacity: 0.1
-            visible: playerBackend.currentPath !== ""
-        }
 
         ListView {
             id: queueList
@@ -175,6 +169,15 @@ Rectangle {
                     }
                 }
 
+                TapHandler {
+                    acceptedButtons: Qt.RightButton
+                    onTapped: {
+                        queueTrackMenu.queuePosition = delegateRoot.index
+                        queueTrackMenu.trackPath = delegateRoot.path
+                        queueTrackMenu.popup()
+                    }
+                }
+
                 MouseArea {
                     id: mouseArea
                     anchors.fill: parent
@@ -230,12 +233,13 @@ Rectangle {
                             radius: 6
                             color: {
                                 if (mouseArea.drag.active) return sysPalette.window
-                                return delegateRoot.isCurrent ? sysPalette.highlight : "transparent"
+                                return delegateRoot.isCurrent || mouseArea.containsMouse
+                                       ? sysPalette.highlight : "transparent"
                             }
                             opacity: {
                                 if (mouseArea.drag.active) return 1.0
                                 if (delegateRoot.isCurrent) return 0.15
-                                return mouseArea.containsMouse ? 0.05 : 0.0
+                                return mouseArea.containsMouse ? 0.08 : 0.0
                             }
                             border.color: sysPalette.highlight
                             border.width: mouseArea.drag.active ? 1 : 0

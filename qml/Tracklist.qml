@@ -125,6 +125,9 @@ ListView {
 
     ScrollBar.vertical: SmoothScrollBar {
         flickable: listView
+        width: 8
+        padding: 0
+        anchors.right: parent.right
         topPadding: 40
     }
 

@@ -39,6 +39,7 @@ qt_add_qml_module(appyamp
         qml/ScrollableViewHelper.qml
         qml/SmoothScrollBar.qml
         qml/DetailHeader.qml
+        qml/Lyrics.qml
     SOURCES
         src/Track.h
         src/TrackQueue.h

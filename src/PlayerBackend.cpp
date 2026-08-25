@@ -12,7 +12,9 @@
 
 #include <QDesktopServices>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSqlQuery>
 #include <QTimer>
@@ -26,6 +28,14 @@
 #include <QtDBus/QDBusMessage>
 
 #include <mpv/client.h>
+
+#include <taglib/fileref.h>
+#include <taglib/id3v2tag.h>
+#include <taglib/mpegfile.h>
+#include <taglib/synchronizedlyricsframe.h>
+#include <taglib/tpropertymap.h>
+
+#include <algorithm>
 
 namespace {
 const QString kDefaultTitle  = QStringLiteral("N/A");
@@ -55,6 +65,169 @@ Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
     t.trackNo     = q.value(offset + 6).toInt();
     t.albumArtist = q.value(offset + 7).toString();
     return t;
+}
+
+struct LyricsData {
+    QVariantList lines;
+    QList<qint64> times;
+    bool synchronized = false;
+};
+
+LyricsData parseLyricsText(QString text) {
+    LyricsData result;
+    text.remove(QChar::ByteOrderMark);
+
+    static const QRegularExpression timestampRe(
+        QStringLiteral(R"(\[(\d{1,3}):(\d{1,2})(?:[\.:](\d{1,3}))?\])"));
+    static const QRegularExpression enhancedTimestampRe(
+        QStringLiteral(R"(<\d{1,3}:\d{1,2}(?:[\.:]\d{1,3})?>)"));
+    static const QRegularExpression metadataRe(
+        QStringLiteral(R"(^\s*\[(ar|al|ti|by|re|ve|length):.*\]\s*$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression offsetRe(
+        QStringLiteral(R"(^\s*\[offset:([+-]?\d+)\]\s*$)"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    qint64 offsetMs = 0;
+    const QStringList sourceLines = text.split(QRegularExpression(QStringLiteral("[\r\n]+")),
+                                                Qt::SkipEmptyParts);
+    for (const QString &line : sourceLines) {
+        const auto match = offsetRe.match(line);
+        if (match.hasMatch()) offsetMs = match.captured(1).toLongLong();
+    }
+
+    QList<QPair<qint64, QString>> timedLines;
+    QStringList plainLines;
+    for (QString line : sourceLines) {
+        const QString trimmed = line.trimmed();
+        if (trimmed.isEmpty() || metadataRe.match(trimmed).hasMatch() ||
+            offsetRe.match(trimmed).hasMatch()) {
+            continue;
+        }
+
+        auto matches = timestampRe.globalMatch(line);
+        QList<qint64> lineTimes;
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            const qint64 minutes = match.captured(1).toLongLong();
+            const qint64 seconds = match.captured(2).toLongLong();
+            const QString fractionText = match.captured(3);
+            qint64 fractionMs = fractionText.toLongLong();
+            if (fractionText.size() == 1) fractionMs *= 100;
+            else if (fractionText.size() == 2) fractionMs *= 10;
+            lineTimes.append(qMax<qint64>(0, minutes * 60000 + seconds * 1000 +
+                                             fractionMs + offsetMs));
+        }
+
+        if (lineTimes.isEmpty()) {
+            plainLines.append(trimmed);
+            continue;
+        }
+
+        line.remove(timestampRe);
+        line.remove(enhancedTimestampRe);
+        line = line.trimmed();
+        for (qint64 timeMs : lineTimes) timedLines.append({timeMs, line});
+    }
+
+    if (!timedLines.isEmpty()) {
+        std::stable_sort(timedLines.begin(), timedLines.end(),
+                         [](const auto &left, const auto &right) {
+                             return left.first < right.first;
+                         });
+        result.synchronized = true;
+        for (const auto &[timeMs, line] : timedLines) {
+            result.times.append(timeMs);
+            result.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
+                                            {QStringLiteral("text"), line}});
+        }
+        return result;
+    }
+
+    for (const QString &line : plainLines) {
+        result.lines.append(QVariantMap{{QStringLiteral("timeMs"), -1},
+                                        {QStringLiteral("text"), line}});
+    }
+    return result;
+}
+
+LyricsData readLyrics(const QString &trackPath) {
+    if (trackPath.isEmpty()) return {};
+
+    const QFileInfo trackInfo(trackPath);
+    const QString sidecarPath = trackInfo.dir().filePath(trackInfo.completeBaseName() +
+                                                         QStringLiteral(".lrc"));
+    QFile sidecar(sidecarPath);
+    if (sidecar.open(QIODevice::ReadOnly)) {
+        LyricsData data = parseLyricsText(QString::fromUtf8(sidecar.readAll()));
+        if (!data.lines.isEmpty()) return data;
+    }
+
+    const QByteArray pathBytes = trackPath.toUtf8();
+    TagLib::FileRef fileRef(pathBytes.constData(), false);
+    if (fileRef.isNull() || !fileRef.file()) return {};
+
+    if (auto *mpegFile = dynamic_cast<TagLib::MPEG::File *>(fileRef.file())) {
+        if (mpegFile->hasID3v2Tag()) {
+            const auto frames = mpegFile->ID3v2Tag()->frameList("SYLT");
+            for (auto *frame : frames) {
+                auto *lyrics = dynamic_cast<TagLib::ID3v2::SynchronizedLyricsFrame *>(frame);
+                if (!lyrics || lyrics->timestampFormat() !=
+                                   TagLib::ID3v2::SynchronizedLyricsFrame::AbsoluteMilliseconds ||
+                    lyrics->type() != TagLib::ID3v2::SynchronizedLyricsFrame::Lyrics) {
+                    continue;
+                }
+
+                LyricsData data;
+                QList<QPair<qint64, QString>> timedLines;
+                for (const auto &entry : lyrics->synchedText()) {
+                    const QString line = QString::fromStdString(entry.text.to8Bit(true)).trimmed();
+                    timedLines.append({entry.time, line});
+                }
+                if (!timedLines.isEmpty()) {
+                    std::stable_sort(timedLines.begin(), timedLines.end(),
+                                     [](const auto &left, const auto &right) {
+                                         return left.first < right.first;
+                                     });
+                    for (const auto &[timeMs, line] : timedLines) {
+                        data.times.append(timeMs);
+                        data.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
+                                                      {QStringLiteral("text"), line}});
+                    }
+                    data.synchronized = true;
+                    return data;
+                }
+            }
+        }
+    }
+
+    const TagLib::PropertyMap properties = fileRef.file()->properties();
+    QString lyricsText;
+    const auto appendValues = [&lyricsText](const TagLib::StringList &values) {
+        for (const auto &value : values) {
+            const QString text = QString::fromStdString(value.to8Bit(true)).trimmed();
+            if (!text.isEmpty()) {
+                if (!lyricsText.isEmpty()) lyricsText.append(QLatin1Char('\n'));
+                lyricsText.append(text);
+            }
+        }
+    };
+
+    if (const auto it = properties.find("LYRICS"); it != properties.end()) {
+        appendValues(it->second);
+    }
+    if (lyricsText.isEmpty()) {
+        for (const auto &[key, values] : properties) {
+            const QString keyText = QString::fromStdString(key.to8Bit(true));
+            if (keyText.startsWith(QStringLiteral("LYRICS:"), Qt::CaseInsensitive) ||
+                keyText.compare(QStringLiteral("UNSYNCEDLYRICS"), Qt::CaseInsensitive) == 0) {
+                appendValues(values);
+                if (!lyricsText.isEmpty()) break;
+            }
+        }
+    }
+
+    return parseLyricsText(lyricsText);
 }
 }
 
@@ -233,6 +406,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
             const qint64 ms = static_cast<qint64>(t * 1000.0);
             if (ms != m_lastPositionMs) {
                 m_lastPositionMs = ms;
+                updateCurrentLyricIndex(ms);
                 emit positionChanged();
             }
         }
@@ -697,6 +871,7 @@ void PlayerBackend::setPosition(qint64 ms) {
     double t = static_cast<double>(ms) / 1000.0;
     if (mpv_set_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
         m_lastPositionMs = ms;
+        updateCurrentLyricIndex(ms);
         emit positionChanged();
     }
 }
@@ -837,6 +1012,7 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_currentAlbum    = t.album;
     m_currentTechInfo = t.techInfo;
     m_currentCoverPath.clear();
+    loadLyrics(t.path);
 
     if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
         m_pendingExclusiveTrack = t;
@@ -1078,6 +1254,7 @@ void PlayerBackend::resetPlaybackState() {
     m_currentAlbum  = kDefaultAlbum;
     m_currentTechInfo.clear();
     m_currentCoverPath.clear();
+    loadLyrics({});
     m_hasFile = false;
     m_paused = true;
     m_positionPollTimer->stop();
@@ -1092,6 +1269,27 @@ void PlayerBackend::resetPlaybackState() {
     emit metadataChanged();
     emit currentIndexChanged();
     if (stateChanged) emit playbackStateChanged();
+}
+
+void PlayerBackend::loadLyrics(const QString &trackPath) {
+    const LyricsData data = readLyrics(trackPath);
+    m_lyricsLines = data.lines;
+    m_lyricTimes = data.times;
+    m_lyricsSynchronized = data.synchronized;
+    m_currentLyricIndex = -1;
+    emit lyricsChanged();
+    emit currentLyricIndexChanged();
+}
+
+void PlayerBackend::updateCurrentLyricIndex(qint64 positionMs) {
+    int index = -1;
+    if (m_lyricsSynchronized && !m_lyricTimes.isEmpty()) {
+        const auto it = std::upper_bound(m_lyricTimes.cbegin(), m_lyricTimes.cend(), positionMs);
+        index = static_cast<int>(std::distance(m_lyricTimes.cbegin(), it)) - 1;
+    }
+    if (index == m_currentLyricIndex) return;
+    m_currentLyricIndex = index;
+    emit currentLyricIndexChanged();
 }
 
 void PlayerBackend::clearLibrary() {

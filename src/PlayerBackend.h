@@ -13,6 +13,7 @@
 #include <QSet>
 #include <QString>
 #include <QUrl>
+#include <QVariantList>
 #include <QVariantMap>
 
 struct mpv_handle;
@@ -32,6 +33,9 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(QString currentAlbum  READ currentAlbum  NOTIFY metadataChanged)
     Q_PROPERTY(QString currentPath   READ currentPath   NOTIFY metadataChanged)
     Q_PROPERTY(QString currentTechInfo READ currentTechInfo NOTIFY metadataChanged)
+    Q_PROPERTY(QVariantList lyricsLines READ lyricsLines NOTIFY lyricsChanged)
+    Q_PROPERTY(bool lyricsSynchronized READ lyricsSynchronized NOTIFY lyricsChanged)
+    Q_PROPERTY(int currentLyricIndex READ currentLyricIndex NOTIFY currentLyricIndexChanged)
 
     Q_PROPERTY(bool    isMuted   READ isMuted   WRITE setMuted   NOTIFY mutedChanged)
     Q_PROPERTY(qreal   volume    READ volume    WRITE setVolume  NOTIFY volumeChanged)
@@ -65,6 +69,9 @@ public:
     QString currentPath()     const { return m_currentPath;   }
     QString currentTechInfo() const { return m_currentTechInfo; }
     QString currentCoverPath() const { return m_currentCoverPath; }
+    QVariantList lyricsLines() const { return m_lyricsLines; }
+    bool lyricsSynchronized() const { return m_lyricsSynchronized; }
+    int currentLyricIndex() const { return m_currentLyricIndex; }
     const Track& currentTrack() const { return m_currentTrack; }
 
     bool   isMuted()  const;
@@ -134,6 +141,8 @@ public:
 
 signals:
     void metadataChanged();
+    void lyricsChanged();
+    void currentLyricIndexChanged();
     void mutedChanged();
     void volumeChanged();
     void shuffleChanged();
@@ -156,6 +165,8 @@ private:
     }
     void loadTrack(const Track &track);
     void loadTrackIntoMpv(const Track &track);
+    void loadLyrics(const QString &trackPath);
+    void updateCurrentLyricIndex(qint64 positionMs);
     void requestExclusiveForPlayback();
     void releaseExclusiveDevice();
     void continuePendingPlayback();
@@ -207,6 +218,10 @@ private:
     QString m_currentAlbum;
     QString m_currentTechInfo;
     QString m_currentCoverPath;
+    QVariantList m_lyricsLines;
+    QList<qint64> m_lyricTimes;
+    bool m_lyricsSynchronized = false;
+    int m_currentLyricIndex = -1;
     QString m_categoryFilter;
     QString m_searchFilter;
     quint64 m_coverGen = 0;
