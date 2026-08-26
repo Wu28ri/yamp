@@ -70,6 +70,7 @@ Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
 struct LyricsData {
     QVariantList lines;
     QList<qint64> times;
+    QList<int> lineIndices;
     bool synchronized = false;
 };
 
@@ -138,8 +139,13 @@ LyricsData parseLyricsText(QString text) {
         result.synchronized = true;
         for (const auto &[timeMs, line] : timedLines) {
             result.times.append(timeMs);
-            result.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
-                                            {QStringLiteral("text"), line}});
+            if (line.isEmpty()) {
+                result.lineIndices.append(-1);
+            } else {
+                result.lineIndices.append(result.lines.size());
+                result.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
+                                                {QStringLiteral("text"), line}});
+            }
         }
         return result;
     }
@@ -188,11 +194,16 @@ LyricsData readLyrics(const QString &trackPath) {
                     std::stable_sort(timedLines.begin(), timedLines.end(),
                                      [](const auto &left, const auto &right) {
                                          return left.first < right.first;
-                                     });
+                    });
                     for (const auto &[timeMs, line] : timedLines) {
                         data.times.append(timeMs);
-                        data.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
-                                                      {QStringLiteral("text"), line}});
+                        if (line.isEmpty()) {
+                            data.lineIndices.append(-1);
+                        } else {
+                            data.lineIndices.append(data.lines.size());
+                            data.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
+                                                          {QStringLiteral("text"), line}});
+                        }
                     }
                     data.synchronized = true;
                     return data;
@@ -1275,6 +1286,7 @@ void PlayerBackend::loadLyrics(const QString &trackPath) {
     const LyricsData data = readLyrics(trackPath);
     m_lyricsLines = data.lines;
     m_lyricTimes = data.times;
+    m_lyricLineIndices = data.lineIndices;
     m_lyricsSynchronized = data.synchronized;
     m_currentLyricIndex = -1;
     emit lyricsChanged();
@@ -1285,7 +1297,9 @@ void PlayerBackend::updateCurrentLyricIndex(qint64 positionMs) {
     int index = -1;
     if (m_lyricsSynchronized && !m_lyricTimes.isEmpty()) {
         const auto it = std::upper_bound(m_lyricTimes.cbegin(), m_lyricTimes.cend(), positionMs);
-        index = static_cast<int>(std::distance(m_lyricTimes.cbegin(), it)) - 1;
+        const int eventIndex = static_cast<int>(std::distance(m_lyricTimes.cbegin(), it)) - 1;
+        if (eventIndex >= 0 && eventIndex < m_lyricLineIndices.size())
+            index = m_lyricLineIndices.at(eventIndex);
     }
     if (index == m_currentLyricIndex) return;
     m_currentLyricIndex = index;

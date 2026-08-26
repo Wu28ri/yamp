@@ -128,7 +128,7 @@ Rectangle {
                 target: playerBackend
 
                 function onCurrentLyricIndexChanged() {
-                    if (lyricsList.followPlayback)
+                    if (lyricsList.followPlayback && playerBackend.currentLyricIndex >= 0)
                         lyricsView.centerCurrentLine(true)
                 }
 
@@ -143,6 +143,9 @@ Rectangle {
                 required property int index
                 required property var modelData
                 readonly property bool active: index === playerBackend.currentLyricIndex
+                readonly property int transitionDuration:
+                    playerBackend.lyricsSynchronized && playerBackend.currentLyricIndex < 0
+                    ? 320 : 180
 
                 width: lyricsList.width
                 height: Math.max(48, lineText.implicitHeight + 18)
@@ -177,8 +180,24 @@ Rectangle {
                     wrapMode: Text.Wrap
                     renderType: Text.NativeRendering
 
-                    Behavior on color { ColorAnimation { duration: 180 } }
-                    Behavior on opacity { NumberAnimation { duration: 180 } }
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: lyricLine.transitionDuration
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: lyricLine.transitionDuration
+                            easing.type: Easing.OutCubic
+                        }
+                    }
+                    Behavior on font.pixelSize {
+                        NumberAnimation {
+                            duration: lyricLine.transitionDuration
+                            easing.type: Easing.OutCubic
+                        }
+                    }
                 }
             }
 

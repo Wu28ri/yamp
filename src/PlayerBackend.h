@@ -220,6 +220,7 @@ private:
     QString m_currentCoverPath;
     QVariantList m_lyricsLines;
     QList<qint64> m_lyricTimes;
+    QList<int> m_lyricLineIndices;
     bool m_lyricsSynchronized = false;
     int m_currentLyricIndex = -1;
     QString m_categoryFilter;
