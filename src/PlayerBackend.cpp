@@ -338,7 +338,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
                 releaseExclusiveDevice();
                 return;
             }
-            QTimer::singleShot(150, this, [this]() {
+            QTimer::singleShot(300, this, [this]() {
                 if (m_bitPerfectEnabled && m_audioExclusiveHeld &&
                     !m_audioExclusiveTransition) {
                     applyAudioDeviceToMpv();
@@ -511,8 +511,11 @@ void PlayerBackend::processMpvEvents() {
         case MPV_EVENT_FILE_LOADED: {
             const auto it = m_mpvEntryTracks.constFind(m_loadingMpvEntryId);
             if (m_loadingMpvEntryId == m_currentMpvEntryId &&
-                it != m_mpvEntryTracks.constEnd() && it->path == m_currentPath)
+                it != m_mpvEntryTracks.constEnd() && it->path == m_currentPath) {
+                m_audioOpenRetries = 0;
+                ++m_audioOpenRetryGeneration;
                 emit trackStarted(it.value());
+            }
             break;
         }
         default:
@@ -568,6 +571,7 @@ void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
 
 void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
     if (!ev) return;
+    const Track endedTrack = m_mpvEntryTracks.value(ev->playlist_entry_id, m_currentTrack);
     m_mpvEntryTracks.remove(ev->playlist_entry_id);
     if (m_loadingMpvEntryId == ev->playlist_entry_id) m_loadingMpvEntryId = -1;
     if (ev->playlist_entry_id != m_currentMpvEntryId) return;
@@ -578,8 +582,32 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
         break;
     case MPV_END_FILE_REASON_ERROR:
         qWarning("[mpv] playback failed: %s", mpv_error_string(ev->error));
-        if (m_bitPerfectEnabled && ev->error == MPV_ERROR_AO_INIT_FAILED)
+        if (m_bitPerfectEnabled && m_audioExclusiveHeld &&
+            ev->error == MPV_ERROR_AO_INIT_FAILED && endedTrack.isValid()) {
+            constexpr int kMaxAudioOpenRetries = 8;
+            if (m_audioOpenRetries < kMaxAudioOpenRetries) {
+                const int attempt = ++m_audioOpenRetries;
+                const quint64 generation = ++m_audioOpenRetryGeneration;
+                qWarning("[mpv] direct ALSA device is busy; retrying (%d/%d)",
+                         attempt, kMaxAudioOpenRetries);
+                QTimer::singleShot(300, this, [this, endedTrack, generation]() {
+                    if (generation != m_audioOpenRetryGeneration ||
+                        !m_bitPerfectEnabled || !m_audioExclusiveHeld ||
+                        m_audioExclusiveTransition || endedTrack.path != m_currentPath) {
+                        return;
+                    }
+                    loadTrackIntoMpv(endedTrack);
+                });
+                return;
+            }
+
+            qWarning("[mpv] direct ALSA device remained busy; falling back to default output");
+            ++m_audioOpenRetryGeneration;
+            m_audioOpenRetries = 0;
+            m_pendingExclusiveTrack = endedTrack;
             setBitPerfect(false);
+            return;
+        }
         resetPlaybackState();
         break;
     default:
@@ -680,6 +708,10 @@ void PlayerBackend::setBitPerfect(bool enabled) {
         m_paVolume->setMuted(m_swMuted);
     }
     m_bitPerfectEnabled = enabled;
+    if (!enabled) {
+        ++m_audioOpenRetryGeneration;
+        m_audioOpenRetries = 0;
+    }
     if (enabled && m_paVolume) {
         m_swVolume = m_paVolume->volume();
         m_swMuted  = m_paVolume->isMuted();
@@ -1004,6 +1036,9 @@ void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
 
 void PlayerBackend::loadTrack(const Track &t) {
     if (!t.isValid()) return;
+
+    ++m_audioOpenRetryGeneration;
+    m_audioOpenRetries = 0;
 
     pruneQueueToLibrary();
     if (!QFileInfo::exists(t.path)) {

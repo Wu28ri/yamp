@@ -255,6 +255,8 @@ private:
     bool    m_audioExclusiveTransition = false;
     bool    m_audioExclusiveHeld = false;
     int     m_audioRestoreRetries = 0;
+    int     m_audioOpenRetries = 0;
+    quint64 m_audioOpenRetryGeneration = 0;
     bool    m_resumeAfterExclusive = false;
     Track   m_pendingExclusiveTrack;
     Track   m_currentTrack;
