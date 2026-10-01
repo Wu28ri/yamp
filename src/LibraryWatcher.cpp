@@ -13,10 +13,12 @@
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QMetaObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTimer>
 #include <QVariant>
+#include <algorithm>
 
 namespace {
 
@@ -50,7 +52,7 @@ struct ReconcileResult {
     bool changed = false;
     bool success = false;
     bool retry = false;
-    QStringList newSubdirsToWatch;
+    QSet<QString> newSubdirsToWatch;
 };
 
 struct PreparedTrack {
@@ -71,12 +73,16 @@ PreparedTracks prepareWrites(const FileStates &diskFiles,
     for (auto it = diskFiles.cbegin(); it != diskFiles.cend(); ++it) {
         if (stopping.load(std::memory_order_relaxed)) break;
         const QString &path = it.key();
-        if (dbFiles.value(path) == it.value() && dbFiles.contains(path)) continue;
+
+        const auto dbIt = dbFiles.constFind(path);
+        if (dbIt != dbFiles.constEnd() && dbIt.value() == it.value()) continue;
+
         result.attemptedPaths.insert(path);
         PreparedTrack prepared;
         if (MusicLibrary::readTrackFromFile(path, prepared.track, prepared.fileSize,
-                                            prepared.modifiedTime))
+                                            prepared.modifiedTime)) {
             result.tracks.insert(path, prepared);
+        }
     }
     return result;
 }
@@ -98,10 +104,10 @@ ApplyResult applyPreparedDiff(QSqlDatabase &db,
     }
     QStringList writes;
     for (auto it = diskFiles.cbegin(); it != diskFiles.cend(); ++it) {
-        if (!dbFiles.contains(it.key()) || dbFiles.value(it.key()) != it.value())
+        const auto dbIt = dbFiles.constFind(it.key());
+        if (dbIt == dbFiles.constEnd() || dbIt.value() != it.value())
             writes.append(it.key());
     }
-    constexpr int kMaxChangesPerTransaction = 250;
 
     for (const QString &path : writes) {
         if (!prepared.attemptedPaths.contains(path)) {
@@ -113,47 +119,37 @@ ApplyResult applyPreparedDiff(QSqlDatabase &db,
 
     QSqlQuery del(db);
     del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
-    int changesProcessed = 0;
     for (const QString &path : removals) {
-        if (QFileInfo::exists(path)) {
-            result.success = false;
-            result.retry = true;
-            return result;
-        }
-        if (changesProcessed >= kMaxChangesPerTransaction) {
-            result.retry = true;
-            break;
-        }
         del.bindValue(0, path);
         if (!del.exec()) {
             result.success = false;
             return result;
         }
         result.changed = result.changed || del.numRowsAffected() > 0;
-        ++changesProcessed;
     }
 
     ScannerHelpers::TrackInserter inserter(db);
     for (const QString &path : writes) {
-        if (changesProcessed >= kMaxChangesPerTransaction) {
-            result.retry = true;
-            break;
-        }
         const auto it = prepared.tracks.constFind(path);
         if (it == prepared.tracks.constEnd()) {
-            result.success = false;
-            result.retry = true;
-            return result;
+            if (dbFiles.contains(path)) {
+                del.bindValue(0, path);
+                if (del.exec() && del.numRowsAffected() > 0) {
+                    result.changed = true;
+                }
+            }
+            continue;
         }
+
         const QFileInfo current(path);
         const FileState currentState{current.size(),
                                      current.lastModified().toMSecsSinceEpoch()};
         if (!current.exists() || !current.isFile() ||
             currentState != diskFiles.value(path)) {
-            result.success = false;
             result.retry = true;
-            return result;
+            continue;
         }
+
         const auto writeResult = inserter.upsert(
             it->track, it->fileSize, it->modifiedTime);
         if (writeResult == ScannerHelpers::TrackWriteResult::Error) {
@@ -161,8 +157,8 @@ ApplyResult applyPreparedDiff(QSqlDatabase &db,
             return result;
         }
         result.changed = true;
-        ++changesProcessed;
     }
+
     if (result.changed) MusicLibrary::pruneOrphanArtists(db);
     return result;
 }
@@ -183,18 +179,31 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
                                       const std::atomic<quint64> &generation,
                                       const std::atomic_bool &stopping) {
     ReconcileResult result;
-
     FileStates diskFiles;
     FileStates dbSnapshot;
 
-    for (const QString &dir : dirs) {
+    QStringList sortedDirs = dirs.values();
+    std::sort(sortedDirs.begin(), sortedDirs.end());
+    QStringList effectiveDirs;
+    for (const QString &d : sortedDirs) {
+        bool covered = false;
+        for (const QString &parent : effectiveDirs) {
+            if (d.startsWith(parent + QLatin1Char('/'))) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) effectiveDirs.append(d);
+    }
+
+    for (const QString &dir : effectiveDirs) {
         if (stopping.load(std::memory_order_relaxed)) return result;
         QDir qdir(dir);
         if (qdir.exists()) {
             QDirIterator subdirs(dir,
                                  QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
                                  QDirIterator::Subdirectories);
-            while (subdirs.hasNext()) result.newSubdirsToWatch.append(subdirs.next());
+            while (subdirs.hasNext()) result.newSubdirsToWatch.insert(subdirs.next());
 
             QDirIterator files(dir,
                                AudioFormats::nameFilters(),
@@ -220,14 +229,16 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
         result.retry = generation.load(std::memory_order_relaxed) == expectedGeneration;
         return result;
     }
+
     FileStates currentDbFiles;
-    for (const QString &dir : dirs) {
+    for (const QString &dir : effectiveDirs) {
         if (!loadDbFilesUnder(db, dir, currentDbFiles)) {
             db.rollback();
             result.retry = true;
             return result;
         }
     }
+
     const ApplyResult applied = applyPreparedDiff(db, diskFiles, currentDbFiles, prepared);
     if (!applied.success) {
         db.rollback();
@@ -235,6 +246,7 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
                        generation.load(std::memory_order_relaxed) == expectedGeneration;
         return result;
     }
+
     result.changed = applied.changed;
     result.retry = applied.retry;
     result.success = db.commit();
@@ -250,8 +262,8 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
 
 LibraryWatcher::LibraryWatcher(QObject *parent)
     : QObject(parent),
-      m_watcher(new QFileSystemWatcher(this)),
-      m_debounce(new QTimer(this)) {
+    m_watcher(new QFileSystemWatcher(this)),
+    m_debounce(new QTimer(this)) {
     m_debounce->setSingleShot(true);
     m_debounce->setInterval(kDebounceMs);
     connect(m_debounce, &QTimer::timeout, this, &LibraryWatcher::flushPending);
@@ -262,6 +274,7 @@ LibraryWatcher::LibraryWatcher(QObject *parent)
 LibraryWatcher::~LibraryWatcher() {
     m_stopping.store(true, std::memory_order_relaxed);
     m_generation.fetch_add(1, std::memory_order_relaxed);
+    if (m_debounce->isActive()) m_debounce->stop();
     m_workerPool.clear();
     m_workerPool.waitForDone();
 }
@@ -279,7 +292,10 @@ void LibraryWatcher::start() {
         m_roots.insert(r);
 
         watchTreeRecursive(r);
-        initialReconcileAsync(r);
+        m_pendingDirs.insert(r);
+    }
+    if (!m_pendingDirs.isEmpty()) {
+        flushPending();
     }
 }
 
@@ -361,6 +377,19 @@ void LibraryWatcher::removeRoot(const QString &path) {
     unwatchTree(clean);
     m_roots.remove(clean);
 
+    QSqlDatabase db = QSqlDatabase::database();
+    LibraryDb::NonBlockingWrite nonBlocking(db);
+    if (db.transaction()) {
+        QSqlQuery remove(db);
+        remove.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
+        remove.bindValue(0, clean);
+        if (remove.exec()) {
+            db.commit();
+        } else {
+            db.rollback();
+        }
+    }
+
     QSet<QString> remaining;
     const QString prefix = clean + QLatin1Char('/');
     for (const QString &p : std::as_const(m_pendingDirs)) {
@@ -384,7 +413,10 @@ void LibraryWatcher::rescanAll(const QSet<QString> &excludedRoots) {
         if (excludedRoots.contains(r)) continue;
         if (!QDir(r).exists()) continue;
         watchTreeRecursive(r);
-        initialReconcileAsync(r);
+        m_pendingDirs.insert(r);
+    }
+    if (!m_pendingDirs.isEmpty()) {
+        flushPending();
     }
 }
 
@@ -392,7 +424,8 @@ void LibraryWatcher::rescanRoot(const QString &root) {
     const QString clean = QDir(root).absolutePath();
     if (!m_roots.contains(clean) || !QDir(clean).exists()) return;
     watchTreeRecursive(clean);
-    initialReconcileAsync(clean);
+    m_pendingDirs.insert(clean);
+    flushPending();
 }
 
 void LibraryWatcher::flushPending() {
@@ -419,17 +452,32 @@ void LibraryWatcher::flushPending() {
 
         QMetaObject::invokeMethod(this, [this, pending, result, generation]() {
             if (generation == m_generation.load(std::memory_order_relaxed)) {
+                const QStringList watched = m_watcher->directories();
+                const QSet<QString> alreadyWatched(watched.begin(), watched.end());
+
+                QStringList deadDirs;
+                for (const QString &d : watched) {
+                    if (!QDir(d).exists()) deadDirs.append(d);
+                }
+                if (!deadDirs.isEmpty()) m_watcher->removePaths(deadDirs);
+
                 if (result.success) {
-                    for (const QString &sub : result.newSubdirsToWatch) {
+                    QStringList toWatch;
+                    for (const QString &sub : std::as_const(result.newSubdirsToWatch)) {
+                        if (alreadyWatched.contains(sub)) continue;
                         bool insideRoot = false;
-                        for (const QString &r : m_roots) {
+                        for (const QString &r : std::as_const(m_roots)) {
                             if (sub == r || sub.startsWith(r + QLatin1Char('/'))) {
                                 insideRoot = true;
                                 break;
                             }
                         }
-                        if (insideRoot) watchTreeRecursive(sub);
+                        if (insideRoot) toWatch.append(sub);
                     }
+                    if (!toWatch.isEmpty()) {
+                        m_watcher->addPaths(toWatch);
+                    }
+
                     if (result.changed) emit libraryChanged();
                     if (result.retry) m_pendingDirs.unite(pending);
                 } else if (result.retry) {
@@ -484,61 +532,8 @@ void LibraryWatcher::unwatchTree(const QString &root) {
 
 void LibraryWatcher::initialReconcileAsync(const QString &root) {
     if (m_stopping.load(std::memory_order_relaxed)) return;
-    const quint64 generation = m_generation.load(std::memory_order_relaxed);
-    m_workerPool.start([this, root, generation]() {
-        QSqlDatabase db;
-        const QString connName = LibraryDb::openScopedConnection(QStringLiteral("lwInit"), db);
-        bool changed = false;
-        bool retry = false;
-        if (!connName.isEmpty()) {
-            FileStates diskFiles;
-            QDirIterator it(root,
-                            AudioFormats::nameFilters(),
-                            QDir::Files | QDir::NoSymLinks,
-                            QDirIterator::Subdirectories);
-            while (it.hasNext() && !m_stopping.load(std::memory_order_relaxed)) {
-                const QFileInfo info(it.next());
-                diskFiles.insert(info.absoluteFilePath(),
-                                 FileState{info.size(),
-                                           info.lastModified().toMSecsSinceEpoch()});
-            }
-
-            FileStates dbSnapshot;
-            if (!loadDbFilesUnder(db, root, dbSnapshot)) {
-                retry = true;
-            }
-            const PreparedTracks prepared = prepareWrites(diskFiles, dbSnapshot, m_stopping);
-
-            if (!retry && !m_stopping.load(std::memory_order_relaxed) &&
-                beginWriteIfCurrent(db, generation, m_generation)) {
-                FileStates currentDbFiles;
-                if (!loadDbFilesUnder(db, root, currentDbFiles)) {
-                    db.rollback();
-                    retry = true;
-                } else {
-                    const ApplyResult applied =
-                        applyPreparedDiff(db, diskFiles, currentDbFiles, prepared);
-                    if (!applied.success || !db.commit()) {
-                        db.rollback();
-                        retry = generation == m_generation.load(std::memory_order_relaxed);
-                    } else {
-                        changed = applied.changed;
-                        retry = applied.retry;
-                    }
-                }
-            } else if (!retry) {
-                retry = generation == m_generation.load(std::memory_order_relaxed);
-            }
-        } else {
-            retry = generation == m_generation.load(std::memory_order_relaxed);
-        }
-        LibraryDb::closeScopedConnection(connName, db);
-
-        QMetaObject::invokeMethod(this, [this, root, generation, changed, retry]() {
-            if (generation != m_generation.load(std::memory_order_relaxed)) return;
-            if (changed) emit libraryChanged();
-            if (retry && m_roots.contains(root))
-                QTimer::singleShot(250, this, [this, root]() { initialReconcileAsync(root); });
-        }, Qt::QueuedConnection);
-    });
+    const QString clean = QDir(root).absolutePath();
+    if (!m_roots.contains(clean) || !QDir(clean).exists()) return;
+    m_pendingDirs.insert(clean);
+    flushPending();
 }
