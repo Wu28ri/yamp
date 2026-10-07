@@ -163,8 +163,8 @@ private:
     bool usingHardwareVolume() const {
         return m_bitPerfectEnabled && !m_softwareVolume && m_hardwareVolumeAvailable;
     }
-    void loadTrack(const Track &track);
-    void loadTrackIntoMpv(const Track &track);
+    void loadTrack(const Track &track, bool startPlayback = true);
+    void loadTrackIntoMpv(const Track &track, bool startPlayback = true);
     void loadLyrics(const QString &trackPath);
     void updateCurrentLyricIndex(qint64 positionMs);
     void requestExclusiveForPlayback();
@@ -194,6 +194,7 @@ private:
     Q_INVOKABLE void processMpvEvents();
     void handleMpvPropertyChange(mpv_event_property *prop);
     void handleMpvEndFile(mpv_event_end_file *ev);
+    void notifyTrackStarted();
 
     mpv_handle *m_mpv = nullptr;
     QTimer     *m_positionPollTimer = nullptr;
@@ -205,6 +206,8 @@ private:
     QHash<qint64, Track> m_mpvEntryTracks;
     qint64 m_loadingMpvEntryId = -1;
     qint64 m_currentMpvEntryId = -1;
+    qint64 m_loadedMpvEntryId = -1;
+    qint64 m_startedMpvEntryId = -1;
 
     PaVolumeController *m_paVolume        = nullptr;
     TrackModel         *m_trackModel      = nullptr;

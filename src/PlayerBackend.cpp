@@ -451,6 +451,7 @@ void PlayerBackend::initMpv() {
     mpv_set_option_string(m_mpv, "vid",                "no");
     mpv_set_option_string(m_mpv, "audio-display",      "no");
     mpv_set_option_string(m_mpv, "idle",               "yes");
+    mpv_set_option_string(m_mpv, "pause",              "yes");
     mpv_set_option_string(m_mpv, "force-window",       "no");
     mpv_set_option_string(m_mpv, "terminal",           "no");
     mpv_set_option_string(m_mpv, "input-default-bindings", "no");
@@ -514,7 +515,8 @@ void PlayerBackend::processMpvEvents() {
                 it != m_mpvEntryTracks.constEnd() && it->path == m_currentPath) {
                 m_audioOpenRetries = 0;
                 ++m_audioOpenRetryGeneration;
-                emit trackStarted(it.value());
+                m_loadedMpvEntryId = m_loadingMpvEntryId;
+                notifyTrackStarted();
             }
             break;
         }
@@ -522,6 +524,16 @@ void PlayerBackend::processMpvEvents() {
             break;
         }
     }
+}
+
+void PlayerBackend::notifyTrackStarted() {
+    if (!isPlaying() || m_currentMpvEntryId < 0 ||
+        m_loadedMpvEntryId != m_currentMpvEntryId ||
+        m_startedMpvEntryId == m_currentMpvEntryId) return;
+    const auto track = m_mpvEntryTracks.constFind(m_currentMpvEntryId);
+    if (track == m_mpvEntryTracks.constEnd() || track->path != m_currentPath) return;
+    m_startedMpvEntryId = m_currentMpvEntryId;
+    emit trackStarted(track.value());
 }
 
 void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
@@ -537,6 +549,7 @@ void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
             } else if (m_hasFile) {
                 m_positionPollTimer->start();
             }
+            notifyTrackStarted();
             emit playbackStateChanged();
         }
     } else if (std::strcmp(prop->name, "duration") == 0 && prop->format == MPV_FORMAT_DOUBLE) {
@@ -564,6 +577,7 @@ void PlayerBackend::handleMpvPropertyChange(mpv_event_property *prop) {
             } else if (!m_paused) {
                 m_positionPollTimer->start();
             }
+            notifyTrackStarted();
             emit playbackStateChanged();
         }
     }
@@ -574,6 +588,8 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
     const Track endedTrack = m_mpvEntryTracks.value(ev->playlist_entry_id, m_currentTrack);
     m_mpvEntryTracks.remove(ev->playlist_entry_id);
     if (m_loadingMpvEntryId == ev->playlist_entry_id) m_loadingMpvEntryId = -1;
+    if (m_loadedMpvEntryId == ev->playlist_entry_id) m_loadedMpvEntryId = -1;
+    if (m_startedMpvEntryId == ev->playlist_entry_id) m_startedMpvEntryId = -1;
     if (ev->playlist_entry_id != m_currentMpvEntryId) return;
     m_currentMpvEntryId = -1;
     switch (ev->reason) {
@@ -1081,8 +1097,22 @@ bool PlayerBackend::restoreQueueState() {
     const bool oldShuffle = m_queue.isShuffle();
     m_queue.restoreState(tracks, playOrder, currentIndex, detachedPosition,
                          detached, state.value(QStringLiteral("shuffle")).toBool());
+    Track current = m_queue.current();
+    if (state.contains(QStringLiteral("currentPath"))) {
+        const QString path = state.value(QStringLiteral("currentPath")).toString();
+        const auto saved = availableTracks.constFind(path);
+        if (path.isEmpty()) {
+            current = Track();
+        } else if (saved != availableTracks.constEnd() && QFileInfo::exists(path)) {
+            current = saved.value();
+            if (!m_queue.isCurrentDetached() && m_queue.current().path != path) {
+                m_queue.jumpToPosition(m_queue.positionOfPath(path));
+            }
+        }
+    }
     m_queueModel->resetAll();
     if (oldShuffle != m_queue.isShuffle()) emit shuffleChanged();
+    if (current.isValid()) loadTrack(current, false);
     return true;
 }
 
@@ -1105,6 +1135,7 @@ void PlayerBackend::saveQueueState() {
     state.insert(QStringLiteral("tracks"), tracks);
     state.insert(QStringLiteral("playOrder"), playOrder);
     state.insert(QStringLiteral("currentIndex"), m_queue.rawCurrentIndex());
+    state.insert(QStringLiteral("currentPath"), m_currentPath);
     state.insert(QStringLiteral("currentDetached"), m_queue.isCurrentDetached());
     state.insert(QStringLiteral("detachedPosition"), m_queue.detachedPosition());
     state.insert(QStringLiteral("shuffle"), m_queue.isShuffle());
@@ -1154,7 +1185,7 @@ void PlayerBackend::playNext() {
 }
 void PlayerBackend::playPrevious() { loadTrack(m_queue.previous()); }
 
-void PlayerBackend::loadTrack(const Track &t) {
+void PlayerBackend::loadTrack(const Track &t, bool startPlayback) {
     if (!t.isValid()) return;
 
     ++m_audioOpenRetryGeneration;
@@ -1168,7 +1199,7 @@ void PlayerBackend::loadTrack(const Track &t) {
             m_queueModel->resetAll();
             scheduleQueueSave();
         }
-        QTimer::singleShot(0, this, &PlayerBackend::playNext);
+        if (startPlayback) QTimer::singleShot(0, this, &PlayerBackend::playNext);
         return;
     }
 
@@ -1181,11 +1212,11 @@ void PlayerBackend::loadTrack(const Track &t) {
     m_currentCoverPath.clear();
     loadLyrics(t.path);
 
-    if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
+    if (startPlayback && m_bitPerfectEnabled && !m_audioExclusiveHeld) {
         m_pendingExclusiveTrack = t;
         requestExclusiveForPlayback();
     } else {
-        loadTrackIntoMpv(t);
+        loadTrackIntoMpv(t, startPlayback);
     }
 
     m_queueModel->notifyCurrentChanged();
@@ -1197,9 +1228,11 @@ void PlayerBackend::loadTrack(const Track &t) {
     scheduleQueueSave();
 }
 
-void PlayerBackend::loadTrackIntoMpv(const Track &track) {
+void PlayerBackend::loadTrackIntoMpv(const Track &track, bool startPlayback) {
     if (!m_mpv || !track.isValid()) return;
-    int paused = 0;
+    m_loadedMpvEntryId = -1;
+    m_startedMpvEntryId = -1;
+    int paused = startPlayback ? 0 : 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
     const QByteArray path = track.path.toUtf8();
     const char *command[] = {"loadfile", path.constData(), nullptr};
@@ -1412,6 +1445,8 @@ void PlayerBackend::resetPlaybackState() {
     }
     m_currentTrack = Track();
     m_currentMpvEntryId = -1;
+    m_loadedMpvEntryId = -1;
+    m_startedMpvEntryId = -1;
     m_currentPath.clear();
     m_currentTitle  = kDefaultTitle;
     m_currentArtist = kDefaultArtist;
