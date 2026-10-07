@@ -14,7 +14,11 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QSet>
 #include <QSqlQuery>
 #include <QTimer>
@@ -54,6 +58,10 @@ bool isValidSortColumn(const QString &name) {
         || name == kColumnTrackNo;
 }
 
+QString queueStatePath() {
+    return QFileInfo(MusicLibrary::databasePath()).dir().filePath(QStringLiteral("queue.json"));
+}
+
 Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
     Track t;
     t.path        = q.value(offset + 0).toString();
@@ -73,6 +81,23 @@ struct LyricsData {
     QList<int> lineIndices;
     bool synchronized = false;
 };
+
+LyricsData timedLyrics(QList<QPair<qint64, QString>> lines) {
+    std::stable_sort(lines.begin(), lines.end(), [](const auto &left, const auto &right) {
+        return left.first < right.first;
+    });
+    LyricsData result;
+    result.synchronized = true;
+    for (const auto &[timeMs, text] : lines) {
+        result.times.append(timeMs);
+        result.lineIndices.append(text.isEmpty() ? -1 : result.lines.size());
+        if (!text.isEmpty()) {
+            result.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
+                                            {QStringLiteral("text"), text}});
+        }
+    }
+    return result;
+}
 
 LyricsData parseLyricsText(QString text) {
     LyricsData result;
@@ -131,24 +156,7 @@ LyricsData parseLyricsText(QString text) {
         for (qint64 timeMs : lineTimes) timedLines.append({timeMs, line});
     }
 
-    if (!timedLines.isEmpty()) {
-        std::stable_sort(timedLines.begin(), timedLines.end(),
-                         [](const auto &left, const auto &right) {
-                             return left.first < right.first;
-                         });
-        result.synchronized = true;
-        for (const auto &[timeMs, line] : timedLines) {
-            result.times.append(timeMs);
-            if (line.isEmpty()) {
-                result.lineIndices.append(-1);
-            } else {
-                result.lineIndices.append(result.lines.size());
-                result.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
-                                                {QStringLiteral("text"), line}});
-            }
-        }
-        return result;
-    }
+    if (!timedLines.isEmpty()) return timedLyrics(std::move(timedLines));
 
     for (const QString &line : plainLines) {
         result.lines.append(QVariantMap{{QStringLiteral("timeMs"), -1},
@@ -184,30 +192,12 @@ LyricsData readLyrics(const QString &trackPath) {
                     continue;
                 }
 
-                LyricsData data;
                 QList<QPair<qint64, QString>> timedLines;
                 for (const auto &entry : lyrics->synchedText()) {
                     const QString line = QString::fromStdString(entry.text.to8Bit(true)).trimmed();
                     timedLines.append({entry.time, line});
                 }
-                if (!timedLines.isEmpty()) {
-                    std::stable_sort(timedLines.begin(), timedLines.end(),
-                                     [](const auto &left, const auto &right) {
-                                         return left.first < right.first;
-                    });
-                    for (const auto &[timeMs, line] : timedLines) {
-                        data.times.append(timeMs);
-                        if (line.isEmpty()) {
-                            data.lineIndices.append(-1);
-                        } else {
-                            data.lineIndices.append(data.lines.size());
-                            data.lines.append(QVariantMap{{QStringLiteral("timeMs"), timeMs},
-                                                          {QStringLiteral("text"), line}});
-                        }
-                    }
-                    data.synchronized = true;
-                    return data;
-                }
+                if (!timedLines.isEmpty()) return timedLyrics(std::move(timedLines));
             }
         }
     }
@@ -264,6 +254,12 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_artistModel->reload();
 
     m_queueModel = new QueueModel(&m_queue, this);
+
+    m_queueSaveTimer = new QTimer(this);
+    m_queueSaveTimer->setSingleShot(true);
+    m_queueSaveTimer->setInterval(400);
+    connect(m_queueSaveTimer, &QTimer::timeout, this, &PlayerBackend::saveQueueState);
+    connect(m_queueModel, &QueueModel::queueChanged, this, &PlayerBackend::scheduleQueueSave);
 
     m_libraryWatcher = new LibraryWatcher(this);
     connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this,
@@ -426,12 +422,16 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_libraryWatcher->start();
 
     QTimer::singleShot(0, this, [this]() {
-        rebuildQueueFromCurrentFilter();
+        const bool restored = restoreQueueState();
+        m_queueStateReady = true;
+        if (!restored) rebuildQueueFromCurrentFilter();
+        scheduleQueueSave();
         emit currentQueuePositionChanged();
     });
 }
 
 PlayerBackend::~PlayerBackend() {
+    if (m_queueStateReady) saveQueueState();
     shutdownMpv();
 }
 
@@ -855,6 +855,7 @@ void PlayerBackend::setShuffle(bool enabled) {
     if (m_queue.isShuffle() == enabled) return;
     m_queue.setShuffle(enabled);
     m_queueModel->resetAll();
+    scheduleQueueSave();
     emit shuffleChanged();
     emit currentQueuePositionChanged();
 }
@@ -995,6 +996,125 @@ void PlayerBackend::rebuildQueueFromCurrentFilter() {
     m_queueBuiltFromSort   = m_sortColumn;
     m_queueBuiltFromOrder  = m_sortOrder;
     m_queueModel->resetAll();
+    scheduleQueueSave();
+}
+
+bool PlayerBackend::restoreQueueState() {
+    QFile file(queueStatePath());
+    if (!file.exists()) return false;
+    if (!file.open(QIODevice::ReadOnly)) {
+        qWarning("[queue] could not open saved queue");
+        return false;
+    }
+
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        qWarning("[queue] invalid saved queue: %s", qPrintable(error.errorString()));
+        return false;
+    }
+
+    const QJsonObject state = document.object();
+    if (state.value(QStringLiteral("version")).toInt() != 1 ||
+        !state.value(QStringLiteral("tracks")).isArray() ||
+        !state.value(QStringLiteral("playOrder")).isArray()) {
+        qWarning("[queue] unsupported saved queue format");
+        return false;
+    }
+
+    QHash<QString, Track> availableTracks;
+    const QList<Track> libraryTracks = queryTracks();
+    availableTracks.reserve(libraryTracks.size());
+    for (const Track &track : libraryTracks) availableTracks.insert(track.path, track);
+
+    const QJsonArray savedTracks = state.value(QStringLiteral("tracks")).toArray();
+    QList<Track> tracks;
+    QList<int> oldToNew(savedTracks.size(), -1);
+    for (int oldId = 0; oldId < savedTracks.size(); ++oldId) {
+        const QString path = savedTracks.at(oldId).toString();
+        const auto track = availableTracks.constFind(path);
+        if (path.isEmpty() || track == availableTracks.constEnd() ||
+            !QFileInfo::exists(path)) {
+            continue;
+        }
+        oldToNew[oldId] = tracks.size();
+        tracks.append(track.value());
+    }
+
+    const QJsonArray savedOrder = state.value(QStringLiteral("playOrder")).toArray();
+    const auto remap = [&oldToNew](int id) {
+        return id >= 0 && id < oldToNew.size() ? oldToNew.at(id) : -1;
+    };
+    QList<int> survivingBefore{0};
+    std::vector<int> playOrder;
+    playOrder.reserve(static_cast<size_t>(savedOrder.size()));
+    for (const QJsonValue &value : savedOrder) {
+        const int id = remap(value.toInt(-1));
+        survivingBefore.append(survivingBefore.last() + (id >= 0 ? 1 : 0));
+        if (id >= 0) playOrder.push_back(id);
+    }
+    const auto survivingCount = [&survivingBefore, &savedOrder](int position) {
+        return survivingBefore.at(qBound(0, position, static_cast<int>(savedOrder.size())));
+    };
+
+    const bool detached = state.value(QStringLiteral("currentDetached")).toBool();
+    const int savedCurrentIndex = state.value(QStringLiteral("currentIndex")).toInt(-1);
+    int currentIndex = -1;
+    if (!detached && !playOrder.empty()) {
+        if (savedCurrentIndex >= 0 && savedCurrentIndex < savedOrder.size()) {
+            const int newCurrentId = remap(savedOrder.at(savedCurrentIndex).toInt(-1));
+            if (newCurrentId >= 0) {
+                const auto position = std::find(playOrder.cbegin(), playOrder.cend(), newCurrentId);
+                if (position != playOrder.cend())
+                    currentIndex = static_cast<int>(std::distance(playOrder.cbegin(), position));
+            }
+        }
+        if (currentIndex < 0) {
+            currentIndex = qMin(survivingCount(savedCurrentIndex),
+                               static_cast<int>(playOrder.size()) - 1);
+        }
+    }
+
+    const int detachedPosition = detached
+        ? survivingCount(state.value(QStringLiteral("detachedPosition")).toInt()) : -1;
+
+    const bool oldShuffle = m_queue.isShuffle();
+    m_queue.restoreState(tracks, playOrder, currentIndex, detachedPosition,
+                         detached, state.value(QStringLiteral("shuffle")).toBool());
+    m_queueModel->resetAll();
+    if (oldShuffle != m_queue.isShuffle()) emit shuffleChanged();
+    return true;
+}
+
+void PlayerBackend::scheduleQueueSave() {
+    if (m_queueStateReady && m_queueSaveTimer) m_queueSaveTimer->start();
+}
+
+void PlayerBackend::saveQueueState() {
+    if (!m_queueStateReady) return;
+    if (m_queueSaveTimer) m_queueSaveTimer->stop();
+
+    QJsonArray tracks;
+    for (const Track &track : m_queue.tracks()) tracks.append(track.path);
+
+    QJsonArray playOrder;
+    for (int id : m_queue.playOrder()) playOrder.append(id);
+
+    QJsonObject state;
+    state.insert(QStringLiteral("version"), 1);
+    state.insert(QStringLiteral("tracks"), tracks);
+    state.insert(QStringLiteral("playOrder"), playOrder);
+    state.insert(QStringLiteral("currentIndex"), m_queue.rawCurrentIndex());
+    state.insert(QStringLiteral("currentDetached"), m_queue.isCurrentDetached());
+    state.insert(QStringLiteral("detachedPosition"), m_queue.detachedPosition());
+    state.insert(QStringLiteral("shuffle"), m_queue.isShuffle());
+
+    QSaveFile file(queueStatePath());
+    if (!file.open(QIODevice::WriteOnly) ||
+        file.write(QJsonDocument(state).toJson(QJsonDocument::Compact)) < 0 ||
+        !file.commit()) {
+        qWarning("[queue] could not save queue state");
+    }
 }
 
 void PlayerBackend::playMusic(const QString &filePath) {
@@ -1046,6 +1166,7 @@ void PlayerBackend::loadTrack(const Track &t) {
         if (missingPosition >= 0) {
             m_queue.removeTrack(missingPosition);
             m_queueModel->resetAll();
+            scheduleQueueSave();
         }
         QTimer::singleShot(0, this, &PlayerBackend::playNext);
         return;
@@ -1073,6 +1194,7 @@ void PlayerBackend::loadTrack(const Track &t) {
     emit metadataChanged();
 
     m_coverService->requestCoverFor(t.path, ++m_coverGen);
+    scheduleQueueSave();
 }
 
 void PlayerBackend::loadTrackIntoMpv(const Track &track) {
@@ -1112,51 +1234,37 @@ void PlayerBackend::applyFilter() {
     m_trackModel->select();
 }
 
-void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
-    QString       newFilter;
-    QString       newSortColumn;
-    Qt::SortOrder newSortOrder = Qt::AscendingOrder;
-    if (albumName.isEmpty()) {
-        newSortColumn = kColumnTitle;
-    } else {
-        if (artistName.isEmpty()) {
-            newFilter = QStringLiteral("album = %1").arg(SqlUtils::quote(albumName));
-        } else {
-            newFilter = QStringLiteral(
-                "album = %1 AND "
-                "COALESCE(NULLIF(album_artist, ''), artist) = %2")
-                .arg(SqlUtils::quote(albumName), SqlUtils::quote(artistName));
-        }
-        newSortColumn = kColumnTrackNo;
-    }
-    if (newFilter == m_categoryFilter && newSortColumn == m_sortColumn &&
-        newSortOrder == m_sortOrder) return;
-    m_categoryFilter = newFilter;
-    m_sortColumn     = newSortColumn;
-    m_sortOrder      = newSortOrder;
+void PlayerBackend::setCategoryFilter(const QString &filter, const QString &sortColumn) {
+    if (filter == m_categoryFilter && sortColumn == m_sortColumn &&
+        m_sortOrder == Qt::AscendingOrder) return;
+    m_categoryFilter = filter;
+    m_sortColumn = sortColumn;
+    m_sortOrder = Qt::AscendingOrder;
     applyFilter();
 }
 
+void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
+    QString filter;
+    if (!albumName.isEmpty()) {
+        filter = QStringLiteral("album = %1").arg(SqlUtils::quote(albumName));
+        if (!artistName.isEmpty()) {
+            filter += QStringLiteral(" AND COALESCE(NULLIF(album_artist, ''), artist) = %1")
+                .arg(SqlUtils::quote(artistName));
+        }
+    }
+    setCategoryFilter(filter, albumName.isEmpty() ? kColumnTitle : kColumnTrackNo);
+}
+
 void PlayerBackend::filterByArtist(const QString &artistName) {
-    QString       newFilter;
-    QString       newSortColumn;
-    Qt::SortOrder newSortOrder = Qt::AscendingOrder;
-    if (artistName.isEmpty()) {
-        newSortColumn = kColumnTitle;
-    } else {
+    QString filter;
+    if (!artistName.isEmpty()) {
         const QString norm = MusicLibrary::normalizeArtistName(artistName);
-        newFilter = QStringLiteral(
+        filter = QStringLiteral(
             "id IN (SELECT track_id FROM track_artists ta "
             "JOIN artists a ON a.id = ta.artist_id "
             "WHERE a.name_norm = %1)").arg(SqlUtils::quote(norm));
-        newSortColumn = kColumnAlbum;
     }
-    if (newFilter == m_categoryFilter && newSortColumn == m_sortColumn &&
-        newSortOrder == m_sortOrder) return;
-    m_categoryFilter = newFilter;
-    m_sortColumn     = newSortColumn;
-    m_sortOrder      = newSortOrder;
-    applyFilter();
+    setCategoryFilter(filter, artistName.isEmpty() ? kColumnTitle : kColumnAlbum);
 }
 
 void PlayerBackend::searchTracks(const QString &query) {
@@ -1264,6 +1372,14 @@ void PlayerBackend::openInFileManager(const QString &path) {
 }
 
 void PlayerBackend::refreshAllModels() {
+    const auto finishQuery = [](QSqlQueryModel *model) {
+        QT_IGNORE_DEPRECATIONS(QSqlQuery query = model->query();)
+        query.finish();
+    };
+    finishQuery(m_trackModel);
+    finishQuery(m_albumModel);
+    finishQuery(m_artistModel);
+
     m_trackModel->select();
     m_albumModel->reload();
     m_artistModel->reload();
@@ -1291,6 +1407,8 @@ void PlayerBackend::resetPlaybackState() {
     if (m_mpv) {
         const char *cmd[] = {"stop", nullptr};
         mpv_command(m_mpv, cmd);
+        int paused = 1;
+        mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
     }
     m_currentTrack = Track();
     m_currentMpvEntryId = -1;
@@ -1349,6 +1467,7 @@ void PlayerBackend::clearLibrary() {
 
     m_queue.setTracks({});
     m_queueModel->resetAll();
+    scheduleQueueSave();
 
     m_libraryWatcher->clearAll();
 

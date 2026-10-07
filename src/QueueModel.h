@@ -28,6 +28,9 @@ public:
     void resetAll();
     void notifyCurrentChanged();
 
+signals:
+    void queueChanged();
+
 private:
     TrackQueue *m_queue;
 };

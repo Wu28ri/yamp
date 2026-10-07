@@ -20,20 +20,15 @@ public:
     void setScaledBudgetKb(int kb);
 
 private:
-    struct SourceEntry {
-        QImage image;
-        int    kb = 0;
-    };
     struct ScaledEntry {
         QImage image;
         QSize  sourceSize;
-        int    kb = 0;
     };
 
     QHash<QString, QByteArray>      m_pathToHash;
 
     QHash<QString, QByteArray>      m_dirToHash;
-    QCache<QByteArray, SourceEntry> m_sources;
+    QCache<QByteArray, QImage> m_sources;
     QCache<QByteArray, ScaledEntry> m_scaled;
 
     QReadWriteLock m_lock;
@@ -42,4 +37,3 @@ private:
     int    m_sourceBudgetKb = 48 * 1024;
     int    m_scaledBudgetKb = 16 * 1024;
 };
-

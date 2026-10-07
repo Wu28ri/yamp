@@ -10,9 +10,12 @@
 class TrackQueue {
 public:
     int  currentPosition() const { return m_currentDetached ? -1 : m_currentIndex; }
+    int  rawCurrentIndex() const { return m_currentIndex; }
+    int  detachedPosition() const { return m_detachedPosition; }
     int  nextInsertionPosition() const;
     int  count()           const { return static_cast<int>(m_playOrder.size()); }
     bool isShuffle()       const { return m_shuffle; }
+    bool isCurrentDetached() const { return m_currentDetached; }
 
     bool containsPath(const QString &path) const;
     int  positionOfPath(const QString &path) const;
@@ -23,6 +26,9 @@ public:
     Track current() const;
 
     void setTracks(const QList<Track> &tracks);
+    void restoreState(const QList<Track> &tracks, const std::vector<int> &playOrder,
+                      int currentIndex, int detachedPosition,
+                      bool currentDetached, bool shuffle);
     void insertNext(const Track &track);
     void removeTrack(int position);
     void retainPaths(const QSet<QString> &paths);
@@ -36,6 +42,8 @@ public:
     Track previous();
 
 private:
+    int positionOfId(int globalId) const;
+    void resetPlayOrder();
     void rebuildPlayOrder();
     void rebuildPathIndex();
 

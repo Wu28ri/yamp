@@ -34,6 +34,20 @@ constexpr int kNowPlayingRetryMs = 15000;
 
 QByteArray utf8(const QString &s) { return s.toUtf8(); }
 
+QMap<QString, QString> trackParameters(const Track &track, const QString &suffix = {}) {
+    QMap<QString, QString> params{{QStringLiteral("artist") + suffix, track.artist},
+                                  {QStringLiteral("track") + suffix, track.title}};
+    if (!track.album.isEmpty())
+        params.insert(QStringLiteral("album") + suffix, track.album);
+    if (!track.albumArtist.isEmpty() && track.albumArtist != track.artist)
+        params.insert(QStringLiteral("albumArtist") + suffix, track.albumArtist);
+    if (track.duration > 0)
+        params.insert(QStringLiteral("duration") + suffix, QString::number(track.duration));
+    if (track.trackNo > 0)
+        params.insert(QStringLiteral("trackNumber") + suffix, QString::number(track.trackNo));
+    return params;
+}
+
 int jsonInt(const QJsonValue &value, int fallback = -1) {
     if (value.isDouble()) return value.toInt(fallback);
     if (value.isString()) {
@@ -174,40 +188,30 @@ QString LastFmScrobbler::signature(const QMap<QString, QString> &params) const {
         QCryptographicHash::hash(buffer, QCryptographicHash::Md5).toHex());
 }
 
-QNetworkReply *LastFmScrobbler::postSigned(QMap<QString, QString> params) {
+QNetworkReply *LastFmScrobbler::requestSigned(QMap<QString, QString> params, bool post) {
     params.insert(QStringLiteral("api_key"), QString::fromLatin1(kApiKey));
     params.insert(QStringLiteral("api_sig"), signature(params));
     params.insert(QStringLiteral("format"), QStringLiteral("json"));
 
-    QUrlQuery body;
-    for (auto it = params.constBegin(); it != params.constEnd(); ++it)
-        body.addQueryItem(it.key(), it.value());
-
-    QNetworkRequest request{QUrl(QString::fromLatin1(kApiRoot))};
-    request.setTransferTimeout(kRequestTimeoutMs);
-    request.setRawHeader("User-Agent", kUserAgent);
-    request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      QStringLiteral("application/x-www-form-urlencoded"));
-    QNetworkReply *reply = m_nam->post(request, body.toString(QUrl::FullyEncoded).toUtf8());
-    armHardTimeout(reply);
-    return reply;
-}
-
-QNetworkReply *LastFmScrobbler::getSigned(QMap<QString, QString> params) {
-    params.insert(QStringLiteral("api_key"), QString::fromLatin1(kApiKey));
-    params.insert(QStringLiteral("api_sig"), signature(params));
-    params.insert(QStringLiteral("format"), QStringLiteral("json"));
-
-    QUrl url(QString::fromLatin1(kApiRoot));
     QUrlQuery query;
     for (auto it = params.constBegin(); it != params.constEnd(); ++it)
         query.addQueryItem(it.key(), it.value());
-    url.setQuery(query);
+    const QString encoded = query.toString(QUrl::FullyEncoded)
+        .replace(QLatin1Char('+'), QStringLiteral("%2B"));
 
+    QUrl url(QString::fromLatin1(kApiRoot));
+    if (!post) url.setQuery(encoded);
     QNetworkRequest request(url);
     request.setTransferTimeout(kRequestTimeoutMs);
     request.setRawHeader("User-Agent", kUserAgent);
-    QNetworkReply *reply = m_nam->get(request);
+    QNetworkReply *reply;
+    if (post) {
+        request.setHeader(QNetworkRequest::ContentTypeHeader,
+                          QStringLiteral("application/x-www-form-urlencoded"));
+        reply = m_nam->post(request, encoded.toUtf8());
+    } else {
+        reply = m_nam->get(request);
+    }
     armHardTimeout(reply);
     return reply;
 }
@@ -221,7 +225,7 @@ void LastFmScrobbler::startAuth() {
 
     QMap<QString, QString> params;
     params.insert(QStringLiteral("method"), QStringLiteral("auth.getToken"));
-    QNetworkReply *reply = getSigned(params);
+    QNetworkReply *reply = requestSigned(params, false);
     m_authReply = reply;
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, generation]() {
@@ -295,7 +299,7 @@ void LastFmScrobbler::pollAuthSession() {
     QMap<QString, QString> params;
     params.insert(QStringLiteral("method"), QStringLiteral("auth.getSession"));
     params.insert(QStringLiteral("token"), token);
-    QNetworkReply *reply = getSigned(params);
+    QNetworkReply *reply = requestSigned(params, false);
     m_authReply = reply;
 
     connect(reply, &QNetworkReply::finished, this, [this, reply, generation, token]() {
@@ -500,22 +504,12 @@ void LastFmScrobbler::maybeSendNowPlaying() {
     const quint64 generation = m_playbackGeneration;
     const QString sessionKey = m_sessionKey;
 
-    QMap<QString, QString> params;
+    QMap<QString, QString> params = trackParameters(track);
     params.insert(QStringLiteral("method"), QStringLiteral("track.updateNowPlaying"));
     params.insert(QStringLiteral("sk"), sessionKey);
-    params.insert(QStringLiteral("artist"), track.artist);
-    params.insert(QStringLiteral("track"), track.title);
-    if (!track.album.isEmpty())
-        params.insert(QStringLiteral("album"), track.album);
-    if (!track.albumArtist.isEmpty() && track.albumArtist != track.artist)
-        params.insert(QStringLiteral("albumArtist"), track.albumArtist);
-    if (track.duration > 0)
-        params.insert(QStringLiteral("duration"), QString::number(track.duration));
-    if (track.trackNo > 0)
-        params.insert(QStringLiteral("trackNumber"), QString::number(track.trackNo));
 
     m_nowPlayingInFlight = true;
-    QNetworkReply *reply = postSigned(params);
+    QNetworkReply *reply = requestSigned(params);
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, generation, sessionKey]() {
         const QNetworkReply::NetworkError networkError = reply->error();
@@ -574,23 +568,13 @@ void LastFmScrobbler::processScrobbleQueue() {
     const PendingScrobble pending = m_pendingScrobbles.constFirst();
     const QString sessionKey = m_sessionKey;
 
-    QMap<QString, QString> params;
+    QMap<QString, QString> params = trackParameters(pending.track, QStringLiteral("[0]"));
     params.insert(QStringLiteral("method"), QStringLiteral("track.scrobble"));
     params.insert(QStringLiteral("sk"), sessionKey);
-    params.insert(QStringLiteral("artist[0]"), pending.track.artist);
-    params.insert(QStringLiteral("track[0]"), pending.track.title);
     params.insert(QStringLiteral("timestamp[0]"), QString::number(pending.startedAtUnix));
-    if (!pending.track.album.isEmpty())
-        params.insert(QStringLiteral("album[0]"), pending.track.album);
-    if (!pending.track.albumArtist.isEmpty() && pending.track.albumArtist != pending.track.artist)
-        params.insert(QStringLiteral("albumArtist[0]"), pending.track.albumArtist);
-    if (pending.track.duration > 0)
-        params.insert(QStringLiteral("duration[0]"), QString::number(pending.track.duration));
-    if (pending.track.trackNo > 0)
-        params.insert(QStringLiteral("trackNumber[0]"), QString::number(pending.track.trackNo));
 
     m_scrobbleInFlightId = pending.id;
-    QNetworkReply *reply = postSigned(params);
+    QNetworkReply *reply = requestSigned(params);
     connect(reply, &QNetworkReply::finished, this,
             [this, reply, pending, sessionKey]() {
         const QNetworkReply::NetworkError networkError = reply->error();

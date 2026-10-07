@@ -41,6 +41,7 @@ void QueueModel::move(int from, int to) {
     m_queue->moveTrack(from, to);
     endMoveRows();
     notifyCurrentChanged();
+    emit queueChanged();
 }
 
 void QueueModel::remove(int position) {
@@ -50,6 +51,7 @@ void QueueModel::remove(int position) {
     m_queue->removeTrack(position);
     endRemoveRows();
     notifyCurrentChanged();
+    emit queueChanged();
 }
 
 void QueueModel::insertTrack(const Track &track) {
@@ -59,6 +61,7 @@ void QueueModel::insertTrack(const Track &track) {
     m_queue->insertNext(track);
     endInsertRows();
     notifyCurrentChanged();
+    emit queueChanged();
 }
 
 bool QueueModel::retainPaths(const QSet<QString> &paths) {
@@ -75,6 +78,7 @@ bool QueueModel::retainPaths(const QSet<QString> &paths) {
     beginResetModel();
     m_queue->retainPaths(paths);
     endResetModel();
+    emit queueChanged();
     return true;
 }
 

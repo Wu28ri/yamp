@@ -37,7 +37,7 @@ QByteArray embeddedPicture(const QString &trackPath) {
         }
     } else {
         const auto props = f.file()->complexProperties("PICTURE");
-        if (!props.isEmpty()) pic = props.front()["DATA"].toByteVector();
+        if (!props.isEmpty()) pic = props.front()["data"].toByteVector();
     }
 
     if (pic.isEmpty()) return {};
@@ -132,4 +132,3 @@ QString detectImageExtension(const QByteArray &data) {
 }
 
 }
-

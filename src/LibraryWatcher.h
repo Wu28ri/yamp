@@ -43,10 +43,9 @@ private:
     QStringList loadRoots();
     QString attachRoot(const QString &path, bool *retry);
 
+    QStringList watchDirectories(const QStringList &paths);
     void watchTreeRecursive(const QString &root);
     void unwatchTree(const QString &root);
-
-    void initialReconcileAsync(const QString &root);
 
     QFileSystemWatcher *m_watcher = nullptr;
     QTimer *m_debounce = nullptr;

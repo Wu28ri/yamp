@@ -34,29 +34,13 @@ Window {
             Layout.fillWidth: true
             implicitWidth: 0
 
-            TabButton {
-                text: "General"
-                width: settingsTabBar.width / settingsTabBar.count
-            }
-            TabButton {
-                text: "Audio"
-                width: settingsTabBar.width / settingsTabBar.count
-            }
-            TabButton {
-                text: "Library"
-                width: settingsTabBar.width / settingsTabBar.count
-            }
-            TabButton {
-                text: "Performance"
-                width: settingsTabBar.width / settingsTabBar.count
-            }
-            TabButton {
-                text: "Last.fm"
-                width: settingsTabBar.width / settingsTabBar.count
-            }
-            TabButton {
-                text: "About"
-                width: settingsTabBar.width / settingsTabBar.count
+            Repeater {
+                model: ["General", "Audio", "Library", "Performance", "Last.fm", "About"]
+                TabButton {
+                    required property string modelData
+                    text: modelData
+                    width: settingsTabBar.width / settingsTabBar.count
+                }
             }
         }
 
@@ -211,30 +195,18 @@ Window {
                             textRole: "description"
                             valueRole: "name"
 
-                            property var deviceList: []
-
                             function refresh() {
-                                const list = playerBackend.listHardwareDevices()
-                                deviceList = list
-                                model = list
-                                const cur = appSettings.audioDevice
-                                let idx = -1
-                                for (let i = 0; i < list.length; ++i) {
-                                    if (list[i].name === cur) { idx = i; break }
-                                }
-                                if (idx < 0 && list.length > 0) {
-                                    idx = 0
-                                    appSettings.audioDevice = list[0].name
-                                }
-                                currentIndex = idx
+                                model = playerBackend.listHardwareDevices()
+                                const index = indexOfValue(appSettings.audioDevice)
+                                currentIndex = index >= 0 ? index : (count > 0 ? 0 : -1)
+                                if (index < 0 && count > 0)
+                                    appSettings.audioDevice = currentValue
                             }
 
                             Component.onCompleted: refresh()
                             onVisibleChanged: if (visible) refresh()
                             onActivated: {
-                                if (currentIndex >= 0 && currentIndex < deviceList.length) {
-                                    appSettings.audioDevice = deviceList[currentIndex].name
-                                }
+                                if (currentIndex >= 0) appSettings.audioDevice = currentValue
                             }
                         }
 

@@ -141,34 +141,23 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     const int reqH = requestedSize.height();
 
     QByteArray contentHash;
-    bool       haveHash      = false;
-    bool       isPlaceholder = false;
     bool       fromDirHash   = false;
     {
         QReadLocker locker(&m_lock);
-        auto it = m_pathToHash.constFind(pathKey);
-        if (it != m_pathToHash.constEnd()) {
-            contentHash   = it.value();
-            haveHash      = true;
-            isPlaceholder = (contentHash == kPlaceholderHash);
-        } else {
-            auto dit = m_dirToHash.constFind(dirKey);
-            if (dit != m_dirToHash.constEnd()) {
-                contentHash   = dit.value();
-                haveHash      = true;
-                fromDirHash   = true;
-                isPlaceholder = (contentHash == kPlaceholderHash);
-            }
+        contentHash = m_pathToHash.value(pathKey);
+        if (contentHash.isEmpty()) {
+            contentHash = m_dirToHash.value(dirKey);
+            fromDirHash = !contentHash.isEmpty();
         }
     }
 
-    if (haveHash && isPlaceholder) {
+    if (contentHash == kPlaceholderHash) {
         QImage img = makePlaceholder();
         if (size) *size = img.size();
         return img;
     }
 
-    if (haveHash) {
+    if (!contentHash.isEmpty()) {
         const QByteArray sourceKey = makeSourceKey(contentHash, maxEdge);
         const QByteArray scaledKey = makeScaledKey(sourceKey, reqW, reqH);
 
@@ -176,13 +165,13 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         QSize  cachedSourceSize;
         QImage cachedSource;
         {
-            QReadLocker locker(&m_lock);
+            QWriteLocker locker(&m_lock);
             if (auto *entry = m_scaled.object(scaledKey)) {
                 cachedScaled     = entry->image;
                 cachedSourceSize = entry->sourceSize;
             } else if (auto *entry = m_sources.object(sourceKey)) {
-                cachedSource     = entry->image;
-                cachedSourceSize = entry->image.size();
+                cachedSource     = *entry;
+                cachedSourceSize = entry->size();
             }
         }
 
@@ -204,7 +193,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
             {
                 QWriteLocker locker(&m_lock);
                 m_scaled.insert(scaledKey,
-                                new ScaledEntry{out, cachedSourceSize, imageKb(out)},
+                                new ScaledEntry{out, cachedSourceSize},
                                 qMax(imageKb(out), 16));
                 if (fromDirHash) m_pathToHash.insert(pathKey, contentHash);
             }
@@ -231,30 +220,24 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
 
     QImage source;
     {
-        QReadLocker locker(&m_lock);
+        QWriteLocker locker(&m_lock);
         if (auto *entry = m_sources.object(sourceKey)) {
-            source = entry->image;
+            source = *entry;
         }
     }
 
     const bool shareAcrossDir = (cover.source == CoverExtractor::Source::Sidecar);
 
-    if (source.isNull()) {
-        source = downscaleIfNeeded(cover.image, maxEdge);
+    const bool cacheSource = source.isNull();
+    if (cacheSource) source = downscaleIfNeeded(cover.image, maxEdge);
+    {
         QWriteLocker locker(&m_lock);
-        m_sources.insert(sourceKey,
-                         new SourceEntry{source, imageKb(source)},
-                         qMax(imageKb(source), 16));
+        if (cacheSource)
+            m_sources.insert(sourceKey, new QImage(source), qMax(imageKb(source), 16));
         capHash(m_pathToHash);
         capHash(m_dirToHash);
         m_pathToHash.insert(pathKey, contentHash);
 
-        if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
-    } else {
-        QWriteLocker locker(&m_lock);
-        capHash(m_pathToHash);
-        capHash(m_dirToHash);
-        m_pathToHash.insert(pathKey, contentHash);
         if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     }
 
@@ -269,7 +252,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         const QByteArray scaledKey = makeScaledKey(sourceKey, reqW, reqH);
         QWriteLocker locker(&m_lock);
         m_scaled.insert(scaledKey,
-                        new ScaledEntry{out, sourceSize, imageKb(out)},
+                        new ScaledEntry{out, sourceSize},
                         qMax(imageKb(out), 16));
     }
     return out;

@@ -33,6 +33,22 @@ Rectangle {
         return m + ":" + pad(s)
     }
 
+    function openMetadata(target) {
+        const ctx = playerBackend.trackContextForPath(playerBackend.currentPath)
+        if (!ctx) return
+        if (target === "artist" && ctx.artist) {
+            root.selectedArtist = ctx.artist
+            playerBackend.filterByArtist(ctx.artist)
+            root.currentView = "artistDetail"
+        } else if (target === "album" && ctx.album) {
+            root.selectedAlbum = ctx.album
+            root.selectedArtist = ctx.albumArtist
+            root.selectedAlbumPath = playerBackend.currentPath
+            playerBackend.filterByAlbum(ctx.album, ctx.albumArtist)
+            root.currentView = "albumDetail"
+        }
+    }
+
     Slider {
         id: progressSlider
         anchors {
@@ -188,6 +204,8 @@ Rectangle {
 
                 TextEdit {
                     id: artistAlbumField
+                    readonly property string hoveredMetadata: metadataHover.hovered
+                        ? navigationTargetAt(metadataHover.point.position.x, metadataHover.point.position.y) : ""
                     width: Math.min(Math.ceil(artistAlbumMetrics.advanceWidth) + 6, parent.width)
                     height: parent.height
                     text: playerBackend.currentArtist + (playerBackend.currentAlbum ? " — " + playerBackend.currentAlbum : "")
@@ -202,6 +220,61 @@ Rectangle {
                     renderType: Text.NativeRendering
                     onActiveFocusChanged: {
                         if (activeFocus) titleField.deselect()
+                    }
+
+                    function navigationTargetAt(x, y) {
+                        let position = positionAt(x, y)
+                        const caret = positionToRectangle(position)
+                        if (position > 0) {
+                            const previous = positionToRectangle(position - 1)
+                            if (x >= Math.min(previous.x, caret.x) && x < Math.max(previous.x, caret.x))
+                                --position
+                        }
+                        if (position < 0 || position >= length) return ""
+                        const start = positionToRectangle(position)
+                        const end = positionToRectangle(position + 1)
+                        if (x < Math.min(start.x, end.x) || x >= Math.max(start.x, end.x)
+                                || y < start.y || y >= start.y + start.height) return ""
+                        const artistLength = playerBackend.currentArtist.length
+                        if (position < artistLength) return "artist"
+                        if (playerBackend.currentAlbum && position >= artistLength + 3) return "album"
+                        return ""
+                    }
+
+                    function navigationUnderline(target) {
+                        if (!target) return Qt.rect(0, 0, 0, 0)
+                        const artistLength = playerBackend.currentArtist.length
+                        const start = positionToRectangle(target === "artist" ? 0 : artistLength + 3)
+                        const end = positionToRectangle(target === "artist" ? artistLength : text.length)
+                        return Qt.rect(Math.min(start.x, end.x), start.y + start.height - 1,
+                                       Math.abs(end.x - start.x), 1)
+                    }
+
+                    Rectangle {
+                        readonly property rect underline: artistAlbumField.navigationUnderline(artistAlbumField.hoveredMetadata)
+                        x: underline.x
+                        y: underline.y
+                        width: underline.width
+                        height: underline.height
+                        color: sysPalette.highlight
+                    }
+
+                    HoverHandler {
+                        id: metadataHover
+                        cursorShape: artistAlbumField.hoveredMetadata ? Qt.PointingHandCursor : Qt.IBeamCursor
+                    }
+
+                    TapHandler {
+                        acceptedButtons: Qt.LeftButton
+                        acceptedModifiers: Qt.NoModifier
+                        gesturePolicy: TapHandler.DragThreshold
+                        onTapped: (eventPoint) => {
+                            if (tapCount !== 1 || artistAlbumField.selectedText.length > 0
+                                    || titleField.selectedText.length > 0) return
+                            const destination = artistAlbumField.navigationTargetAt(eventPoint.position.x, eventPoint.position.y)
+                            if (destination)
+                                bottomBar.openMetadata(destination)
+                        }
                     }
 
                     TapHandler {

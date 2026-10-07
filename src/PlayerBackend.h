@@ -171,11 +171,15 @@ private:
     void releaseExclusiveDevice();
     void continuePendingPlayback();
     void rebuildQueueFromCurrentFilter();
+    bool restoreQueueState();
+    void scheduleQueueSave();
+    void saveQueueState();
     void refreshAllModels();
     void pruneQueueToLibrary();
     void clearLibraryDatabase();
     void removeFolderFromDatabase(const QString &folder);
     void resetPlaybackState();
+    void setCategoryFilter(const QString &filter, const QString &sortColumn);
     void applyFilter();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
@@ -234,6 +238,8 @@ private:
     Qt::SortOrder m_queueBuiltFromOrder = Qt::AscendingOrder;
 
     QTimer *m_scanRefreshTimer = nullptr;
+    QTimer *m_queueSaveTimer = nullptr;
+    bool m_queueStateReady = false;
     bool m_clearPending = false;
     QStringList m_desiredFolders;
     QSet<QString> m_deferredScanFolders;

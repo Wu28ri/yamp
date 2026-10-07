@@ -18,11 +18,17 @@
 #include <QSqlQuery>
 #include <QTimer>
 #include <QVariant>
+
 #include <algorithm>
 
 namespace {
 
 constexpr int kDebounceMs = 350;
+
+bool isWithin(const QString &path, const QString &root) {
+    return path == root || path.startsWith(root.endsWith(QLatin1Char('/'))
+                                          ? root : root + QLatin1Char('/'));
+}
 
 struct FileState {
     qint64 size = 0;
@@ -305,13 +311,12 @@ QString LibraryWatcher::attachRoot(const QString &path, bool *retry) {
     if (clean.isEmpty() || !QDir(clean).exists()) return {};
 
     for (const QString &existing : m_roots) {
-        if (clean == existing) return {};
-        if (clean.startsWith(existing + QLatin1Char('/'))) return {};
+        if (isWithin(clean, existing)) return {};
     }
     const QStringList currentRoots(m_roots.begin(), m_roots.end());
     QStringList coveredRoots;
     for (const QString &existing : currentRoots) {
-        if (existing.startsWith(clean + QLatin1Char('/'))) coveredRoots.append(existing);
+        if (isWithin(existing, clean)) coveredRoots.append(existing);
     }
 
     QSqlDatabase db = QSqlDatabase::database();
@@ -354,7 +359,7 @@ QString LibraryWatcher::attachRoot(const QString &path, bool *retry) {
 LibraryWatcher::RegisterResult LibraryWatcher::registerScannedRoot(const QString &path) {
     const QString requested = QDir(path).absolutePath();
     for (const QString &root : m_roots) {
-        if (requested == root || requested.startsWith(root + QLatin1Char('/')))
+        if (isWithin(requested, root))
             return RegisterResult::AlreadyCovered;
     }
     bool retry = false;
@@ -365,7 +370,13 @@ LibraryWatcher::RegisterResult LibraryWatcher::registerScannedRoot(const QString
 }
 
 void LibraryWatcher::onDirectoryChanged(const QString &dir) {
-    m_pendingDirs.insert(dir);
+    if (QDir(dir).exists()) {
+        m_pendingDirs.insert(dir);
+    } else {
+        for (const QString &root : m_roots) {
+            if (isWithin(dir, root)) m_pendingDirs.insert(root);
+        }
+    }
     m_debounce->start();
 }
 
@@ -390,12 +401,7 @@ void LibraryWatcher::removeRoot(const QString &path) {
         }
     }
 
-    QSet<QString> remaining;
-    const QString prefix = clean + QLatin1Char('/');
-    for (const QString &p : std::as_const(m_pendingDirs)) {
-        if (p != clean && !p.startsWith(prefix)) remaining.insert(p);
-    }
-    m_pendingDirs = remaining;
+    m_pendingDirs.removeIf([&clean](const QString &dir) { return isWithin(dir, clean); });
 }
 
 void LibraryWatcher::clearAll() {
@@ -434,7 +440,16 @@ void LibraryWatcher::flushPending() {
         if (!m_debounce->isActive()) m_debounce->start();
         return;
     }
-    const QSet<QString> pending = m_pendingDirs;
+    QStringList dirs(m_pendingDirs.begin(), m_pendingDirs.end());
+    std::sort(dirs.begin(), dirs.end(), [](const QString &left, const QString &right) {
+        return left.size() < right.size();
+    });
+    QSet<QString> pending;
+    for (const QString &dir : dirs) {
+        if (std::none_of(pending.cbegin(), pending.cend(), [&dir](const QString &parent) {
+                return isWithin(dir, parent);
+            })) pending.insert(dir);
+    }
     m_pendingDirs.clear();
     m_reconcileRunning = true;
     const quint64 generation = m_generation.load(std::memory_order_relaxed);
@@ -452,32 +467,17 @@ void LibraryWatcher::flushPending() {
 
         QMetaObject::invokeMethod(this, [this, pending, result, generation]() {
             if (generation == m_generation.load(std::memory_order_relaxed)) {
-                const QStringList watched = m_watcher->directories();
-                const QSet<QString> alreadyWatched(watched.begin(), watched.end());
-
-                QStringList deadDirs;
-                for (const QString &d : watched) {
-                    if (!QDir(d).exists()) deadDirs.append(d);
-                }
-                if (!deadDirs.isEmpty()) m_watcher->removePaths(deadDirs);
-
+                QStringList directories;
                 if (result.success) {
-                    QStringList toWatch;
-                    for (const QString &sub : std::as_const(result.newSubdirsToWatch)) {
-                        if (alreadyWatched.contains(sub)) continue;
-                        bool insideRoot = false;
-                        for (const QString &r : std::as_const(m_roots)) {
-                            if (sub == r || sub.startsWith(r + QLatin1Char('/'))) {
-                                insideRoot = true;
-                                break;
-                            }
-                        }
-                        if (insideRoot) toWatch.append(sub);
+                    for (const QString &sub : result.newSubdirsToWatch) {
+                        if (std::any_of(m_roots.cbegin(), m_roots.cend(), [&sub](const QString &root) {
+                                return isWithin(sub, root);
+                            })) directories.append(sub);
                     }
-                    if (!toWatch.isEmpty()) {
-                        m_watcher->addPaths(toWatch);
-                    }
-
+                }
+                for (const QString &added : watchDirectories(directories))
+                    m_pendingDirs.insert(added);
+                if (result.success) {
                     if (result.changed) emit libraryChanged();
                     if (result.retry) m_pendingDirs.unite(pending);
                 } else if (result.retry) {
@@ -498,42 +498,44 @@ QStringList LibraryWatcher::loadRoots() {
     return out;
 }
 
-void LibraryWatcher::watchTreeRecursive(const QString &root) {
-    QStringList toAdd;
-    if (QDir(root).exists()) toAdd.append(root);
-    QDirIterator it(root,
-                    QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext()) toAdd.append(it.next());
-
+QStringList LibraryWatcher::watchDirectories(const QStringList &paths) {
     const QStringList already = m_watcher->directories();
     QSet<QString> alreadySet(already.begin(), already.end());
+    QStringList stale;
+    for (const QString &path : already) {
+        if (!QDir(path).exists()) {
+            stale.append(path);
+            alreadySet.remove(path);
+        }
+    }
+    if (!stale.isEmpty()) m_watcher->removePaths(stale);
     QStringList filtered;
-    filtered.reserve(toAdd.size());
-    for (const QString &p : toAdd) {
-        if (!alreadySet.contains(p)) filtered.append(p);
+    for (const QString &path : paths) {
+        if (!alreadySet.contains(path) && QDir(path).exists()) filtered.append(path);
     }
     if (!filtered.isEmpty()) {
         const QStringList failed = m_watcher->addPaths(filtered);
         if (!failed.isEmpty())
             qWarning() << "[LibraryWatcher] could not watch directories" << failed;
+        for (const QString &path : failed) filtered.removeAll(path);
     }
+    return filtered;
+}
+
+void LibraryWatcher::watchTreeRecursive(const QString &root) {
+    QStringList paths;
+    if (QDir(root).exists()) paths.append(root);
+    QDirIterator it(root, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext()) paths.append(it.next());
+    watchDirectories(paths);
 }
 
 void LibraryWatcher::unwatchTree(const QString &root) {
     const QStringList watched = m_watcher->directories();
-    const QString rootSep = root + QLatin1Char('/');
     QStringList toRemove;
     for (const QString &d : watched) {
-        if (d == root || d.startsWith(rootSep)) toRemove.append(d);
+        if (isWithin(d, root)) toRemove.append(d);
     }
     if (!toRemove.isEmpty()) m_watcher->removePaths(toRemove);
-}
-
-void LibraryWatcher::initialReconcileAsync(const QString &root) {
-    if (m_stopping.load(std::memory_order_relaxed)) return;
-    const QString clean = QDir(root).absolutePath();
-    if (!m_roots.contains(clean) || !QDir(clean).exists()) return;
-    m_pendingDirs.insert(clean);
-    flushPending();
 }

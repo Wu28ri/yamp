@@ -107,31 +107,6 @@ bool initialize() {
             "album_artist TEXT, file_mtime INTEGER DEFAULT 0)"),
             "create tracks table")) return false;
 
-    QSet<QString> trackColumns;
-    if (!q.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
-        qWarning() << "[MusicLibrary] inspect tracks schema" << q.lastError().text();
-        return false;
-    }
-    while (q.next()) trackColumns.insert(q.value(1).toString());
-    const auto addTrackColumn = [&db, &trackColumns](const QString &name,
-                                                     const QString &definition) {
-        if (trackColumns.contains(name)) return true;
-        QSqlQuery alter(db);
-        if (alter.exec(QStringLiteral("ALTER TABLE tracks ADD COLUMN ") + definition)) {
-            trackColumns.insert(name);
-            return true;
-        }
-        qWarning() << "[MusicLibrary] add tracks column" << name
-                   << alter.lastError().text();
-        return false;
-    };
-    if (!addTrackColumn(QStringLiteral("file_size"),
-                        QStringLiteral("file_size INTEGER DEFAULT 0")) ||
-        !addTrackColumn(QStringLiteral("album_artist"),
-                        QStringLiteral("album_artist TEXT")) ||
-        !addTrackColumn(QStringLiteral("file_mtime"),
-                        QStringLiteral("file_mtime INTEGER DEFAULT 0"))) return false;
-
     if (!execRequired(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"),
             "create watch_roots table") ||
@@ -174,88 +149,6 @@ bool initialize() {
         "CREATE TRIGGER IF NOT EXISTS trk_after_delete AFTER DELETE ON tracks "
         "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"),
         "create track cleanup trigger")) return false;
-
-    int userVersion = 0;
-    if (!q.exec(QStringLiteral("PRAGMA user_version")) || !q.next()) {
-        qWarning() << "[MusicLibrary] read schema version" << q.lastError().text();
-        return false;
-    }
-    userVersion = q.value(0).toInt();
-    q.finish();
-    if (userVersion < 5) {
-        if (!db.transaction()) {
-            qWarning() << "[MusicLibrary] begin schema migration" << db.lastError().text();
-            return false;
-        }
-
-        QSqlQuery albumTracks(db);
-        QSqlQuery updateAlbumArtist(db);
-        updateAlbumArtist.prepare(QStringLiteral(
-            "UPDATE tracks SET album_artist = ? WHERE id = ?"));
-        if (!albumTracks.exec(QStringLiteral(
-                "SELECT id, artist FROM tracks "
-                "WHERE album_artist IS NULL OR album_artist = ''"))) {
-            qWarning() << "[MusicLibrary] select album artists for migration"
-                       << albumTracks.lastError().text();
-            db.rollback();
-            return false;
-        }
-        while (albumTracks.next()) {
-            updateAlbumArtist.bindValue(
-                0, pickAlbumArtist(QString(), albumTracks.value(1).toString()));
-            updateAlbumArtist.bindValue(1, albumTracks.value(0));
-            if (!updateAlbumArtist.exec()) {
-                qWarning() << "[MusicLibrary] backfill album artists"
-                           << updateAlbumArtist.lastError().text();
-                db.rollback();
-                return false;
-            }
-        }
-        albumTracks.finish();
-        updateAlbumArtist.finish();
-
-        QSqlQuery tracks(db);
-        QSqlQuery upsertArtist(db);
-        QSqlQuery findArtistId(db);
-        QSqlQuery linkTrackArtist(db);
-        upsertArtist.prepare(QStringLiteral(
-            "INSERT OR IGNORE INTO artists (name, name_norm) VALUES (?, ?)"));
-        findArtistId.prepare(QStringLiteral(
-            "SELECT id FROM artists WHERE name_norm = ?"));
-        linkTrackArtist.prepare(QStringLiteral(
-            "INSERT OR IGNORE INTO track_artists (track_id, artist_id) VALUES (?, ?)"));
-        if (!tracks.exec(QStringLiteral(
-                "SELECT id, artist FROM tracks WHERE NOT EXISTS "
-                "(SELECT 1 FROM track_artists WHERE track_id = tracks.id)"))) {
-            qWarning() << "[MusicLibrary] select tracks for artist migration"
-                       << tracks.lastError().text();
-            db.rollback();
-            return false;
-        }
-        while (tracks.next()) {
-            if (!linkTrackToArtistsPrepared(tracks.value(0).toLongLong(),
-                                            tracks.value(1).toString(),
-                                            upsertArtist, findArtistId,
-                                            linkTrackArtist)) {
-                qWarning() << "[MusicLibrary] migrate track artists";
-                db.rollback();
-                return false;
-            }
-        }
-        tracks.finish();
-        upsertArtist.finish();
-        findArtistId.finish();
-        linkTrackArtist.finish();
-        if (!db.commit()) {
-            qWarning() << "[MusicLibrary] commit schema migration" << db.lastError().text();
-            db.rollback();
-            return false;
-        }
-        if (!q.exec(QStringLiteral("PRAGMA user_version = 5"))) {
-            qWarning() << "[MusicLibrary] store schema version" << q.lastError().text();
-            return false;
-        }
-    }
 
     return true;
 }

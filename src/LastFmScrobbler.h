@@ -65,8 +65,7 @@ private:
     void saveScrobbleQueue();
 
     QString signature(const QMap<QString, QString> &params) const;
-    QNetworkReply* postSigned(QMap<QString, QString> params);
-    QNetworkReply* getSigned(QMap<QString, QString> params);
+    QNetworkReply* requestSigned(QMap<QString, QString> params, bool post = true);
 
     PlayerBackend         *m_backend       = nullptr;
     Settings              *m_settings      = nullptr;
