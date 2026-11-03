@@ -68,6 +68,8 @@ Rectangle {
                 property bool searchOpen: false
                 property bool keepsSearchOpen: true
                 Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                implicitWidth: 100
                 placeholderText: {
                     if (root.currentView === "albums") return "Find album..."
                     if (root.currentView === "artists") return "Find artist..."

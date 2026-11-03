@@ -109,9 +109,10 @@ ListView {
         }
     }
 
-    readonly property real colNum:   50
+    readonly property bool showAlbumCol: width >= 540
+    readonly property real colNum:   width < 460 ? 32 : 50
     readonly property real colCover: 60
-    readonly property real colAlbum: 200
+    readonly property real colAlbum: showAlbumCol ? Math.min(200, Math.max(110, (width - 360) * 0.35)) : 0
     readonly property real colTime:  60
 
     Connections {
@@ -170,7 +171,7 @@ ListView {
             Item { width: listView.colCover; height: parent.height }
 
             SortableHeader {
-                width: parent.width - (listView.colNum + listView.colCover + listView.colAlbum + listView.colTime + 40)
+                width: Math.max(60, parent.width - (listView.colNum + listView.colCover + (listView.showAlbumCol ? listView.colAlbum + 10 : 0) + listView.colTime + 30))
                 height: parent.height
                 label: "Name"
                 sortColumn: "title"
@@ -180,6 +181,7 @@ ListView {
             }
 
             SortableHeader {
+                visible: listView.showAlbumCol
                 width: listView.colAlbum
                 height: parent.height
                 label: "Album"
@@ -320,7 +322,8 @@ ListView {
 
             Column {
                 anchors.left: coverContainer.right; anchors.leftMargin: 15
-                anchors.right: albumTxt.left;       anchors.rightMargin: 15
+                anchors.right: listView.showAlbumCol ? albumTxt.left : timeTxt.left
+                anchors.rightMargin: 15
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
 
@@ -349,6 +352,7 @@ ListView {
 
             Text {
                 id: albumTxt
+                visible: listView.showAlbumCol
                 anchors.right: timeTxt.left; anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
                 width: listView.colAlbum

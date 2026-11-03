@@ -27,7 +27,7 @@ Item {
                     visible: detailArtistImage.status !== Image.Ready
                     text: root.initialsForName(root.selectedArtist)
                     color: "white"
-                    font.pixelSize: 80
+                    font.pixelSize: Math.round(parent.width * 0.36)
                     font.bold: true
                 }
 

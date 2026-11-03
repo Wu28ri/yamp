@@ -7,6 +7,9 @@ Rectangle {
     implicitHeight: 105
     color: sysPalette.mid
 
+    readonly property bool compact: width < 920
+    readonly property bool veryCompact: width < 720
+
     Menu {
         id: metadataTextMenu
         property var editor: null
@@ -129,14 +132,15 @@ Rectangle {
             right:       centerControls.left
             top:         progressSlider.bottom
             bottom:      parent.bottom
-            leftMargin:  15
-            rightMargin: 15
+            leftMargin:  bottomBar.compact ? 10 : 15
+            rightMargin: bottomBar.compact ? 8 : 15
         }
-        spacing: 10
+        spacing: bottomBar.compact ? 8 : 10
+        clip: true
 
         Rectangle {
-            Layout.preferredWidth: 60
-            Layout.preferredHeight: 60
+            Layout.preferredWidth: bottomBar.veryCompact ? 48 : 60
+            Layout.preferredHeight: bottomBar.veryCompact ? 48 : 60
             color: sysPalette.base
             radius: 4
             clip: true
@@ -297,7 +301,7 @@ Rectangle {
             top:    progressSlider.bottom
             bottom: parent.bottom
         }
-        spacing: 15
+        spacing: bottomBar.compact ? 6 : 15
 
         ToolButton {
             icon.name: "media-playlist-shuffle"
@@ -332,18 +336,24 @@ Rectangle {
             right:       parent.right
             top:         progressSlider.bottom
             bottom:      parent.bottom
-            rightMargin: 15
+            leftMargin:  bottomBar.compact ? 8 : 15
+            rightMargin: bottomBar.compact ? 10 : 15
         }
-        spacing: 15
+        spacing: bottomBar.compact ? 6 : 15
+        clip: true
 
         Item { Layout.fillWidth: true }
 
         Text {
+            visible: !bottomBar.compact && playerBackend.currentTechInfo.length > 0
             text: playerBackend.currentTechInfo
             color: sysPalette.windowText
             opacity: 0.35
             font.pixelSize: 10
             font.family: "Monospace"
+            elide: Text.ElideLeft
+            Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
             Layout.alignment: Qt.AlignVCenter
         }
 
@@ -390,7 +400,10 @@ Rectangle {
 
         Slider {
             id: volumeSlider
-            Layout.preferredWidth: 150
+            Layout.preferredWidth: bottomBar.veryCompact ? 80 : (bottomBar.compact ? 105 : 150)
+            Layout.minimumWidth: 60
+            Layout.maximumWidth: 150
+            Layout.fillWidth: true
             from: 0
             to: 100
             enabled: playerBackend.volumeControllable

@@ -121,6 +121,7 @@ Window {
 
                     SpinBox {
                         Layout.preferredWidth: 120
+                        leftPadding: 8
                         from: -1500
                         to: 1500
                         stepSize: 25
@@ -365,6 +366,7 @@ Window {
 
                     SpinBox {
                         Layout.preferredWidth: 120
+                        leftPadding: 8
                         from: 4
                         to: 1024
                         stepSize: 4
@@ -393,6 +395,7 @@ Window {
 
                     SpinBox {
                         Layout.preferredWidth: 120
+                        leftPadding: 8
                         from: 2
                         to: 512
                         stepSize: 2

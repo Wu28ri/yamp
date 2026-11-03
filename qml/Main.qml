@@ -6,6 +6,8 @@ Window {
     id: root
     width: 1280
     height: 720
+    minimumWidth: 640
+    minimumHeight: 420
     visible: true
     title: "YAMP"
     color: sysPalette.window
@@ -176,9 +178,9 @@ Window {
 
             QueuePanel {
                 id: queuePanel
-                SplitView.preferredWidth: opened ? appSettings.queuePanelWidth : 0
+                SplitView.preferredWidth: opened ? Math.min(appSettings.queuePanelWidth, Math.max(200, Math.floor(root.width * 0.4))) : 0
                 SplitView.minimumWidth: opened ? 200 : 0
-                SplitView.maximumWidth: 600
+                SplitView.maximumWidth: Math.max(200, Math.min(600, Math.floor(root.width * 0.5)))
                 opened: appSettings.queuePanelOpen
 
                 onWidthChanged: if (opened) queueSaveTimer.restart()

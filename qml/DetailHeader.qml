@@ -5,9 +5,12 @@ import QtQuick.Layouts
 RowLayout {
     id: header
     Layout.fillWidth: true
-    Layout.margins: 30
-    Layout.topMargin: 40
-    spacing: 30
+    Layout.margins: compact ? 18 : 30
+    Layout.topMargin: compact ? 24 : 40
+    spacing: compact ? 18 : 30
+
+    readonly property bool compact: width > 0 && width < 560
+    readonly property real avatarSize: compact ? 140 : 220
 
     property alias avatarContent: avatarContainer.data
     property string title: ""
@@ -19,23 +22,32 @@ RowLayout {
 
     Item {
         id: avatarContainer
-        width: 220; height: 220
+        width: header.avatarSize; height: header.avatarSize
+        Layout.preferredWidth: header.avatarSize
+        Layout.preferredHeight: header.avatarSize
     }
 
     ColumnLayout {
         spacing: 10
+        Layout.fillWidth: true
         Layout.alignment: Qt.AlignBottom
 
         Text {
+            Layout.fillWidth: true
             text: header.title
-            font.pixelSize: 42
+            font.pixelSize: header.compact ? 26 : 42
             font.bold: true
+            elide: Text.ElideRight
+            maximumLineCount: 2
+            wrapMode: Text.Wrap
             color: sysPalette.text
         }
         Text {
+            Layout.fillWidth: true
             visible: header.subtitleVisible
             text: header.subtitle
-            font.pixelSize: 18
+            font.pixelSize: header.compact ? 15 : 18
+            elide: Text.ElideRight
             opacity: 0.6
             color: sysPalette.windowText
         }
