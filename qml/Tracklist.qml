@@ -122,7 +122,6 @@ ListView {
                 listView.ignoreNextScroll = false
                 return
             }
-            if (listView.persistScroll) return
             scrollDebounce.restart()
         }
     }

@@ -6,6 +6,7 @@
 #include "Settings.h"
 
 #include <QApplication>
+#include <QNetworkProxyFactory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -16,6 +17,7 @@ int main(int argc, char *argv[]) {
         Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 
     QApplication app(argc, argv);
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
 
     if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) {
         QQuickStyle::setStyle(QStringLiteral("org.kde.desktop"));
