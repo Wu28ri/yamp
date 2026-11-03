@@ -141,10 +141,11 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: bottomBar.veryCompact ? 48 : 60
             Layout.preferredHeight: bottomBar.veryCompact ? 48 : 60
-            color: sysPalette.base
+            color: bottomCoverImage.status === Image.Ready ? "transparent" : sysPalette.base
             radius: 4
             clip: true
             Image {
+                id: bottomCoverImage
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectCrop
                 source: root.coverSource(playerBackend.currentPath)

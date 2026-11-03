@@ -3,6 +3,8 @@
 
 #include <QCryptographicHash>
 #include <QFileInfo>
+#include <QPainter>
+#include <QPainterPath>
 #include <QReadLocker>
 #include <QUrl>
 #include <QWriteLocker>
@@ -81,6 +83,28 @@ QImage downscaleIfNeeded(const QImage &src, int maxEdge) {
                           Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
     return src;
+}
+
+QImage roundCorners(const QImage &src) {
+    if (src.isNull()) return src;
+    const int w = src.width();
+    const int h = src.height();
+    const qreal cornerRadius = qMin(w, h) * 0.05;
+    if (cornerRadius < 1.0) return src;
+
+    QImage dst(w, h, QImage::Format_ARGB32_Premultiplied);
+    dst.fill(Qt::transparent);
+
+    QPainter painter(&dst);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    QPainterPath path;
+    path.addRoundedRect(QRectF(0, 0, w, h), cornerRadius, cornerRadius);
+    painter.setClipPath(path);
+    painter.drawImage(0, 0, src);
+    painter.end();
+
+    return dst;
 }
 
 int imageKb(const QImage &img) {
@@ -190,6 +214,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
             if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
                 out = cachedSource.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             }
+            out = roundCorners(out);
             {
                 QWriteLocker locker(&m_lock);
                 m_scaled.insert(scaledKey,
@@ -246,6 +271,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
         out = source.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
+    out = roundCorners(out);
     if (size) *size = sourceSize;
 
     {

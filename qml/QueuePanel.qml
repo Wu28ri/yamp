@@ -259,8 +259,10 @@ Rectangle {
 
                             Rectangle {
                                 width: 36; height: 36
-                                color: sysPalette.base; radius: 4; clip: true
+                                color: queueCoverImage.status === Image.Ready ? "transparent" : sysPalette.base
+                                radius: 4; clip: true
                                 Image {
+                                    id: queueCoverImage
                                     anchors.fill: parent
                                     source: root.coverSource(delegateRoot.path)
                                     sourceSize: Qt.size(36, 36)

@@ -18,8 +18,9 @@ Item {
             avatarContent: Rectangle {
                 anchors.fill: parent
                 radius: 12; clip: true
-                color: sysPalette.mid
+                color: detailCoverImage.status === Image.Ready ? "transparent" : sysPalette.mid
                 Image {
+                    id: detailCoverImage
                     anchors.fill: parent
                     source: root.coverSource(root.selectedAlbumPath)
                     sourceSize: Qt.size(220, 220)

@@ -308,9 +308,10 @@ ListView {
                 anchors.verticalCenter: parent.verticalCenter
                 width: 40; height: 40
                 radius: 4; clip: true
-                color: sysPalette.mid
+                color: trackCoverImage.status === Image.Ready ? "transparent" : sysPalette.mid
 
                 Image {
+                    id: trackCoverImage
                     anchors.fill: parent
                     source: root.coverSource(trackItem.path)
                     fillMode: Image.PreserveAspectCrop

@@ -59,11 +59,8 @@ RowLayout {
             ToolButton {
                 id: backButton
                 icon.name: "go-previous"
-                background: Rectangle {
-                    implicitWidth: 48; implicitHeight: 48
-                    radius: 24
-                    color: backButton.hovered ? sysPalette.mid : "transparent"
-                }
+                icon.width: 24; icon.height: 24
+                Layout.preferredWidth: 48; Layout.preferredHeight: 48
                 onClicked: header.backRequested()
             }
 
@@ -71,11 +68,7 @@ RowLayout {
                 id: playButton
                 icon.name: "media-playback-start"
                 icon.width: 32; icon.height: 32
-                background: Rectangle {
-                    implicitWidth: 64; implicitHeight: 64
-                    radius: 32
-                    color: playButton.hovered ? sysPalette.mid : "transparent"
-                }
+                Layout.preferredWidth: 64; Layout.preferredHeight: 64
                 onClicked: header.playRequested()
             }
         }

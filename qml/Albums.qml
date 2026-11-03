@@ -42,7 +42,7 @@ GridView {
                     anchors.centerIn: parent
                     width: parent.width
                     height: parent.height
-                    color: sysPalette.mid
+                    color: coverImage.status === Image.Ready ? "transparent" : sysPalette.mid
                     radius: 8
                     clip: true
 
@@ -51,6 +51,7 @@ GridView {
                     Behavior on scale { NumberAnimation { duration: 150 } }
 
                     Image {
+                        id: coverImage
                         anchors.fill: parent
                         fillMode: Image.PreserveAspectCrop
                         source: root.coverSource(tile.path)
