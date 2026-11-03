@@ -13,7 +13,7 @@ pkg_check_modules(LIBPULSE REQUIRED IMPORTED_TARGET libpulse)
 pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
 pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Quick Sql DBus Network)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 Widgets Sql DBus Network)
 
 qt_standard_project_setup(REQUIRES 6.8)
 
@@ -24,6 +24,7 @@ qt_add_executable(appyamp
 qt_add_qml_module(appyamp
     URI yamp
     VERSION 1.0
+    NO_GENERATE_QTCONF
     QML_FILES
         qml/Main.qml
         qml/BottomBar.qml
@@ -84,6 +85,8 @@ qt_add_qml_module(appyamp
         src/MprisAdaptor.cpp
         src/LastFmScrobbler.h
         src/LastFmScrobbler.cpp
+        src/ArtistImageLoader.h
+        src/ArtistImageLoader.cpp
         src/Settings.h
         src/Settings.cpp
 )
@@ -99,6 +102,8 @@ set_target_properties(appyamp PROPERTIES
 target_link_libraries(appyamp
     PRIVATE
         Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Widgets
         Qt6::Sql
         Qt6::DBus
         Qt6::Network

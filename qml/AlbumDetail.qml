@@ -30,8 +30,8 @@ Item {
             }
 
             onBackRequested: {
-                playerBackend.filterByAlbum("")
                 root.currentView = "albums"
+                playerBackend.filterByAlbum("")
             }
             onPlayRequested: {
                 playerBackend.shuffle = false

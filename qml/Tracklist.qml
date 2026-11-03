@@ -6,15 +6,18 @@ ListView {
     model: playerBackend.trackModel
     spacing: 0
     clip: true
-    reuseItems: true
+    reuseItems: false
     headerPositioning: ListView.OverlayHeader
     cacheBuffer: 2000
 
+    property bool alive: true
     property bool ignoreNextScroll: false
     property int  pendingScrollIdx: -1
     property bool persistScroll: false
     property bool suppressSave: false
     property real contentYBeforeReset: 0
+
+    Component.onDestruction: alive = false
 
     Timer {
         id: suppressTimer
@@ -24,6 +27,7 @@ ListView {
 
     Connections {
         target: playerBackend.trackModel
+        enabled: listView.alive && listView.parent !== null
         function onModelAboutToBeReset() {
             listView.contentYBeforeReset = listView.contentY
             listView.suppressSave = true
@@ -33,6 +37,7 @@ ListView {
             const targetRow = Math.ceil(Math.max(0, y) / 56) + 30
             playerBackend.trackModel.ensureFetchedTo(targetRow)
             Qt.callLater(function() {
+                if (!listView.alive || !listView.parent) return
                 listView.forceLayout()
                 const minY = listView.originY
                 const maxY = Math.max(minY,

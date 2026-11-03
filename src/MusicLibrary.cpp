@@ -121,7 +121,14 @@ bool initialize() {
             "track_id INTEGER NOT NULL, "
             "artist_id INTEGER NOT NULL, "
             "PRIMARY KEY (track_id, artist_id))"),
-            "create track_artists table")) return false;
+            "create track_artists table") ||
+        !execRequired(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS artist_images ("
+            "name_norm TEXT PRIMARY KEY, "
+            "image BLOB, "
+            "status INTEGER NOT NULL DEFAULT 0, "
+            "updated_at INTEGER NOT NULL DEFAULT 0)"),
+            "create artist_images table")) return false;
 
     if (!execRequired(QStringLiteral(
         "CREATE INDEX IF NOT EXISTS idx_tracks_album_artist "

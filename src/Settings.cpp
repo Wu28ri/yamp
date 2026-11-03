@@ -122,6 +122,10 @@ void Settings::setLastfmEnabled(bool enabled) {
     store(m_lastfmEnabled, enabled, "lastfmEnabled", &Settings::lastfmEnabledChanged);
 }
 
+void Settings::setLastfmArtistImages(bool enabled) {
+    store(m_lastfmArtistImages, enabled, "lastfmArtistImages", &Settings::lastfmArtistImagesChanged);
+}
+
 void Settings::setLastfmSessionKey(const QString &key) {
     store(m_lastfmSessionKey, key, "lastfmSessionKey", &Settings::lastfmSessionKeyChanged);
 }
@@ -161,6 +165,7 @@ void Settings::loadSettings() {
     m_rgPreampDb          = clampPreamp(m_settings.value("replayGainPreampDb", 0.0).toReal());
     m_rgClipProtect       = m_settings.value("replayGainClipProtect", true).toBool();
     m_lastfmEnabled       = m_settings.value("lastfmEnabled",       false).toBool();
+    m_lastfmArtistImages  = m_settings.value("lastfmArtistImages",  false).toBool();
     m_lastfmSessionKey    = m_settings.value("lastfmSessionKey",    QString()).toString();
     m_lastfmUsername      = m_settings.value("lastfmUsername",      QString()).toString();
     m_lastfmPendingQueue  = m_settings.value("lastfmPendingQueue",  QByteArray()).toByteArray();

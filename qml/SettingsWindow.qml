@@ -428,6 +428,12 @@ Window {
                     onToggled: lastfm.enabled = checked
                 }
 
+                Switch {
+                    text: "Load artist profile pictures via Last.fm"
+                    checked: artistImages.enabled
+                    onToggled: artistImages.enabled = checked
+                }
+
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 10

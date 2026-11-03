@@ -16,21 +16,47 @@ Item {
 
             avatarContent: Rectangle {
                 anchors.fill: parent
-                radius: width / 2
-                color: root.colorForName(root.selectedArtist)
+                radius: 12
+                clip: true
+                color: detailArtistImage.status === Image.Ready
+                       ? "transparent"
+                       : root.colorForName(root.selectedArtist)
 
                 Text {
                     anchors.centerIn: parent
+                    visible: detailArtistImage.status !== Image.Ready
                     text: root.initialsForName(root.selectedArtist)
                     color: "white"
                     font.pixelSize: 80
                     font.bold: true
                 }
+
+                Image {
+                    id: detailArtistImage
+                    property string fetchedUrl: ""
+                    anchors.fill: parent
+                    fillMode: Image.PreserveAspectCrop
+                    sourceSize: Qt.size(256, 256)
+                    asynchronous: true
+                    visible: status === Image.Ready
+                    source: artistImages.enabled
+                            ? (fetchedUrl || artistImages.artistImageUrl(root.selectedArtist))
+                            : ""
+
+                    Connections {
+                        target: artistImages
+                        enabled: artistImages.enabled && detailArtistImage.status !== Image.Ready
+                        function onArtistImageReady(artistName, imageUrl) {
+                            if (artistName === root.selectedArtist)
+                                detailArtistImage.fetchedUrl = imageUrl
+                        }
+                    }
+                }
             }
 
             onBackRequested: {
-                playerBackend.filterByArtist("")
                 root.currentView = "artists"
+                playerBackend.filterByArtist("")
             }
             onPlayRequested: {
                 playerBackend.shuffle = false

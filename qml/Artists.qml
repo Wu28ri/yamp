@@ -6,7 +6,7 @@ GridView {
     id: artistsGrid
     anchors.fill: parent
     clip: true
-    reuseItems: true
+    reuseItems: false
     cellWidth: {
         const cols = Math.max(1, Math.floor(width / 200))
         return Math.floor(width / cols)
@@ -42,8 +42,11 @@ GridView {
                     anchors.centerIn: parent
                     width: parent.width
                     height: parent.height
-                    radius: width / 2
-                    color: root.colorForName(tile.artist)
+                    radius: 8
+                    clip: true
+                    color: artistImage.status === Image.Ready
+                           ? "transparent"
+                           : root.colorForName(tile.artist)
 
                     transformOrigin: Item.Center
                     scale: artistClickArea.containsMouse ? 1.03 : 1.0
@@ -52,11 +55,34 @@ GridView {
 
                     Text {
                         anchors.centerIn: parent
+                        visible: artistImage.status !== Image.Ready
                         text: root.initialsForName(tile.artist)
                         color: "white"
                         font.pixelSize: Math.round(parent.width * 0.32)
                         font.bold: true
                         renderType: Text.NativeRendering
+                    }
+
+                    Image {
+                        id: artistImage
+                        property string fetchedUrl: ""
+                        anchors.fill: parent
+                        fillMode: Image.PreserveAspectCrop
+                        sourceSize: Qt.size(256, 256)
+                        asynchronous: true
+                        visible: status === Image.Ready
+                        source: artistImages.enabled
+                                ? (fetchedUrl || artistImages.artistImageUrl(tile.artist))
+                                : ""
+
+                        Connections {
+                            target: artistImages
+                            enabled: artistImages.enabled && artistImage.status !== Image.Ready
+                            function onArtistImageReady(artistName, imageUrl) {
+                                if (artistName === tile.artist)
+                                    artistImage.fetchedUrl = imageUrl
+                            }
+                        }
                     }
 
                     MouseArea {

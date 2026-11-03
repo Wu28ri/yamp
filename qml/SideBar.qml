@@ -103,9 +103,9 @@ Rectangle {
             icon.name: "go-home"
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
+                root.currentView = "tracks"
                 clearSearch()
                 playerBackend.filterByAlbum("")
-                root.currentView = "tracks"
             }
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text
@@ -117,8 +117,8 @@ Rectangle {
             icon.name: "media-optical-audio"
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
-                clearSearch()
                 root.currentView = "albums"
+                clearSearch()
             }
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text
@@ -130,8 +130,8 @@ Rectangle {
             icon.name: "system-users"
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
-                clearSearch()
                 root.currentView = "artists"
+                clearSearch()
             }
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text

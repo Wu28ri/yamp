@@ -49,6 +49,7 @@ public:
     qreal   replayGainPreampDb()    const { return m_rgPreampDb; }
     bool    replayGainClipProtect() const { return m_rgClipProtect; }
     bool    lastfmEnabled()         const { return m_lastfmEnabled; }
+    bool    lastfmArtistImages()    const { return m_lastfmArtistImages; }
     QString lastfmSessionKey()      const { return m_lastfmSessionKey; }
     QString lastfmUsername()        const { return m_lastfmUsername; }
     QByteArray lastfmPendingQueue() const { return m_lastfmPendingQueue; }
@@ -69,6 +70,7 @@ public:
     void setReplayGainPreampDb(qreal db);
     void setReplayGainClipProtect(bool enabled);
     void setLastfmEnabled(bool enabled);
+    void setLastfmArtistImages(bool enabled);
     void setLastfmSessionKey(const QString &key);
     void setLastfmUsername(const QString &name);
     void setLastfmPendingQueue(const QByteArray &queue);
@@ -100,6 +102,7 @@ signals:
     void replayGainPreampDbChanged();
     void replayGainClipProtectChanged();
     void lastfmEnabledChanged();
+    void lastfmArtistImagesChanged();
     void lastfmSessionKeyChanged();
     void lastfmUsernameChanged();
 
@@ -126,6 +129,7 @@ private:
     qreal   m_rgPreampDb          = 0.0;
     bool    m_rgClipProtect       = true;
     bool    m_lastfmEnabled       = false;
+    bool    m_lastfmArtistImages  = false;
     QString m_lastfmSessionKey;
     QString m_lastfmUsername;
     QByteArray m_lastfmPendingQueue;

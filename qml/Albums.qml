@@ -6,7 +6,7 @@ GridView {
     id: albumsGrid
     anchors.fill: parent
     clip: true
-    reuseItems: true
+    reuseItems: false
     cellWidth: {
         const cols = Math.max(1, Math.floor(width / 200))
         return Math.floor(width / cols)
