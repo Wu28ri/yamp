@@ -126,8 +126,6 @@ ListView {
         }
     }
 
-    ScrollableViewHelper { target: listView }
-
     ScrollBar.vertical: SmoothScrollBar {
         flickable: listView
         width: 8

@@ -23,6 +23,20 @@ Rectangle {
         sideBar.restoreRequested()
     }
 
+    function openSearch() {
+        searchField.searchOpen = true
+        if (sideBar.compact) {
+            sideBar.expandRequested()
+            Qt.callLater(() => {
+                searchField.forceActiveFocus()
+                searchField.selectAll()
+            })
+        } else {
+            searchField.forceActiveFocus()
+            searchField.selectAll()
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: sideBar.compact ? 6 : 10

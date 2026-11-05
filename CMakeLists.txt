@@ -37,7 +37,6 @@ qt_add_qml_module(appyamp
         qml/QueuePanel.qml
         qml/SortableHeader.qml
         qml/SettingsWindow.qml
-        qml/ScrollableViewHelper.qml
         qml/SmoothScrollBar.qml
         qml/DetailHeader.qml
         qml/Lyrics.qml

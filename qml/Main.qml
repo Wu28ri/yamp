@@ -100,6 +100,11 @@ Window {
         context: Qt.ApplicationShortcut
         onActivated: playerBackend.volume = Math.max(0.0, playerBackend.volume - 0.05)
     }
+    Shortcut {
+        sequence: StandardKey.Find
+        context: Qt.ApplicationShortcut
+        onActivated: sideBar.openSearch()
+    }
 
     TapHandler {
         id: closeSearchTap

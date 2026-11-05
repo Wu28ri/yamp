@@ -15,8 +15,6 @@ GridView {
     cacheBuffer: 600
     model: playerBackend.albumModel
 
-    ScrollableViewHelper { target: albumsGrid }
-
     ScrollBar.vertical: SmoothScrollBar { flickable: albumsGrid }
 
     delegate: Item {
