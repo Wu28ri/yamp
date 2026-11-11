@@ -5,7 +5,7 @@ import QtQuick.Controls
 Rectangle {
     id: sideBar
     implicitWidth: 250
-    color: sysPalette.base
+    color: sysPalette.window
 
     signal settingsClicked()
     signal expandRequested()
@@ -13,6 +13,17 @@ Rectangle {
 
     readonly property bool compact: width < 140
     readonly property bool searchOpen: searchField.searchOpen
+
+    Rectangle {
+        width: 1
+        anchors {
+            right:  parent.right
+            top:    parent.top
+            bottom: parent.bottom
+        }
+        color: sysPalette.windowText
+        opacity: 0.1
+    }
 
     function clearSearch() {
         searchField.text = ""
