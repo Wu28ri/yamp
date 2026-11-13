@@ -71,7 +71,10 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
+        anchors.leftMargin: 16
+        anchors.topMargin: 16
+        anchors.bottomMargin: 16
+        anchors.rightMargin: 2
         spacing: 16
         visible: queuePanel.width > 50
 
@@ -83,6 +86,11 @@ Rectangle {
             spacing: 0
             reuseItems: true
             model: playerBackend.queueModel
+
+            ScrollBar.vertical: SmoothScrollBar {
+                id: queueVBar
+                flickable: queueList
+            }
 
             property bool ignoreNextScroll: false
             property Item draggedDelegate: null
@@ -136,7 +144,7 @@ Rectangle {
 
             delegate: Item {
                 id: delegateRoot
-                width: queueList.width
+                width: Math.max(0, queueList.width - queueVBar.implicitWidth)
                 height: 56
                 z: mouseArea.drag.active ? 100 : 1
 

@@ -147,7 +147,8 @@ Rectangle {
                     playerBackend.lyricsSynchronized && playerBackend.currentLyricIndex < 0
                     ? 320 : 180
 
-                width: lyricsList.width
+                x: 14
+                width: Math.max(0, lyricsList.width - 28)
                 height: Math.max(48, lineText.implicitHeight + 18)
                 padding: 0
                 hoverEnabled: modelData.timeMs >= 0
@@ -213,7 +214,9 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
-            ScrollBar.vertical: ScrollBar { }
+            ScrollBar.vertical: SmoothScrollBar {
+                flickable: lyricsList
+            }
         }
     }
 }

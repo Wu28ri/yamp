@@ -7,15 +7,22 @@ GridView {
     anchors.fill: parent
     clip: true
     reuseItems: false
+    readonly property real gridAvailableWidth: Math.max(1, width - vbar.implicitWidth)
+
     cellWidth: {
-        const cols = Math.max(1, Math.floor(width / 200))
-        return Math.floor(width / cols)
+        const cols = Math.max(1, Math.floor(gridAvailableWidth / 200))
+        return Math.floor(gridAvailableWidth / cols)
     }
     cellHeight: 280
     cacheBuffer: 600
     model: playerBackend.artistModel
 
-    ScrollBar.vertical: SmoothScrollBar { flickable: artistsGrid }
+    ScrollBar.vertical: SmoothScrollBar {
+        id: vbar
+        flickable: artistsGrid
+        topPadding: 8
+        bottomPadding: 8
+    }
 
     delegate: Item {
         id: tile

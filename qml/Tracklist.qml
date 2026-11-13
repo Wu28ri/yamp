@@ -126,12 +126,13 @@ ListView {
         }
     }
 
+    readonly property real rightGutter: vbar.needed ? vbar.width : 0
+
     ScrollBar.vertical: SmoothScrollBar {
+        id: vbar
         flickable: listView
-        width: 8
-        padding: 0
-        anchors.right: parent.right
-        topPadding: 40
+        topPadding: 44
+        bottomPadding: 6
     }
 
     header: Rectangle {
@@ -152,7 +153,7 @@ ListView {
         Row {
             anchors.fill: parent
             anchors.leftMargin: 20
-            anchors.rightMargin: 20
+            anchors.rightMargin: 24
             spacing: 10
 
             SortableHeader {
@@ -253,8 +254,13 @@ ListView {
 
     delegate: ItemDelegate {
         id: trackItem
-        width: listView.width
+        width: listView.width - listView.rightGutter
         height: 56
+        padding: 0
+        leftInset: 6
+        rightInset: 14 - listView.rightGutter
+        topInset: 1
+        bottomInset: 1
 
         required property int    index
         required property string title
@@ -279,6 +285,7 @@ ListView {
         }
 
         background: Rectangle {
+            radius: 6
             color: trackItem.isCurrent ? sysPalette.highlight : (trackItem.hovered ? sysPalette.highlight : "transparent")
             opacity: trackItem.isCurrent ? 0.15 : (trackItem.hovered ? 0.08 : 0)
         }
@@ -364,7 +371,7 @@ ListView {
 
             Text {
                 id: timeTxt
-                anchors.right: parent.right; anchors.rightMargin: 20
+                anchors.right: parent.right; anchors.rightMargin: 24 - listView.rightGutter
                 anchors.verticalCenter: parent.verticalCenter
                 width: listView.colTime
                 horizontalAlignment: Text.AlignRight
