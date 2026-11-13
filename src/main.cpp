@@ -8,6 +8,8 @@
 #include <QApplication>
 #include <QDir>
 #include <QIcon>
+#include <QMetaObject>
+#include <QMouseEvent>
 #include <QNetworkProxyFactory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -20,6 +22,41 @@
 #ifndef YAMP_VERSION
 #define YAMP_VERSION "0.2"
 #endif
+
+namespace {
+
+class MouseNavFilter final : public QObject {
+public:
+    explicit MouseNavFilter(QObject *window)
+        : QObject(window), m_window(window) {}
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (watched != m_window || !event) return false;
+        const QEvent::Type t = event->type();
+        if (t != QEvent::MouseButtonPress
+            && t != QEvent::MouseButtonDblClick
+            && t != QEvent::MouseButtonRelease) {
+            return false;
+        }
+        auto *me = static_cast<QMouseEvent *>(event);
+        const Qt::MouseButton btn = me->button();
+        if (btn != Qt::BackButton && btn != Qt::ForwardButton) {
+            return false;
+        }
+        if (t == QEvent::MouseButtonPress) {
+            QMetaObject::invokeMethod(
+                m_window,
+                btn == Qt::BackButton ? "goBack" : "goForward");
+        }
+        return true;
+    }
+
+private:
+    QObject *m_window = nullptr;
+};
+
+} // namespace
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -135,6 +172,10 @@ int main(int argc, char *argv[]) {
                          Qt::QueuedConnection);
 
         engine.loadFromModule(QStringLiteral("yamp"), QStringLiteral("Main"));
+        const QList<QObject *> roots = engine.rootObjects();
+        if (!roots.isEmpty() && roots.first()) {
+            roots.first()->installEventFilter(new MouseNavFilter(roots.first()));
+        }
 
         exitCode = app.exec();
 

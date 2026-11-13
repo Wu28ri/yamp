@@ -89,10 +89,12 @@ Window {
 
     function sameNavState(a, b) {
         if (!a || !b) return false
-        return a.view === b.view
-            && a.album === b.album
-            && a.albumArtist === b.albumArtist
-            && a.artist === b.artist
+        if (a.view !== b.view) return false
+        if (a.view === "albumDetail")
+            return a.album === b.album && a.albumArtist === b.albumArtist
+        if (a.view === "artistDetail")
+            return a.artist === b.artist
+        return true
     }
 
     function pushNavState() {
@@ -126,12 +128,21 @@ Window {
             sideBar.clearSearch()
             return
         }
-        if (navBackStack.length > 0) {
-            const backCopy = navBackStack.slice()
-            const target = backCopy.pop()
+        const cur = snapshotNavState()
+        const backCopy = navBackStack.slice()
+        let target = null
+        while (backCopy.length > 0) {
+            const candidate = backCopy.pop()
+            if (!sameNavState(candidate, cur)) {
+                target = candidate
+                break
+            }
+        }
+        if (target) {
             navBackStack = backCopy
             const fwdCopy = navForwardStack.slice(Math.max(0, navForwardStack.length - 31))
-            fwdCopy.push(snapshotNavState())
+            if (fwdCopy.length === 0 || !sameNavState(fwdCopy[fwdCopy.length - 1], cur))
+                fwdCopy.push(cur)
             navForwardStack = fwdCopy
             applyNavState(target)
             return
@@ -150,11 +161,24 @@ Window {
     function goForward() {
         if (navForwardStack.length === 0) return
         if (sideBar.searchOpen) sideBar.clearSearch()
+        const cur = snapshotNavState()
         const fwdCopy = navForwardStack.slice()
-        const target = fwdCopy.pop()
+        let target = null
+        while (fwdCopy.length > 0) {
+            const candidate = fwdCopy.pop()
+            if (!sameNavState(candidate, cur)) {
+                target = candidate
+                break
+            }
+        }
+        if (!target) {
+            navForwardStack = fwdCopy
+            return
+        }
         navForwardStack = fwdCopy
         const backCopy = navBackStack.slice(Math.max(0, navBackStack.length - 31))
-        backCopy.push(snapshotNavState())
+        if (backCopy.length === 0 || !sameNavState(backCopy[backCopy.length - 1], cur))
+            backCopy.push(cur)
         navBackStack = backCopy
         applyNavState(target)
     }
@@ -401,16 +425,6 @@ Window {
                      || root.currentView === "artistDetail"
                      || root.currentView === "lyrics")
         onActivated: root.goBack()
-    }
-
-    TapHandler {
-        acceptedButtons: Qt.BackButton | Qt.ForwardButton
-        onTapped: (eventPoint, button) => {
-            if (button === Qt.BackButton)
-                root.goBack()
-            else if (button === Qt.ForwardButton)
-                root.goForward()
-        }
     }
 
     TapHandler {
