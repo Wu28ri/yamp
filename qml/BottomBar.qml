@@ -53,16 +53,10 @@ Rectangle {
             left:  parent.left
             right: parent.right
         }
-        height: 14
-        padding: 0
-        leftPadding: 0
-        rightPadding: 0
-        topPadding: 0
-        bottomPadding: 0
+        height: 20
         z: 10
         from: 0
         to: playerBackend.duration > 0 ? playerBackend.duration : 1
-        enabled: playerBackend.duration > 0
         live: true
         onMoved: playerBackend.position = value
         hoverEnabled: true
@@ -75,13 +69,9 @@ Rectangle {
 
         background: Rectangle {
             implicitHeight: 4
-            x: 0
+            width: progressSlider.availableWidth
             y: 0
-            width: progressSlider.width
-            height: (progressSlider.hovered || progressSlider.pressed) ? 6 : 4
             color: sysPalette.base
-
-            Behavior on height { NumberAnimation { duration: 100 } }
 
             Rectangle {
                 width: progressSlider.visualPosition * parent.width
@@ -91,26 +81,24 @@ Rectangle {
         }
 
         handle: Rectangle {
-            x: Math.max(0, Math.min(progressSlider.width - width,
-                        progressSlider.visualPosition * progressSlider.width - width / 2))
-            y: 0
+            x: progressSlider.leftPadding + progressSlider.visualPosition * (progressSlider.availableWidth - width)
+            y: -4
             width: 12; height: 12
             radius: 6
             color: sysPalette.highlight
-            visible: progressSlider.enabled && (progressSlider.hovered || progressSlider.pressed)
+            visible: progressSlider.hovered || progressSlider.pressed
         }
     }
 
     Text {
         anchors {
-            left:       parent.left
-            top:        parent.top
-            topMargin:  10
-            leftMargin: 10
+            left:           parent.left
+            verticalCenter: progressSlider.verticalCenter
+            leftMargin:     10
         }
         text: bottomBar.formatTime(progressSlider.pressed ? progressSlider.value : playerBackend.position)
         color: sysPalette.windowText
-        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.85 : 0.0
+        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
         font.pixelSize: 10
         font.family: "Monospace"
         z: 11
@@ -119,14 +107,13 @@ Rectangle {
 
     Text {
         anchors {
-            right:       parent.right
-            top:         parent.top
-            topMargin:   10
-            rightMargin: 10
+            right:          parent.right
+            verticalCenter: progressSlider.verticalCenter
+            rightMargin:    10
         }
         text: bottomBar.formatTime(playerBackend.duration)
         color: sysPalette.windowText
-        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.85 : 0.0
+        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
         font.pixelSize: 10
         font.family: "Monospace"
         z: 11
