@@ -94,6 +94,39 @@ snd_mixer_t *openCardMixer(const QString &cardId) {
     return mixer;
 }
 
+struct CachedCardMixer {
+    QString cardId;
+    snd_mixer_t *mixer = nullptr;
+
+    ~CachedCardMixer() { reset(); }
+
+    void reset() {
+        if (mixer) {
+            snd_mixer_close(mixer);
+            mixer = nullptr;
+        }
+        cardId.clear();
+    }
+
+    snd_mixer_t *acquire(const QString &wantedCard) {
+        if (wantedCard.isEmpty()) return nullptr;
+        if (mixer && cardId == wantedCard) {
+            if (snd_mixer_handle_events(mixer) >= 0) return mixer;
+            reset();
+        } else {
+            reset();
+        }
+        mixer = openCardMixer(wantedCard);
+        if (mixer) cardId = wantedCard;
+        return mixer;
+    }
+};
+
+CachedCardMixer &cachedMixer() {
+    thread_local CachedCardMixer instance;
+    return instance;
+}
+
 }
 
 QVariantList list() {
@@ -166,7 +199,7 @@ QVariantList list() {
 bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted) {
     const QString cardId = extractCardId(mpvDeviceName);
     if (cardId.isEmpty()) return false;
-    snd_mixer_t *mixer = openCardMixer(cardId);
+    snd_mixer_t *mixer = cachedMixer().acquire(cardId);
     if (!mixer) return false;
 
     bool ok = false;
@@ -193,7 +226,7 @@ bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted) {
                 int enabled = 1;
                 if (snd_mixer_selem_get_playback_switch(
                         elem, SND_MIXER_SCHN_FRONT_LEFT, &enabled) != 0) {
-                    snd_mixer_close(mixer);
+                    cachedMixer().reset();
                     return false;
                 }
                 muted = !enabled;
@@ -201,14 +234,14 @@ bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted) {
             ok = true;
         }
     }
-    snd_mixer_close(mixer);
+    if (!ok) cachedMixer().reset();
     return ok;
 }
 
 bool setHardwareVolume(const QString &mpvDeviceName, qreal volume) {
     const QString cardId = extractCardId(mpvDeviceName);
     if (cardId.isEmpty()) return false;
-    snd_mixer_t *mixer = openCardMixer(cardId);
+    snd_mixer_t *mixer = cachedMixer().acquire(cardId);
     if (!mixer) return false;
 
     bool ok = false;
@@ -239,14 +272,14 @@ bool setHardwareVolume(const QString &mpvDeviceName, qreal volume) {
             }
         }
     }
-    snd_mixer_close(mixer);
+    if (!ok) cachedMixer().reset();
     return ok;
 }
 
 bool setHardwareMuted(const QString &mpvDeviceName, bool muted) {
     const QString cardId = extractCardId(mpvDeviceName);
     if (cardId.isEmpty()) return false;
-    snd_mixer_t *mixer = openCardMixer(cardId);
+    snd_mixer_t *mixer = cachedMixer().acquire(cardId);
     if (!mixer) return false;
 
     bool ok = false;
@@ -255,7 +288,7 @@ bool setHardwareMuted(const QString &mpvDeviceName, bool muted) {
         if (snd_mixer_selem_has_playback_switch(elem))
             ok = snd_mixer_selem_set_playback_switch_all(elem, muted ? 0 : 1) == 0;
     }
-    snd_mixer_close(mixer);
+    if (!ok) cachedMixer().reset();
     return ok;
 }
 

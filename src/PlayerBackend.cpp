@@ -19,6 +19,7 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
@@ -259,6 +260,8 @@ PlayerBackend::PlayerBackend(QObject *parent)
       m_currentArtist(kDefaultArtist),
       m_currentAlbum(kDefaultAlbum) {
 
+    m_ioPool.setMaxThreadCount(1);
+
     if (!MusicLibrary::initialize())
         qFatal("[PlayerBackend] music library database initialization failed");
 
@@ -286,6 +289,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
             m_lastEmittedQueueCount = m_queue.count();
             emit queueCountChanged();
         }
+        emit currentQueuePositionChanged();
         syncMpvPrefetch();
     });
 
@@ -465,6 +469,8 @@ PlayerBackend::PlayerBackend(QObject *parent)
 }
 
 PlayerBackend::~PlayerBackend() {
+    m_ioPool.clear();
+    m_ioPool.waitForDone();
     if (m_queueStateReady && m_queueDirty) saveQueueState();
     shutdownMpv();
 }
@@ -510,7 +516,7 @@ void PlayerBackend::initMpv() {
     mpv_set_option_string(m_mpv, "gapless-audio",      "yes");
     mpv_set_option_string(m_mpv, "replaygain",         "no");
     mpv_set_option_string(m_mpv, "replaygain-preamp",  "0");
-    mpv_set_option_string(m_mpv, "replaygain-clip",    "yes");
+    mpv_set_option_string(m_mpv, "replaygain-clip",    "no");
 
     if (mpv_initialize(m_mpv) < 0) {
         qCritical("[mpv] mpv_initialize failed; playback disabled");
@@ -561,11 +567,14 @@ void PlayerBackend::processMpvEvents() {
         }
         case MPV_EVENT_FILE_LOADED: {
             const auto it = m_mpvEntryTracks.constFind(m_loadingMpvEntryId);
+            if (it != m_mpvEntryTracks.constEnd()) {
+                m_loadedMpvEntryId = m_loadingMpvEntryId;
+            }
             if (m_loadingMpvEntryId == m_currentMpvEntryId &&
                 it != m_mpvEntryTracks.constEnd() && it->path == m_currentPath) {
                 m_audioOpenRetries = 0;
+                m_consecutiveErrorSkips = 0;
                 ++m_audioOpenRetryGeneration;
-                m_loadedMpvEntryId = m_loadingMpvEntryId;
                 notifyTrackStarted();
                 syncMpvPrefetch();
             }
@@ -673,22 +682,22 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
             loadLyrics(promotedTrack.path);
             m_queueModel->notifyCurrentChanged();
             emit positionChanged();
+            if (m_repeatMode == RepeatOne) emit seeked(0);
             emit currentIndexChanged();
             emit currentQueuePositionChanged();
             emit metadataChanged();
             m_coverService->requestCoverFor(promotedTrack.path, ++m_coverGen);
             scheduleQueueSave();
-            if (m_loadingMpvEntryId == promotedId) {
-                // START_FILE already arrived; FILE_LOADED will trigger notifyTrackStarted + syncMpvPrefetch
-            }
+            notifyTrackStarted();
             syncMpvPrefetch();
             break;
         }
         advanceAfterEof();
         break;
-    case MPV_END_FILE_REASON_ERROR:
+    case MPV_END_FILE_REASON_ERROR: {
         m_prefetchedMpvEntryId = -1;
         m_prefetchedTrack = Track();
+        const qint64 resumePosMs = qMax<qint64>(0, m_lastPositionMs);
         qWarning("[mpv] playback failed: %s", mpv_error_string(ev->error));
         if (m_bitPerfectEnabled && m_audioExclusiveHeld &&
             ev->error == MPV_ERROR_AO_INIT_FAILED && endedTrack.isValid()) {
@@ -698,13 +707,13 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
                 const quint64 generation = ++m_audioOpenRetryGeneration;
                 qWarning("[mpv] direct ALSA device is busy; retrying (%d/%d)",
                          attempt, kMaxAudioOpenRetries);
-                QTimer::singleShot(300, this, [this, endedTrack, generation]() {
+                QTimer::singleShot(300, this, [this, endedTrack, generation, resumePosMs]() {
                     if (generation != m_audioOpenRetryGeneration ||
                         !m_bitPerfectEnabled || !m_audioExclusiveHeld ||
                         m_audioExclusiveTransition || endedTrack.path != m_currentPath) {
                         return;
                     }
-                    loadTrackIntoMpv(endedTrack);
+                    loadTrackIntoMpv(endedTrack, true, resumePosMs);
                 });
                 return;
             }
@@ -713,11 +722,21 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
             ++m_audioOpenRetryGeneration;
             m_audioOpenRetries = 0;
             m_pendingExclusiveTrack = endedTrack;
+            m_pendingExclusivePositionMs = resumePosMs;
             setBitPerfect(false);
             return;
         }
+        if (ev->error != MPV_ERROR_AO_INIT_FAILED &&
+            canGoNext() &&
+            m_consecutiveErrorSkips < qMin(8, qMax(1, m_queue.count()))) {
+            ++m_consecutiveErrorSkips;
+            QTimer::singleShot(0, this, &PlayerBackend::playNext);
+            return;
+        }
+        m_consecutiveErrorSkips = 0;
         resetPlaybackState();
         break;
+    }
     default:
         break;
     }
@@ -858,6 +877,7 @@ void PlayerBackend::setAudioDevice(const QString &device) {
             m_paused = true;
             m_positionPollTimer->stop();
             m_resumeAfterExclusive = true;
+            emit playbackStateChanged();
         }
         m_pendingAudioDevice = normalized;
         m_reenableBitPerfectAfterRestore = true;
@@ -925,9 +945,10 @@ void PlayerBackend::releaseExclusiveDevice() {
 
 void PlayerBackend::continuePendingPlayback() {
     const Track pending = std::exchange(m_pendingExclusiveTrack, {});
+    const qint64 pendingPosMs = std::exchange(m_pendingExclusivePositionMs, 0);
     const bool resume = std::exchange(m_resumeAfterExclusive, false);
     if (pending.isValid()) {
-        loadTrackIntoMpv(pending);
+        loadTrackIntoMpv(pending, true, pendingPosMs);
     } else if (resume && m_mpv && m_hasFile) {
         int paused = 0;
         mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
@@ -1084,6 +1105,7 @@ void PlayerBackend::play() {
 void PlayerBackend::pause() {
     if (!m_mpv) return;
     m_pendingExclusiveTrack = Track();
+    m_pendingExclusivePositionMs = 0;
     m_resumeAfterExclusive = false;
     int p = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
@@ -1093,6 +1115,7 @@ void PlayerBackend::pause() {
 void PlayerBackend::stop() {
     if (!m_mpv) return;
     m_pendingExclusiveTrack = Track();
+    m_pendingExclusivePositionMs = 0;
     m_resumeAfterExclusive = false;
     const char *cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
@@ -1276,7 +1299,7 @@ void PlayerBackend::saveQueueStateAsync() {
     m_queueDirty = false;
     const QString path = queueStatePath();
     const QByteArray payload = serializeQueueState();
-    QThreadPool::globalInstance()->start([path, payload]() {
+    m_ioPool.start([path, payload]() {
         writeQueuePayloadToDisk(path, payload);
     });
 }
@@ -1284,6 +1307,7 @@ void PlayerBackend::saveQueueStateAsync() {
 void PlayerBackend::saveQueueState() {
     if (!m_queueStateReady) return;
     if (m_queueSaveTimer) m_queueSaveTimer->stop();
+    m_ioPool.waitForDone();
     m_queueDirty = false;
     writeQueuePayloadToDisk(queueStatePath(), serializeQueueState());
 }
@@ -1345,7 +1369,6 @@ void PlayerBackend::advanceAfterEof() {
 void PlayerBackend::playNext() {
     const Track next = m_queue.next(m_repeatMode != RepeatOff);
     if (next.isValid()) loadTrack(next);
-    else if (m_bitPerfectEnabled) releaseExclusiveDevice();
 }
 
 void PlayerBackend::playPrevious() {
@@ -1361,7 +1384,7 @@ void PlayerBackend::playPrevious() {
     }
 }
 
-void PlayerBackend::loadTrack(const Track &t, bool startPlayback) {
+void PlayerBackend::loadTrack(const Track &t, bool startPlayback, qint64 startPositionMs) {
     if (!t.isValid()) return;
 
     ++m_audioOpenRetryGeneration;
@@ -1389,13 +1412,21 @@ void PlayerBackend::loadTrack(const Track &t, bool startPlayback) {
     m_currentAlbum    = t.album;
     m_currentTechInfo = t.techInfo;
     m_currentCoverPath.clear();
+    if (startPositionMs > 0 && m_lastPositionMs != startPositionMs) {
+        m_lastPositionMs = startPositionMs;
+        emit positionChanged();
+    } else if (startPositionMs <= 0 && m_lastPositionMs != 0) {
+        m_lastPositionMs = 0;
+        emit positionChanged();
+    }
     loadLyrics(t.path);
 
     if (startPlayback && m_bitPerfectEnabled && !m_audioExclusiveHeld) {
         m_pendingExclusiveTrack = t;
+        m_pendingExclusivePositionMs = qMax<qint64>(0, startPositionMs);
         requestExclusiveForPlayback();
     } else {
-        loadTrackIntoMpv(t, startPlayback);
+        loadTrackIntoMpv(t, startPlayback, startPositionMs);
     }
 
     m_queueModel->notifyCurrentChanged();
@@ -1407,7 +1438,7 @@ void PlayerBackend::loadTrack(const Track &t, bool startPlayback) {
     scheduleQueueSave();
 }
 
-void PlayerBackend::loadTrackIntoMpv(const Track &track, bool startPlayback) {
+void PlayerBackend::loadTrackIntoMpv(const Track &track, bool startPlayback, qint64 startPositionMs) {
     if (!m_mpv || !track.isValid()) return;
     m_mpvEntryTracks.clear();
     m_prefetchedMpvEntryId = -1;
@@ -1417,8 +1448,53 @@ void PlayerBackend::loadTrackIntoMpv(const Track &track, bool startPlayback) {
     int paused = startPlayback ? 0 : 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused);
     const QByteArray path = track.path.toUtf8();
-    const char *command[] = {"loadfile", path.constData(), "replace", nullptr};
-    if (mpv_command(m_mpv, command) < 0) return;
+    int rc = -1;
+    if (startPositionMs > 0) {
+        const QByteArray startVal = QByteArrayLiteral("+") +
+            QByteArray::number(static_cast<double>(startPositionMs) / 1000.0, 'f', 3);
+
+        char optKeyStart[] = "start";
+        char *optKeys[] = {optKeyStart};
+        mpv_node optValues[1]{};
+        optValues[0].format = MPV_FORMAT_STRING;
+        optValues[0].u.string = const_cast<char *>(startVal.constData());
+        mpv_node_list optList{};
+        optList.num = 1;
+        optList.values = optValues;
+        optList.keys = optKeys;
+
+        char keyName[] = "name";
+        char keyUrl[] = "url";
+        char keyFlags[] = "flags";
+        char keyOptions[] = "options";
+        char *cmdKeys[] = {keyName, keyUrl, keyFlags, keyOptions};
+
+        char valName[] = "loadfile";
+        char valFlags[] = "replace";
+        mpv_node cmdValues[4]{};
+        cmdValues[0].format = MPV_FORMAT_STRING;
+        cmdValues[0].u.string = valName;
+        cmdValues[1].format = MPV_FORMAT_STRING;
+        cmdValues[1].u.string = const_cast<char *>(path.constData());
+        cmdValues[2].format = MPV_FORMAT_STRING;
+        cmdValues[2].u.string = valFlags;
+        cmdValues[3].format = MPV_FORMAT_NODE_MAP;
+        cmdValues[3].u.list = &optList;
+
+        mpv_node_list cmdList{};
+        cmdList.num = 4;
+        cmdList.values = cmdValues;
+        cmdList.keys = cmdKeys;
+
+        mpv_node cmdNode{};
+        cmdNode.format = MPV_FORMAT_NODE_MAP;
+        cmdNode.u.list = &cmdList;
+        rc = mpv_command_node(m_mpv, &cmdNode, nullptr);
+    } else {
+        const char *command[] = {"loadfile", path.constData(), "replace", nullptr};
+        rc = mpv_command(m_mpv, command);
+    }
+    if (rc < 0) return;
 
     int64_t entryId = -1;
     if (mpv_get_property(m_mpv, "playlist/0/id", MPV_FORMAT_INT64, &entryId) >= 0) {
@@ -1435,6 +1511,18 @@ Track PlayerBackend::peekNextTrack() const {
 
 void PlayerBackend::syncMpvPrefetch() {
     if (!m_mpv || m_currentMpvEntryId < 0 || m_audioExclusiveTransition) return;
+
+    int64_t pos = -1;
+    while (mpv_get_property(m_mpv, "playlist-pos", MPV_FORMAT_INT64, &pos) >= 0 && pos > 0) {
+        int64_t headId = -1;
+        if (mpv_get_property(m_mpv, "playlist/0/id", MPV_FORMAT_INT64, &headId) >= 0 &&
+            headId == m_currentMpvEntryId) {
+            break;
+        }
+        if (headId >= 0) m_mpvEntryTracks.remove(headId);
+        const char *rmHead[] = {"playlist-remove", "0", nullptr};
+        if (mpv_command(m_mpv, rmHead) < 0) break;
+    }
 
     int64_t headId = -1;
     if (mpv_get_property(m_mpv, "playlist/0/id", MPV_FORMAT_INT64, &headId) < 0 ||
@@ -1792,10 +1880,13 @@ void PlayerBackend::loadLyrics(const QString &trackPath) {
 
     if (trackPath.isEmpty()) return;
 
-    QThreadPool::globalInstance()->start([this, trackPath, gen]() {
+    QPointer<PlayerBackend> guard(this);
+    m_ioPool.start([this, guard, trackPath, gen]() {
+        if (m_lyricsGen.load(std::memory_order_relaxed) != gen) return;
         LyricsData data = readLyrics(trackPath);
-        QMetaObject::invokeMethod(this, [this, trackPath, gen, data = std::move(data)]() mutable {
-            if (gen != m_lyricsGen || m_currentPath != trackPath) return;
+        if (!guard || m_lyricsGen.load(std::memory_order_relaxed) != gen) return;
+        QMetaObject::invokeMethod(guard, [this, guard, trackPath, gen, data = std::move(data)]() mutable {
+            if (!guard || m_lyricsGen.load(std::memory_order_relaxed) != gen || m_currentPath != trackPath) return;
             m_lyricsLines = std::move(data.lines);
             m_lyricTimes = std::move(data.times);
             m_lyricLineIndices = std::move(data.lineIndices);

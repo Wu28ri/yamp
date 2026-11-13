@@ -42,9 +42,11 @@ MprisPlayerAdaptor::MprisPlayerAdaptor(PlayerBackend *backend)
     connect(m_backend, &PlayerBackend::metadataChanged, this, &MprisPlayerAdaptor::syncCapabilities);
     connect(m_backend, &PlayerBackend::durationChanged, this, &MprisPlayerAdaptor::syncCapabilities);
     connect(m_backend, &PlayerBackend::queueCountChanged, this, &MprisPlayerAdaptor::syncCapabilities);
+    connect(m_backend, &PlayerBackend::currentQueuePositionChanged, this, &MprisPlayerAdaptor::syncCapabilities);
 
     connect(m_backend, &PlayerBackend::playbackStateChanged, this, [this]() {
         emitProperties({{QStringLiteral("PlaybackStatus"), playbackStatus()}});
+        scheduleMetadataPush();
         syncCapabilities();
     });
 
@@ -188,7 +190,7 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
     dict.insert(QStringLiteral("mpris:trackid"),
                 QVariant::fromValue(QDBusObjectPath(trackIdPath)));
 
-    if (!m_backend->hasFile() || m_backend->currentPath().isEmpty()) {
+    if (m_backend->currentPath().isEmpty()) {
         m_cachedMetadata = dict;
         m_metadataDirty = false;
         return dict;
@@ -254,7 +256,8 @@ void MprisPlayerAdaptor::Seek(qlonglong offsetUs) {
     const qint64 durMs = m_backend->duration();
     const qint64 newMs = m_backend->position() + offsetUs / 1000;
     if (durMs > 0 && newMs >= durMs) {
-        m_backend->playNext();
+        if (m_backend->canGoNext()) m_backend->playNext();
+        else m_backend->stop();
         return;
     }
     m_backend->setPosition(qMax<qint64>(0, newMs));

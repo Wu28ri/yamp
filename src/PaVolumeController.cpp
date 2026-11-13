@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QPointer>
 #include <QSet>
+#include <QTimer>
 
 #include <cmath>
 #include <utility>
@@ -34,6 +35,8 @@ struct PaVolumeControllerPrivate {
     pa_threaded_mainloop *mainloop = nullptr;
     pa_context           *context = nullptr;
     bool                  subscribed = false;
+    bool                  shuttingDown = false;
+    bool                  reconnectScheduled = false;
 
     QString pidStr;
 
@@ -269,6 +272,65 @@ void PaVolumeControllerPrivate::onContextState(pa_context *c, void *ud) {
             d->pendingExclusiveDevice.clear();
             d->postExclusiveResult(exclusive, true);
         }
+        if (state == PA_CONTEXT_FAILED && !d->shuttingDown && !d->reconnectScheduled && d->q) {
+            d->reconnectScheduled = true;
+            QPointer<PaVolumeController> guard(d->q);
+            QMetaObject::invokeMethod(d->q, [d, guard]() {
+                if (!guard || d->shuttingDown) return;
+                QTimer::singleShot(1500, guard, [d, guard]() {
+                    if (!guard || d->shuttingDown || !d->mainloop) return;
+                    pa_threaded_mainloop_lock(d->mainloop);
+                    d->reconnectScheduled = false;
+                    if (d->shuttingDown) {
+                        pa_threaded_mainloop_unlock(d->mainloop);
+                        return;
+                    }
+                    if (d->context) {
+                        const pa_context_state_t curState = pa_context_get_state(d->context);
+                        if (curState != PA_CONTEXT_FAILED && curState != PA_CONTEXT_TERMINATED) {
+                            pa_threaded_mainloop_unlock(d->mainloop);
+                            return;
+                        }
+                        pa_context_set_state_callback(d->context, nullptr, nullptr);
+                        pa_context_set_subscribe_callback(d->context, nullptr, nullptr);
+                        pa_context_disconnect(d->context);
+                        pa_context_unref(d->context);
+                        d->context = nullptr;
+                    }
+                    d->subscribed = false;
+                    d->ourClientIds.clear();
+                    d->knownClientIds.clear();
+                    d->pendingSinkInputs.clear();
+                    d->ourSinkInputs.clear();
+                    d->inFlightVolumeOps = 0;
+                    d->inFlightMuteOps = 0;
+                    qDeleteAll(d->activeExclusiveReqs);
+                    d->activeExclusiveReqs.clear();
+                    qDeleteAll(d->activeHwVolReqs);
+                    d->activeHwVolReqs.clear();
+
+                    pa_mainloop_api *api = pa_threaded_mainloop_get_api(d->mainloop);
+                    d->context = pa_context_new(api, "yamp");
+                    if (d->context) {
+                        pa_context_set_state_callback(
+                            d->context, &PaVolumeControllerPrivate::onContextState, d);
+                        if (pa_context_connect(d->context, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0) {
+                            d->reconnectScheduled = true;
+                            QTimer::singleShot(3000, guard, [d, guard]() {
+                                if (!guard || d->shuttingDown || !d->mainloop) return;
+                                pa_threaded_mainloop_lock(d->mainloop);
+                                d->reconnectScheduled = false;
+                                if (d->context && pa_context_get_state(d->context) == PA_CONTEXT_UNCONNECTED) {
+                                    pa_context_connect(d->context, nullptr, PA_CONTEXT_NOFLAGS, nullptr);
+                                }
+                                pa_threaded_mainloop_unlock(d->mainloop);
+                            });
+                        }
+                    }
+                    pa_threaded_mainloop_unlock(d->mainloop);
+                });
+            }, Qt::QueuedConnection);
+        }
         return;
     }
     if (state != PA_CONTEXT_READY) return;
@@ -499,6 +561,7 @@ PaVolumeController::PaVolumeController(QObject *parent)
 }
 
 PaVolumeController::~PaVolumeController() {
+    d->shuttingDown = true;
     if (d->mainloop) {
         if (d->context) {
             pa_threaded_mainloop_lock(d->mainloop);

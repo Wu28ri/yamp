@@ -12,9 +12,11 @@
 #include <QObject>
 #include <QSet>
 #include <QString>
+#include <QThreadPool>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <atomic>
 
 struct mpv_handle;
 struct mpv_event_property;
@@ -138,9 +140,9 @@ public:
     void setReplayGainClipProtect(bool enabled);
 
     Q_INVOKABLE void togglePlayback();
-    void play();
-    void pause();
-    void stop();
+    Q_INVOKABLE void play();
+    Q_INVOKABLE void pause();
+    Q_INVOKABLE void stop();
     void requestRaise() { emit raiseRequested(); }
     void scanFolder(const QUrl &folderUrl);
     Q_INVOKABLE void playMusic(const QString &filePath);
@@ -197,8 +199,8 @@ private:
     bool usingHardwareVolume() const {
         return m_bitPerfectEnabled && !m_softwareVolume && m_hardwareVolumeAvailable;
     }
-    void loadTrack(const Track &track, bool startPlayback = true);
-    void loadTrackIntoMpv(const Track &track, bool startPlayback = true);
+    void loadTrack(const Track &track, bool startPlayback = true, qint64 startPositionMs = 0);
+    void loadTrackIntoMpv(const Track &track, bool startPlayback = true, qint64 startPositionMs = 0);
     Track peekNextTrack() const;
     void syncMpvPrefetch();
     void advanceAfterEof();
@@ -276,7 +278,8 @@ private:
     QString m_categoryFilter;
     QString m_searchFilter;
     quint64 m_coverGen = 0;
-    quint64 m_lyricsGen = 0;
+    std::atomic<quint64> m_lyricsGen{0};
+    QThreadPool m_ioPool;
     QString       m_sortColumn = QStringLiteral("title");
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
@@ -313,8 +316,10 @@ private:
     bool    m_audioExclusiveHeld = false;
     int     m_audioRestoreRetries = 0;
     int     m_audioOpenRetries = 0;
+    int     m_consecutiveErrorSkips = 0;
     quint64 m_audioOpenRetryGeneration = 0;
     bool    m_resumeAfterExclusive = false;
+    qint64  m_pendingExclusivePositionMs = 0;
     Track   m_pendingExclusiveTrack;
     Track   m_currentTrack;
 };
