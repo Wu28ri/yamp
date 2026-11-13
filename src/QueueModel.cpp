@@ -39,6 +39,13 @@ void QueueModel::move(int from, int to) {
 
     beginMoveRows({}, from, from, {}, to > from ? to + 1 : to);
     m_queue->moveTrack(from, to);
+    if (m_lastCurrentRow == from) {
+        m_lastCurrentRow = to;
+    } else if (from < m_lastCurrentRow && to >= m_lastCurrentRow) {
+        --m_lastCurrentRow;
+    } else if (from > m_lastCurrentRow && to <= m_lastCurrentRow) {
+        ++m_lastCurrentRow;
+    }
     endMoveRows();
     notifyCurrentChanged();
     emit queueChanged();
@@ -49,6 +56,11 @@ void QueueModel::remove(int position) {
 
     beginRemoveRows({}, position, position);
     m_queue->removeTrack(position);
+    if (m_lastCurrentRow == position) {
+        m_lastCurrentRow = -1;
+    } else if (m_lastCurrentRow > position) {
+        --m_lastCurrentRow;
+    }
     endRemoveRows();
     notifyCurrentChanged();
     emit queueChanged();
@@ -59,8 +71,32 @@ void QueueModel::insertTrack(const Track &track) {
 
     beginInsertRows({}, insertIdx, insertIdx);
     m_queue->insertNext(track);
+    if (m_lastCurrentRow >= insertIdx) ++m_lastCurrentRow;
     endInsertRows();
     notifyCurrentChanged();
+    emit queueChanged();
+}
+
+void QueueModel::appendTrack(const Track &track) {
+    const int appendIdx = m_queue->count();
+
+    beginInsertRows({}, appendIdx, appendIdx);
+    m_queue->appendTrack(track);
+    endInsertRows();
+    notifyCurrentChanged();
+    emit queueChanged();
+}
+
+void QueueModel::clear(bool keepCurrentDetached) {
+    if (m_queue->count() == 0) {
+        m_queue->clear(keepCurrentDetached);
+        m_lastCurrentRow = -1;
+        return;
+    }
+    beginResetModel();
+    m_queue->clear(keepCurrentDetached);
+    m_lastCurrentRow = -1;
+    endResetModel();
     emit queueChanged();
 }
 
@@ -77,6 +113,7 @@ bool QueueModel::retainPaths(const QSet<QString> &paths) {
 
     beginResetModel();
     m_queue->retainPaths(paths);
+    m_lastCurrentRow = m_queue->currentPosition();
     endResetModel();
     emit queueChanged();
     return true;
@@ -84,10 +121,19 @@ bool QueueModel::retainPaths(const QSet<QString> &paths) {
 
 void QueueModel::resetAll() {
     beginResetModel();
+    m_lastCurrentRow = m_queue->currentPosition();
     endResetModel();
 }
 
 void QueueModel::notifyCurrentChanged() {
-    if (rowCount() == 0) return;
-    emit dataChanged(index(0), index(rowCount() - 1), {IsCurrentRole});
+    const int newRow = m_queue->currentPosition();
+    const int oldRow = m_lastCurrentRow;
+    m_lastCurrentRow = newRow;
+    if (oldRow == newRow) return;
+
+    const int n = rowCount();
+    if (oldRow >= 0 && oldRow < n)
+        emit dataChanged(index(oldRow), index(oldRow), {IsCurrentRole});
+    if (newRow >= 0 && newRow < n)
+        emit dataChanged(index(newRow), index(newRow), {IsCurrentRole});
 }

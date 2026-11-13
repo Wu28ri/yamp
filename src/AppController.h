@@ -16,6 +16,7 @@ public:
 
     void applyInitialSettings();
     void wireSignals();
+    void detachCoverProvider() { m_coverProvider = nullptr; }
 
 private:
     PlayerBackend      *m_backend       = nullptr;

@@ -172,12 +172,22 @@ bool hardwareVolume(const QString &mpvDeviceName, qreal &volume, bool &muted) {
     bool ok = false;
     if (snd_mixer_elem_t *elem = primaryPlaybackElement(
             mixer, extractDeviceIndex(mpvDeviceName))) {
-        long minRaw = 0, maxRaw = 0, raw = 0, db = 0;
+        long minRaw = 0, maxRaw = 0, raw = 0;
         if (snd_mixer_selem_get_playback_volume_range(elem, &minRaw, &maxRaw) == 0 &&
-            snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_FRONT_LEFT, &raw) == 0 &&
-            snd_mixer_selem_get_playback_dB(elem, SND_MIXER_SCHN_FRONT_LEFT, &db) == 0) {
-            volume = raw <= minRaw ? 0.0
-                                   : qBound(0.0, std::pow(10.0, static_cast<double>(db) / 6000.0), 1.0);
+            maxRaw > minRaw &&
+            snd_mixer_selem_get_playback_volume(elem, SND_MIXER_SCHN_FRONT_LEFT, &raw) == 0) {
+            long minDb = 0, maxDb = 0, db = 0;
+            if (snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0 &&
+                maxDb > minDb &&
+                snd_mixer_selem_get_playback_dB(elem, SND_MIXER_SCHN_FRONT_LEFT, &db) == 0) {
+                volume = raw <= minRaw
+                    ? 0.0
+                    : qBound(0.0, std::pow(10.0, static_cast<double>(db - maxDb) / 6000.0), 1.0);
+            } else {
+                volume = qBound(0.0,
+                    static_cast<double>(raw - minRaw) / static_cast<double>(maxRaw - minRaw),
+                    1.0);
+            }
             muted = false;
             if (snd_mixer_selem_has_playback_switch(elem)) {
                 int enabled = 1;
@@ -204,16 +214,28 @@ bool setHardwareVolume(const QString &mpvDeviceName, qreal volume) {
     bool ok = false;
     if (snd_mixer_elem_t *elem = primaryPlaybackElement(
             mixer, extractDeviceIndex(mpvDeviceName))) {
-        long minRaw = 0, maxRaw = 0, minDb = 0, maxDb = 0;
+        long minRaw = 0, maxRaw = 0;
         if (snd_mixer_selem_get_playback_volume_range(elem, &minRaw, &maxRaw) == 0 &&
-            snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0) {
+            maxRaw > minRaw) {
             volume = qBound(0.0, volume, 1.0);
             if (volume <= 0.0) {
                 ok = snd_mixer_selem_set_playback_volume_all(elem, minRaw) == 0;
             } else {
-                const long targetDb = qBound(minDb,
-                    static_cast<long>(std::lround(6000.0 * std::log10(volume))), maxDb);
-                ok = snd_mixer_selem_set_playback_dB_all(elem, targetDb, 0) == 0;
+                long minDb = 0, maxDb = 0;
+                if (snd_mixer_selem_get_playback_dB_range(elem, &minDb, &maxDb) == 0 &&
+                    maxDb > minDb) {
+                    const long targetDb = qBound(minDb,
+                        static_cast<long>(std::lround(
+                            static_cast<double>(maxDb) + 6000.0 * std::log10(volume))),
+                        maxDb);
+                    ok = snd_mixer_selem_set_playback_dB_all(elem, targetDb, 0) == 0;
+                } else {
+                    const long targetRaw = qBound(minRaw,
+                        minRaw + static_cast<long>(
+                            std::lround(volume * static_cast<double>(maxRaw - minRaw))),
+                        maxRaw);
+                    ok = snd_mixer_selem_set_playback_volume_all(elem, targetRaw) == 0;
+                }
             }
         }
     }

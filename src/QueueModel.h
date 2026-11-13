@@ -24,6 +24,8 @@ public:
     Q_INVOKABLE void remove(int position);
 
     void insertTrack(const Track &track);
+    void appendTrack(const Track &track);
+    void clear(bool keepCurrentDetached = false);
     bool retainPaths(const QSet<QString> &paths);
     void resetAll();
     void notifyCurrentChanged();
@@ -33,4 +35,5 @@ signals:
 
 private:
     TrackQueue *m_queue;
+    int m_lastCurrentRow = -1;
 };

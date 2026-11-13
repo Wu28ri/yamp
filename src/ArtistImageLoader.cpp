@@ -24,13 +24,19 @@
 
 namespace {
 
+#ifndef YAMP_VERSION
+#define YAMP_VERSION "0.2"
+#endif
+
 constexpr const char *kLastFmApiRoot   = "https://ws.audioscrobbler.com/2.0/";
 constexpr const char *kLastFmApiKey    = "1af929173f9ea4c2116ed32d25f8db59";
 constexpr const char *kDeezerSearchUrl = "https://api.deezer.com/search/artist";
-constexpr const char *kUserAgent       = "YAMP/0.3 (https://github.com/Wu28ri/YAMP)";
+constexpr const char *kUserAgent       = "YAMP/" YAMP_VERSION " (https://github.com/Wu28ri/YAMP)";
 
 constexpr int    kRequestTimeoutMs    = 8000;
 constexpr int    kMaxConcurrentFetch  = 6;
+constexpr int    kMaxQueueSize        = 96;
+constexpr int    kMaxDbWriteRetries   = 20;
 constexpr int    kAvatarMaxEdge       = 256;
 constexpr int    kProviderCacheKb     = 16 * 1024;
 constexpr qint64 kNegativeCacheTtlSec = 7 * 24 * 3600;
@@ -122,6 +128,11 @@ void ArtistImageProvider::insertImage(const QString &key, const QImage &image) {
     m_cache.insert(key, new QImage(image), imageCostKb(image));
 }
 
+void ArtistImageProvider::clearCache() {
+    QMutexLocker locker(&m_mutex);
+    m_cache.clear();
+}
+
 QImage ArtistImageProvider::loadFromDatabaseLocked(const QString &key) {
     if (!m_db.isValid() || !m_db.isOpen()) {
         m_connName = LibraryDb::openScopedConnection(QStringLiteral("artist_images"), m_db);
@@ -183,7 +194,13 @@ ArtistImageLoader::ArtistImageLoader(Settings *settings,
     : QObject(parent),
       m_settings(settings),
       m_provider(provider),
-      m_nam(new QNetworkAccessManager(this)) {
+      m_nam(new QNetworkAccessManager(this)),
+      m_dbRetryTimer(new QTimer(this)) {
+    m_imagePool.setMaxThreadCount(2);
+    m_dbRetryTimer->setSingleShot(true);
+    m_dbRetryTimer->setInterval(250);
+    connect(m_dbRetryTimer, &QTimer::timeout, this, &ArtistImageLoader::flushPendingDbWrites);
+
     m_enabled = m_settings->lastfmArtistImages();
 
     const QString legacyCacheDir =
@@ -194,6 +211,51 @@ ArtistImageLoader::ArtistImageLoader(Settings *settings,
     }
 
     loadIndexFromDatabase();
+}
+
+ArtistImageLoader::~ArtistImageLoader() {
+    ++m_generation;
+    abortActiveReplies();
+    m_imagePool.clear();
+    m_imagePool.waitForDone();
+}
+
+void ArtistImageLoader::detachProvider() {
+    m_provider = nullptr;
+}
+
+void ArtistImageLoader::clearCache() {
+    ++m_generation;
+    abortActiveReplies();
+    m_imagePool.clear();
+    m_dbRetryTimer->stop();
+    m_pendingDbWrites.clear();
+    m_queue.clear();
+    m_inFlight.clear();
+    m_requestedNames.clear();
+    m_cache.clear();
+    m_failed.clear();
+    if (m_provider) {
+        m_provider->clearCache();
+    }
+}
+
+void ArtistImageLoader::abortActiveReplies() {
+    const auto replies = m_activeReplies;
+    m_activeReplies.clear();
+    for (QNetworkReply *reply : replies) {
+        if (reply && reply->isRunning()) {
+            reply->abort();
+        }
+    }
+}
+
+void ArtistImageLoader::trackReply(QNetworkReply *reply) {
+    if (!reply) return;
+    m_activeReplies.insert(reply);
+    connect(reply, &QObject::destroyed, this, [this, reply]() {
+        m_activeReplies.remove(reply);
+    });
 }
 
 void ArtistImageLoader::loadIndexFromDatabase() {
@@ -222,39 +284,65 @@ void ArtistImageLoader::loadIndexFromDatabase() {
 }
 
 void ArtistImageLoader::saveImageToDatabase(const QString &key, const QByteArray &pngBytes) {
-    QSqlDatabase db = QSqlDatabase::database();
-    if (!db.isValid() || !db.isOpen()) return;
-
-    LibraryDb::NonBlockingWrite nbw(db);
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "INSERT OR REPLACE INTO artist_images (name_norm, image, status, updated_at) "
-        "VALUES (?, ?, 1, ?)"));
-    q.addBindValue(key);
-    q.addBindValue(pngBytes);
-    q.addBindValue(QDateTime::currentSecsSinceEpoch());
-    q.exec();
+    m_pendingDbWrites.insert(key, PendingDbEntry{pngBytes, 1, QDateTime::currentSecsSinceEpoch(), 0});
+    flushPendingDbWrites();
 }
 
 void ArtistImageLoader::saveNegativeToDatabase(const QString &key) {
+    if (m_pendingDbWrites.contains(key) && m_pendingDbWrites.value(key).status == 1) return;
+    m_pendingDbWrites.insert(key, PendingDbEntry{{}, -1, QDateTime::currentSecsSinceEpoch(), 0});
+    flushPendingDbWrites();
+}
+
+void ArtistImageLoader::flushPendingDbWrites() {
+    if (m_pendingDbWrites.isEmpty()) return;
+
     QSqlDatabase db = QSqlDatabase::database();
-    if (!db.isValid() || !db.isOpen()) return;
+    if (!db.isValid() || !db.isOpen()) {
+        m_pendingDbWrites.clear();
+        return;
+    }
 
     LibraryDb::NonBlockingWrite nbw(db);
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "INSERT OR REPLACE INTO artist_images (name_norm, image, status, updated_at) "
-        "VALUES (?, NULL, -1, ?)"));
-    q.addBindValue(key);
-    q.addBindValue(QDateTime::currentSecsSinceEpoch());
-    q.exec();
+        "VALUES (?, ?, ?, ?)"));
+
+    for (auto it = m_pendingDbWrites.begin(); it != m_pendingDbWrites.end(); ) {
+        q.bindValue(0, it.key());
+        q.bindValue(1, it->status == 1 ? QVariant(it->pngBytes) : QVariant(QMetaType(QMetaType::QByteArray)));
+        q.bindValue(2, it->status);
+        q.bindValue(3, it->updatedAt);
+
+        if (q.exec()) {
+            it = m_pendingDbWrites.erase(it);
+        } else {
+            ++it->retries;
+            if (it->retries > kMaxDbWriteRetries) {
+                it = m_pendingDbWrites.erase(it);
+            } else {
+                ++it;
+            }
+            break;
+        }
+    }
+
+    if (!m_pendingDbWrites.isEmpty() && !m_dbRetryTimer->isActive()) {
+        m_dbRetryTimer->start();
+    }
 }
 
 void ArtistImageLoader::setEnabled(bool enabled) {
     if (m_enabled == enabled) return;
     m_enabled = enabled;
+    ++m_generation;
     if (!enabled) {
         m_queue.clear();
+        m_inFlight.clear();
+        m_requestedNames.clear();
+        abortActiveReplies();
+        m_imagePool.clear();
     } else {
         m_failed.clear();
     }
@@ -285,6 +373,12 @@ QString ArtistImageLoader::artistImageUrl(const QString &artist) {
     if (!m_inFlight.contains(key)) {
         m_queue.removeOne(key);
         m_queue.prepend(key);
+        while (m_queue.size() > kMaxQueueSize) {
+            const QString dropped = m_queue.takeLast();
+            if (!m_inFlight.contains(dropped)) {
+                m_requestedNames.remove(dropped);
+            }
+        }
         processQueue();
     }
     return {};
@@ -313,19 +407,24 @@ void ArtistImageLoader::fetchFromLastFmApi(const QString &key, const QString &ar
     query.addQueryItem(QStringLiteral("format"), QStringLiteral("json"));
     url.setQuery(query);
 
+    const quint64 gen = m_generation;
     QNetworkRequest request(url);
     request.setTransferTimeout(kRequestTimeoutMs);
     request.setRawHeader("User-Agent", kUserAgent);
     QNetworkReply *reply = m_nam->get(request);
+    trackReply(reply);
     armHardTimeout(reply);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, key, artist]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, key, artist, gen]() {
+        m_activeReplies.remove(reply);
         const QNetworkReply::NetworkError networkError = reply->error();
         const QByteArray payload =
             (networkError == QNetworkReply::NoError && reply->isReadable())
                 ? reply->readAll()
                 : QByteArray();
         reply->deleteLater();
+
+        if (!m_enabled || gen != m_generation) return;
 
         QString imageUrl;
         QString canonicalName = artist;
@@ -371,19 +470,24 @@ void ArtistImageLoader::fetchFromDeezer(const QString &key, const QString &artis
     query.addQueryItem(QStringLiteral("limit"), QStringLiteral("10"));
     url.setQuery(query);
 
+    const quint64 gen = m_generation;
     QNetworkRequest request(url);
     request.setTransferTimeout(kRequestTimeoutMs);
     request.setRawHeader("User-Agent", kUserAgent);
     QNetworkReply *reply = m_nam->get(request);
+    trackReply(reply);
     armHardTimeout(reply);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, key, artist]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, key, artist, gen]() {
+        m_activeReplies.remove(reply);
         const QNetworkReply::NetworkError networkError = reply->error();
         const QByteArray payload =
             (networkError == QNetworkReply::NoError && reply->isReadable())
                 ? reply->readAll()
                 : QByteArray();
         reply->deleteLater();
+
+        if (!m_enabled || gen != m_generation) return;
 
         QString matchedUrl;
         bool validApiResponse = false;
@@ -439,16 +543,19 @@ void ArtistImageLoader::downloadArtistImage(const QString &key,
         return;
     }
 
+    const quint64 gen = m_generation;
     QNetworkRequest request(imageUrl);
     request.setTransferTimeout(kRequestTimeoutMs);
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setRawHeader("User-Agent", kUserAgent);
     QNetworkReply *reply = m_nam->get(request);
+    trackReply(reply);
     armHardTimeout(reply);
 
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, key, artist, allowDeezerFallback]() {
+            [this, reply, key, artist, allowDeezerFallback, gen]() {
+        m_activeReplies.remove(reply);
         const QNetworkReply::NetworkError networkError = reply->error();
         const QByteArray bytes =
             (networkError == QNetworkReply::NoError && reply->isReadable())
@@ -456,15 +563,28 @@ void ArtistImageLoader::downloadArtistImage(const QString &key,
                 : QByteArray();
         reply->deleteLater();
 
+        if (!m_enabled || gen != m_generation) return;
+
         if (!bytes.isEmpty()) {
-            QImage raw;
-            if (raw.loadFromData(bytes)) {
-                const QImage square = makeSquareAvatar(raw, kAvatarMaxEdge);
-                if (!square.isNull()) {
-                    QByteArray pngBytes;
-                    QBuffer buffer(&pngBytes);
-                    buffer.open(QIODevice::WriteOnly);
-                    if (square.save(&buffer, "PNG")) {
+            m_imagePool.start([this, bytes, key, artist, allowDeezerFallback, gen]() {
+                QImage square;
+                QByteArray pngBytes;
+                QImage raw;
+                if (raw.loadFromData(bytes)) {
+                    square = makeSquareAvatar(raw, kAvatarMaxEdge);
+                    if (!square.isNull()) {
+                        QBuffer buffer(&pngBytes);
+                        buffer.open(QIODevice::WriteOnly);
+                        if (!square.save(&buffer, "PNG")) {
+                            square = {};
+                            pngBytes.clear();
+                        }
+                    }
+                }
+
+                QMetaObject::invokeMethod(this, [this, square, pngBytes, key, artist, allowDeezerFallback, gen]() {
+                    if (!m_enabled || gen != m_generation) return;
+                    if (!square.isNull() && !pngBytes.isEmpty()) {
                         if (m_provider) {
                             m_provider->insertImage(key, square);
                         }
@@ -472,8 +592,14 @@ void ArtistImageLoader::downloadArtistImage(const QString &key,
                         finishFetch(key, makeProviderUrl(key));
                         return;
                     }
-                }
-            }
+                    if (allowDeezerFallback) {
+                        fetchFromDeezer(key, artist);
+                    } else {
+                        finishFetch(key, {});
+                    }
+                }, Qt::QueuedConnection);
+            });
+            return;
         }
 
         if (allowDeezerFallback) {

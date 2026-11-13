@@ -44,10 +44,25 @@ int TrackQueue::positionOfId(int globalId) const {
 }
 
 void TrackQueue::setTracks(const QList<Track> &tracks) {
-    if (m_tracks.size() == tracks.size() &&
-        std::equal(m_tracks.cbegin(), m_tracks.cend(), tracks.cbegin(),
-                   [](const Track &left, const Track &right) { return left.path == right.path; })) return;
-    m_tracks = tracks;
+    QList<Track> deduped;
+    deduped.reserve(tracks.size());
+    QSet<QString> seenPaths;
+    seenPaths.reserve(tracks.size());
+    for (const Track &t : tracks) {
+        if (!t.path.isEmpty()) {
+            if (seenPaths.contains(t.path)) continue;
+            seenPaths.insert(t.path);
+        }
+        deduped.append(t);
+    }
+
+    if (m_tracks.size() == deduped.size() &&
+        static_cast<int>(m_playOrder.size()) == deduped.size() &&
+        std::equal(m_tracks.cbegin(), m_tracks.cend(), deduped.cbegin(),
+                   [](const Track &left, const Track &right) { return left.path == right.path; })) {
+        return;
+    }
+    m_tracks = std::move(deduped);
     rebuildPathIndex();
     rebuildPlayOrder();
 }
@@ -56,16 +71,41 @@ void TrackQueue::restoreState(const QList<Track> &tracks,
                               const std::vector<int> &playOrder,
                               int currentIndex, int detachedPosition,
                               bool currentDetached, bool shuffle) {
-    m_tracks = tracks;
-    rebuildPathIndex();
+    m_tracks.clear();
+    m_tracks.reserve(tracks.size());
+    m_pathToGlobalId.clear();
+    m_pathToGlobalId.reserve(tracks.size());
+
+    std::vector<int> oldToNewId(static_cast<size_t>(tracks.size()), -1);
+    for (int i = 0; i < tracks.size(); ++i) {
+        const Track &t = tracks[i];
+        if (!t.path.isEmpty()) {
+            const auto existing = m_pathToGlobalId.constFind(t.path);
+            if (existing != m_pathToGlobalId.constEnd()) {
+                oldToNewId[static_cast<size_t>(i)] = existing.value();
+                continue;
+            }
+            const int newId = static_cast<int>(m_tracks.size());
+            m_tracks.append(t);
+            m_pathToGlobalId.insert(t.path, newId);
+            oldToNewId[static_cast<size_t>(i)] = newId;
+        } else {
+            const int newId = static_cast<int>(m_tracks.size());
+            m_tracks.append(t);
+            oldToNewId[static_cast<size_t>(i)] = newId;
+        }
+    }
 
     m_playOrder.clear();
-    m_playOrder.reserve(m_tracks.size());
+    m_playOrder.reserve(std::max(playOrder.size(), static_cast<size_t>(m_tracks.size())));
     QSet<int> usedIds;
-    for (int id : playOrder) {
-        if (id < 0 || id >= m_tracks.size() || usedIds.contains(id)) continue;
-        m_playOrder.push_back(id);
-        usedIds.insert(id);
+    usedIds.reserve(m_tracks.size());
+    for (int oldId : playOrder) {
+        if (oldId < 0 || oldId >= tracks.size()) continue;
+        const int newId = oldToNewId[static_cast<size_t>(oldId)];
+        if (newId < 0 || newId >= m_tracks.size()) continue;
+        m_playOrder.push_back(newId);
+        usedIds.insert(newId);
     }
     for (int id = 0; id < m_tracks.size(); ++id) {
         if (!usedIds.contains(id)) m_playOrder.push_back(id);
@@ -87,15 +127,44 @@ void TrackQueue::restoreState(const QList<Track> &tracks,
         : -1;
 }
 
-void TrackQueue::insertNext(const Track &track) {
+int TrackQueue::ensureTrackStored(const Track &track) {
+    if (!track.path.isEmpty()) {
+        const auto it = m_pathToGlobalId.constFind(track.path);
+        if (it != m_pathToGlobalId.constEnd()) {
+            const int existingId = it.value();
+            if (existingId >= 0 && existingId < m_tracks.size()) {
+                m_tracks[existingId] = track;
+                return existingId;
+            }
+        }
+    }
     m_tracks.append(track);
     const int newTrackId = static_cast<int>(m_tracks.size()) - 1;
     if (!track.path.isEmpty()) m_pathToGlobalId.insert(track.path, newTrackId);
+    return newTrackId;
+}
 
+void TrackQueue::insertNext(const Track &track) {
+    const int trackId = ensureTrackStored(track);
     const bool wasEmpty = m_playOrder.empty();
     const int insertionPosition = nextInsertionPosition();
-    m_playOrder.insert(m_playOrder.begin() + insertionPosition, newTrackId);
-    if (wasEmpty) m_currentIndex = 0;
+    m_playOrder.insert(m_playOrder.begin() + insertionPosition, trackId);
+    if (!m_currentDetached) {
+        if (wasEmpty) {
+            m_currentIndex = 0;
+        } else if (insertionPosition <= m_currentIndex) {
+            ++m_currentIndex;
+        }
+    }
+}
+
+void TrackQueue::appendTrack(const Track &track) {
+    const int trackId = ensureTrackStored(track);
+    const bool wasEmpty = m_playOrder.empty();
+    m_playOrder.push_back(trackId);
+    if (wasEmpty && !m_currentDetached) {
+        m_currentIndex = 0;
+    }
 }
 
 void TrackQueue::removeTrack(int position) {
@@ -106,7 +175,8 @@ void TrackQueue::removeTrack(int position) {
     const int globalId = m_playOrder[position];
     m_playOrder.erase(m_playOrder.begin() + position);
 
-    if (globalId >= 0 && globalId < m_tracks.size()) {
+    const bool stillReferenced = std::find(m_playOrder.cbegin(), m_playOrder.cend(), globalId) != m_playOrder.cend();
+    if (!stillReferenced && globalId >= 0 && globalId < m_tracks.size()) {
         m_tracks.removeAt(globalId);
 
         for (int &id : m_playOrder) {
@@ -117,8 +187,13 @@ void TrackQueue::removeTrack(int position) {
 
     if (m_playOrder.empty()) {
         m_currentIndex = -1;
-        m_currentDetached = false;
-        m_detachedPosition = -1;
+        if (removedCurrent || m_currentDetached) {
+            m_currentDetached = true;
+            m_detachedPosition = 0;
+        } else {
+            m_currentDetached = false;
+            m_detachedPosition = -1;
+        }
         return;
     }
     if (position < m_currentIndex) {
@@ -133,13 +208,90 @@ void TrackQueue::removeTrack(int position) {
     }
 }
 
+void TrackQueue::clear(bool keepCurrentDetached) {
+    m_tracks.clear();
+    m_playOrder.clear();
+    m_pathToGlobalId.clear();
+    m_currentIndex = -1;
+    m_currentDetached = keepCurrentDetached;
+    m_detachedPosition = keepCurrentDetached ? 0 : -1;
+}
+
 void TrackQueue::retainPaths(const QSet<QString> &paths) {
-    for (int position = count() - 1; position >= 0; --position) {
-        const int globalId = m_playOrder[static_cast<size_t>(position)];
-        if (globalId < 0 || globalId >= m_tracks.size() ||
-            !paths.contains(m_tracks.at(globalId).path)) {
-            removeTrack(position);
+    if (m_playOrder.empty()) {
+        if (!m_tracks.isEmpty()) {
+            m_tracks.clear();
+            m_pathToGlobalId.clear();
         }
+        return;
+    }
+
+    QList<Track> newTracks;
+    newTracks.reserve(m_tracks.size());
+    std::vector<int> oldToNewId(static_cast<size_t>(m_tracks.size()), -1);
+    std::vector<int> newPlayOrder;
+    newPlayOrder.reserve(m_playOrder.size());
+
+    const int oldCount = static_cast<int>(m_playOrder.size());
+    const bool wasDetached = m_currentDetached;
+    const int oldCurrent = m_currentIndex;
+    const int oldDetachedPos = m_detachedPosition;
+
+    int keptBeforeCurrent = 0;
+    int keptBeforeDetached = 0;
+    bool currentKept = false;
+
+    for (int pos = 0; pos < oldCount; ++pos) {
+        const int oldId = m_playOrder[static_cast<size_t>(pos)];
+        const bool keep = oldId >= 0 && oldId < m_tracks.size()
+            && paths.contains(m_tracks.at(oldId).path);
+
+        if (keep) {
+            if (pos < oldCurrent) ++keptBeforeCurrent;
+            if (wasDetached && pos < oldDetachedPos) ++keptBeforeDetached;
+            if (!wasDetached && pos == oldCurrent) currentKept = true;
+
+            int newId = oldToNewId[static_cast<size_t>(oldId)];
+            if (newId < 0) {
+                newId = static_cast<int>(newTracks.size());
+                newTracks.append(m_tracks.at(oldId));
+                oldToNewId[static_cast<size_t>(oldId)] = newId;
+            }
+            newPlayOrder.push_back(newId);
+        }
+    }
+
+    m_tracks = std::move(newTracks);
+    m_playOrder = std::move(newPlayOrder);
+    rebuildPathIndex();
+
+    const int newCount = static_cast<int>(m_playOrder.size());
+    if (newCount == 0) {
+        const bool hadActive = wasDetached || (oldCurrent >= 0 && oldCurrent < oldCount);
+        m_currentIndex = -1;
+        m_currentDetached = hadActive;
+        m_detachedPosition = hadActive ? 0 : -1;
+        return;
+    }
+
+    if (wasDetached) {
+        m_currentDetached = true;
+        m_detachedPosition = qBound(0, keptBeforeDetached, newCount);
+        m_currentIndex = oldCurrent < 0 ? -1 : std::min(keptBeforeCurrent, newCount - 1);
+    } else if (oldCurrent >= 0 && oldCurrent < oldCount) {
+        if (currentKept) {
+            m_currentDetached = false;
+            m_detachedPosition = -1;
+            m_currentIndex = keptBeforeCurrent;
+        } else {
+            m_currentDetached = true;
+            m_detachedPosition = qBound(0, keptBeforeCurrent, newCount);
+            m_currentIndex = std::min(keptBeforeCurrent, newCount - 1);
+        }
+    } else {
+        m_currentIndex = -1;
+        m_currentDetached = false;
+        m_detachedPosition = -1;
     }
 }
 
@@ -234,28 +386,75 @@ void TrackQueue::setIndexByPath(const QString &path) {
     m_detachedPosition = -1;
 }
 
-Track TrackQueue::next() {
+Track TrackQueue::peekNext(bool wrapAround) const {
+    if (m_playOrder.empty()) return {};
+    int nextPos = -1;
     if (m_currentDetached) {
-        const int nextPosition = m_detachedPosition;
-        if (nextPosition < 0 || nextPosition >= static_cast<int>(m_playOrder.size())) return {};
+        if (m_detachedPosition >= 0 && m_detachedPosition < static_cast<int>(m_playOrder.size())) {
+            nextPos = m_detachedPosition;
+        } else if (wrapAround) {
+            nextPos = 0;
+        }
+    } else if (m_currentIndex < 0) {
+        nextPos = 0;
+    } else if (m_currentIndex + 1 < static_cast<int>(m_playOrder.size())) {
+        nextPos = m_currentIndex + 1;
+    } else if (wrapAround) {
+        nextPos = 0;
+    }
+    if (nextPos < 0 || nextPos >= static_cast<int>(m_playOrder.size())) return {};
+    const int globalId = m_playOrder[static_cast<size_t>(nextPos)];
+    if (globalId < 0 || globalId >= m_tracks.size()) return {};
+    return m_tracks[globalId];
+}
+
+bool TrackQueue::hasPrevious(bool wrapAround) const {
+    if (m_playOrder.empty()) return false;
+    if (wrapAround) return true;
+    if (m_currentDetached) return m_detachedPosition > 0;
+    return m_currentIndex > 0;
+}
+
+Track TrackQueue::next(bool wrapAround) {
+    if (m_playOrder.empty()) return {};
+    if (m_currentDetached) {
+        int nextPosition = m_detachedPosition;
+        if (nextPosition < 0 || nextPosition >= static_cast<int>(m_playOrder.size())) {
+            if (!wrapAround) return {};
+            nextPosition = 0;
+        }
         jumpToPosition(nextPosition);
         return current();
     }
-    if (m_currentIndex >= static_cast<int>(m_playOrder.size()) - 1) return {};
-    ++m_currentIndex;
-    return current();
+    if (m_currentIndex + 1 < static_cast<int>(m_playOrder.size())) {
+        ++m_currentIndex;
+        return current();
+    }
+    if (wrapAround) {
+        m_currentIndex = 0;
+        return current();
+    }
+    return {};
 }
 
-Track TrackQueue::previous() {
+Track TrackQueue::previous(bool wrapAround) {
     if (m_playOrder.empty()) return {};
     if (m_currentDetached) {
-        const int previousPosition = m_detachedPosition - 1;
-        if (previousPosition < 0) return {};
+        int previousPosition = m_detachedPosition - 1;
+        if (previousPosition < 0) {
+            if (!wrapAround) return {};
+            previousPosition = static_cast<int>(m_playOrder.size()) - 1;
+        }
         jumpToPosition(previousPosition);
         return current();
     }
     if (m_currentIndex > 0) {
         --m_currentIndex;
+        return current();
     }
-    return current();
+    if (wrapAround) {
+        m_currentIndex = static_cast<int>(m_playOrder.size()) - 1;
+        return current();
+    }
+    return {};
 }

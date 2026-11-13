@@ -17,6 +17,7 @@ class Settings : public QObject {
     Q_PROPERTY(bool    audioBitPerfect     READ audioBitPerfect     WRITE setAudioBitPerfect     NOTIFY audioBitPerfectChanged)
     Q_PROPERTY(QString audioDevice         READ audioDevice         WRITE setAudioDevice         NOTIFY audioDeviceChanged)
     Q_PROPERTY(bool    audioSoftwareVolume READ audioSoftwareVolume WRITE setAudioSoftwareVolume NOTIFY audioSoftwareVolumeChanged)
+    Q_PROPERTY(bool    gaplessPlayback     READ gaplessPlayback     WRITE setGaplessPlayback     NOTIFY gaplessPlaybackChanged)
     Q_PROPERTY(bool    replayGainEnabled READ replayGainEnabled WRITE setReplayGainEnabled NOTIFY replayGainEnabledChanged)
     Q_PROPERTY(int     replayGainMode    READ replayGainMode    WRITE setReplayGainMode    NOTIFY replayGainModeChanged)
     Q_PROPERTY(qreal   replayGainPreampDb    READ replayGainPreampDb    WRITE setReplayGainPreampDb    NOTIFY replayGainPreampDbChanged)
@@ -35,6 +36,7 @@ public:
 
     qreal   volume()              const { return m_volume; }
     bool    shuffle()             const { return m_shuffle; }
+    int     repeatMode()          const { return m_repeatMode; }
     int     sidebarWidth()        const { return m_sidebarWidth; }
     int     queuePanelWidth()     const { return m_queuePanelWidth; }
     bool    queuePanelOpen()      const { return m_queuePanelOpen; }
@@ -44,6 +46,7 @@ public:
     bool    audioBitPerfect()     const { return m_audioBitPerfect; }
     QString audioDevice()         const { return m_audioDevice; }
     bool    audioSoftwareVolume() const { return m_audioSoftwareVolume; }
+    bool    gaplessPlayback()     const { return m_gaplessPlayback; }
     bool    replayGainEnabled()     const { return m_rgEnabled; }
     int     replayGainMode()        const { return m_rgMode; }
     qreal   replayGainPreampDb()    const { return m_rgPreampDb; }
@@ -56,6 +59,7 @@ public:
 
     void setVolume(qreal v);
     void setShuffle(bool s);
+    void setRepeatMode(int mode);
     void setSidebarWidth(int w);
     void setQueuePanelWidth(int w);
     void setQueuePanelOpen(bool open);
@@ -65,6 +69,7 @@ public:
     void setAudioBitPerfect(bool enabled);
     void setAudioDevice(const QString &device);
     void setAudioSoftwareVolume(bool enabled);
+    void setGaplessPlayback(bool enabled);
     void setReplayGainEnabled(bool enabled);
     void setReplayGainMode(int mode);
     void setReplayGainPreampDb(qreal db);
@@ -88,6 +93,7 @@ signals:
     void requestRemoveFolder(const QString &folder, const QStringList &remainingFolders);
     void volumeChanged();
     void shuffleChanged();
+    void repeatModeChanged();
     void sidebarWidthChanged();
     void queuePanelWidthChanged();
     void queuePanelOpenChanged();
@@ -97,6 +103,7 @@ signals:
     void audioBitPerfectChanged();
     void audioDeviceChanged();
     void audioSoftwareVolumeChanged();
+    void gaplessPlaybackChanged();
     void replayGainEnabledChanged();
     void replayGainModeChanged();
     void replayGainPreampDbChanged();
@@ -115,6 +122,7 @@ private:
 
     qreal   m_volume              = 1.0;
     bool    m_shuffle             = false;
+    int     m_repeatMode          = 0;
     int     m_sidebarWidth        = 250;
     int     m_queuePanelWidth     = 320;
     bool    m_queuePanelOpen      = false;
@@ -124,6 +132,7 @@ private:
     bool    m_audioBitPerfect     = false;
     QString m_audioDevice         = QStringLiteral("auto");
     bool    m_audioSoftwareVolume = false;
+    bool    m_gaplessPlayback     = true;
     bool    m_rgEnabled           = false;
     int     m_rgMode              = RgModeTrack;
     qreal   m_rgPreampDb          = 0.0;

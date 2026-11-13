@@ -98,6 +98,11 @@ set_target_properties(appyamp PROPERTIES
     INSTALL_RPATH ""
 )
 
+target_compile_definitions(appyamp
+    PRIVATE
+        YAMP_VERSION="${PROJECT_VERSION}"
+)
+
 target_link_libraries(appyamp
     PRIVATE
         Qt6::Quick

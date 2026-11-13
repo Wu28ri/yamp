@@ -1,5 +1,7 @@
 #include "Settings.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QtGlobal>
 
 namespace {
@@ -15,6 +17,44 @@ bool differs(qreal a, qreal b) {
 
 qreal clampPreamp(qreal db) {
     return qBound(Settings::kReplayGainPreampMinDb, db, Settings::kReplayGainPreampMaxDb);
+}
+
+QString normalizeFolderPath(const QString &raw) {
+    if (raw.isEmpty()) return {};
+    const QFileInfo fi(raw);
+    QString p = fi.exists() ? fi.canonicalFilePath() : QDir::cleanPath(fi.absoluteFilePath());
+    if (p.isEmpty()) p = QDir::cleanPath(raw);
+    while (p.size() > 1 && p.endsWith(QLatin1Char('/')))
+        p.chop(1);
+    return p;
+}
+
+bool isSameOrSubPath(const QString &candidate, const QString &root) {
+    if (candidate == root) return true;
+    if (root == QLatin1String("/")) return candidate.startsWith(QLatin1Char('/'));
+    return candidate.startsWith(root + QLatin1Char('/'));
+}
+
+QStringList deduplicateRoots(const QStringList &input) {
+    QStringList out;
+    for (const QString &raw : input) {
+        const QString p = normalizeFolderPath(raw);
+        if (p.isEmpty()) continue;
+        bool covered = false;
+        for (const QString &existing : out) {
+            if (isSameOrSubPath(p, existing)) {
+                covered = true;
+                break;
+            }
+        }
+        if (covered) continue;
+        for (int i = out.size() - 1; i >= 0; --i) {
+            if (isSameOrSubPath(out.at(i), p))
+                out.removeAt(i);
+        }
+        out.append(p);
+    }
+    return out;
 }
 
 }
@@ -35,8 +75,16 @@ Settings::Settings(QObject *parent)
 void Settings::addFolder(const QUrl &folderUrl) {
     if (folderUrl.isEmpty()) return;
 
-    const QString path = folderUrl.toLocalFile();
-    if (m_folders.contains(path)) return;
+    const QString path = normalizeFolderPath(folderUrl.toLocalFile());
+    if (path.isEmpty()) return;
+    for (const QString &existing : std::as_const(m_folders)) {
+        if (isSameOrSubPath(path, existing)) return;
+    }
+
+    for (int i = m_folders.size() - 1; i >= 0; --i) {
+        if (isSameOrSubPath(m_folders.at(i), path))
+            m_folders.removeAt(i);
+    }
 
     m_folders.append(path);
     saveFolders();
@@ -53,11 +101,22 @@ void Settings::removeFolder(int index) {
     emit requestRemoveFolder(folder, m_folders);
 }
 
-void Settings::clearDatabase()  { emit requestClearDatabase(); }
+void Settings::clearDatabase() {
+    if (!m_folders.isEmpty()) {
+        m_folders.clear();
+        saveFolders();
+        emit musicFoldersChanged();
+    }
+    emit requestClearDatabase();
+}
 void Settings::rescanDatabase() { emit requestRescanDatabase(m_folders); }
 
 void Settings::setVolume(qreal v)  { store(m_volume,  v, "volume",  &Settings::volumeChanged); }
 void Settings::setShuffle(bool s)  { store(m_shuffle, s, "shuffle", &Settings::shuffleChanged); }
+void Settings::setRepeatMode(int mode) {
+    if (mode < 0 || mode > 2) return;
+    store(m_repeatMode, mode, "repeatMode", &Settings::repeatModeChanged);
+}
 
 void Settings::setSidebarWidth(int w) {
     if (w <= 0) return;
@@ -99,6 +158,10 @@ void Settings::setAudioBitPerfect(bool enabled) {
 
 void Settings::setAudioSoftwareVolume(bool enabled) {
     store(m_audioSoftwareVolume, enabled, "audioSoftwareVolume", &Settings::audioSoftwareVolumeChanged);
+}
+
+void Settings::setGaplessPlayback(bool enabled) {
+    store(m_gaplessPlayback, enabled, "gaplessPlayback", &Settings::gaplessPlaybackChanged);
 }
 
 void Settings::setReplayGainEnabled(bool enabled) {
@@ -146,9 +209,10 @@ void Settings::loadSettings() {
         return v > 0 ? v : fallback;
     };
 
-    m_folders             = m_settings.value("musicFolders", QStringList()).toStringList();
+    m_folders             = deduplicateRoots(m_settings.value("musicFolders", QStringList()).toStringList());
     m_volume              = qBound(0.0, m_settings.value("volume", 1.0).toReal(), 1.0);
     m_shuffle             = m_settings.value("shuffle",             false).toBool();
+    m_repeatMode          = qBound(0, m_settings.value("repeatMode", 0).toInt(), 2);
     m_sidebarWidth        = loadPositiveInt("sidebarWidth",        250);
     m_queuePanelWidth     = loadPositiveInt("queuePanelWidth",     320);
     m_queuePanelOpen      = m_settings.value("queuePanelOpen",      false).toBool();
@@ -159,6 +223,7 @@ void Settings::loadSettings() {
     m_audioDevice         = m_settings.value("audioDevice",         QStringLiteral("auto")).toString();
     if (m_audioDevice.isEmpty()) m_audioDevice = QStringLiteral("auto");
     m_audioSoftwareVolume = m_settings.value("audioSoftwareVolume", false).toBool();
+    m_gaplessPlayback     = m_settings.value("gaplessPlayback",     true).toBool();
     m_rgEnabled           = m_settings.value("replayGainEnabled",   false).toBool();
     m_rgMode              = m_settings.value("replayGainMode",      RgModeTrack).toInt();
     if (m_rgMode != RgModeTrack && m_rgMode != RgModeAlbum) m_rgMode = RgModeTrack;

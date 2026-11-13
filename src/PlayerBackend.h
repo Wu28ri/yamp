@@ -40,6 +40,8 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(bool    isMuted   READ isMuted   WRITE setMuted   NOTIFY mutedChanged)
     Q_PROPERTY(qreal   volume    READ volume    WRITE setVolume  NOTIFY volumeChanged)
     Q_PROPERTY(bool    shuffle   READ shuffle   WRITE setShuffle NOTIFY shuffleChanged)
+    Q_PROPERTY(int     repeatMode READ repeatMode WRITE setRepeatMode NOTIFY repeatModeChanged)
+    Q_PROPERTY(bool    gaplessPlayback READ gaplessPlayback WRITE setGaplessPlayback NOTIFY gaplessPlaybackChanged)
     Q_PROPERTY(bool    isPlaying READ isPlaying NOTIFY playbackStateChanged)
     Q_PROPERTY(qint64  position  READ position  WRITE setPosition NOTIFY positionChanged)
     Q_PROPERTY(qint64  duration  READ duration  NOTIFY durationChanged)
@@ -47,6 +49,9 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(bool    volumeControllable   READ volumeControllable   NOTIFY volumeControllableChanged)
 
     Q_PROPERTY(int currentQueuePosition READ currentQueuePosition NOTIFY currentQueuePositionChanged)
+    Q_PROPERTY(int queueCount           READ queueCount           NOTIFY queueCountChanged)
+    Q_PROPERTY(QString sortColumn       READ sortColumn           NOTIFY sortChanged)
+    Q_PROPERTY(bool    sortAscending    READ sortAscending        NOTIFY sortChanged)
 
     Q_PROPERTY(QAbstractItemModel* trackModel  READ trackModel  CONSTANT)
     Q_PROPERTY(QAbstractItemModel* albumModel  READ albumModel  CONSTANT)
@@ -58,6 +63,13 @@ class PlayerBackend : public QObject {
     Q_PROPERTY(int  scanTotal      READ scanTotal      NOTIFY scanProgressChanged)
 
 public:
+    enum RepeatMode {
+        RepeatOff = 0,
+        RepeatAll = 1,
+        RepeatOne = 2,
+    };
+    Q_ENUM(RepeatMode)
+
     explicit PlayerBackend(QObject *parent = nullptr);
     ~PlayerBackend() override;
 
@@ -77,10 +89,15 @@ public:
     bool   isMuted()  const;
     qreal  volume()   const;
     bool   shuffle()  const { return m_queue.isShuffle();     }
+    int    repeatMode() const { return m_repeatMode; }
+    bool   gaplessPlayback() const { return m_gaplessPlayback; }
     bool   isPlaying() const { return m_hasFile && !m_paused; }
     qint64 position() const;
     qint64 duration() const { return m_durationMs; }
     bool   hasFile() const { return m_hasFile; }
+    bool   canGoNext() const;
+    bool   canGoPrevious() const;
+    QStringList watchedFolders() const;
 
     QString audioDevice()        const { return m_audioDevice; }
     bool    softwareVolume()     const { return m_softwareVolume; }
@@ -90,6 +107,9 @@ public:
     }
 
     int currentQueuePosition() const { return m_queue.currentPosition(); }
+    int queueCount()           const { return m_queue.count(); }
+    QString sortColumn()       const { return m_sortColumn; }
+    bool sortAscending()       const { return m_sortOrder == Qt::AscendingOrder; }
 
     QAbstractItemModel* trackModel()  const { return m_trackModel; }
     QAbstractItemModel* albumModel()  const { return m_albumModel; }
@@ -103,6 +123,9 @@ public:
     void setMuted(bool muted);
     void setVolume(qreal v);
     void setShuffle(bool enabled);
+    void setRepeatMode(int mode);
+    Q_INVOKABLE void cycleRepeatMode();
+    void setGaplessPlayback(bool enabled);
     void setPosition(qint64 ms);
 
     void setAudioDevice(const QString &device);
@@ -118,6 +141,7 @@ public:
     void play();
     void pause();
     void stop();
+    void requestRaise() { emit raiseRequested(); }
     void scanFolder(const QUrl &folderUrl);
     Q_INVOKABLE void playMusic(const QString &filePath);
     Q_INVOKABLE void playFromQueue(int position);
@@ -126,11 +150,14 @@ public:
     Q_INVOKABLE void searchTracks(const QString &query);
     Q_INVOKABLE void searchAlbums(const QString &query);
     Q_INVOKABLE void searchArtists(const QString &query);
+    Q_INVOKABLE void clearCategoryFilter();
     Q_INVOKABLE void filterByAlbum(const QString &albumName, const QString &artistName = QString());
     Q_INVOKABLE void filterByArtist(const QString &artistName);
     Q_INVOKABLE void sortTracks(const QString &columnName, bool ascending = true);
     Q_INVOKABLE int  getRowForPath(const QString &path);
     Q_INVOKABLE void addPlayNext(const QString &path);
+    Q_INVOKABLE void addToQueue(const QString &path);
+    Q_INVOKABLE void clearQueue();
     Q_INVOKABLE void openInFileManager(const QString &path);
     Q_INVOKABLE QVariantMap trackContextForPath(const QString &path);
     Q_INVOKABLE QVariantList listHardwareDevices();
@@ -146,17 +173,24 @@ signals:
     void mutedChanged();
     void volumeChanged();
     void shuffleChanged();
+    void repeatModeChanged();
+    void gaplessPlaybackChanged();
     void playbackStateChanged();
     void positionChanged();
+    void seeked(qint64 positionMs);
     void durationChanged();
     void currentIndexChanged();
     void currentQueuePositionChanged();
+    void queueCountChanged();
+    void sortChanged();
     void scanProgressChanged();
     void audioDeviceChanged();
     void softwareVolumeChanged();
     void volumeControllableChanged();
     void bitPerfectChanged();
     void trackStarted(const Track &track);
+    void libraryCleared();
+    void raiseRequested();
 
 private:
     bool usingSoftwareVolume() const { return m_bitPerfectEnabled && m_softwareVolume; }
@@ -165,6 +199,9 @@ private:
     }
     void loadTrack(const Track &track, bool startPlayback = true);
     void loadTrackIntoMpv(const Track &track, bool startPlayback = true);
+    Track peekNextTrack() const;
+    void syncMpvPrefetch();
+    void advanceAfterEof();
     void loadLyrics(const QString &trackPath);
     void updateCurrentLyricIndex(qint64 positionMs);
     void requestExclusiveForPlayback();
@@ -173,6 +210,8 @@ private:
     void rebuildQueueFromCurrentFilter();
     bool restoreQueueState();
     void scheduleQueueSave();
+    QByteArray serializeQueueState() const;
+    void saveQueueStateAsync();
     void saveQueueState();
     void refreshAllModels();
     void pruneQueueToLibrary();
@@ -183,7 +222,9 @@ private:
     void applyFilter();
     QString combinedFilter() const;
     QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
+    Track queryTrackByPath(const QString &path) const;
     void setupMpris();
+    void applyGaplessSettings();
     void applyReplayGainSettings();
     void applyAudioDeviceToMpv();
     void applyMpvVolume();
@@ -208,6 +249,8 @@ private:
     qint64 m_currentMpvEntryId = -1;
     qint64 m_loadedMpvEntryId = -1;
     qint64 m_startedMpvEntryId = -1;
+    qint64 m_prefetchedMpvEntryId = -1;
+    Track  m_prefetchedTrack;
 
     PaVolumeController *m_paVolume        = nullptr;
     TrackModel         *m_trackModel      = nullptr;
@@ -233,6 +276,7 @@ private:
     QString m_categoryFilter;
     QString m_searchFilter;
     quint64 m_coverGen = 0;
+    quint64 m_lyricsGen = 0;
     QString       m_sortColumn = QStringLiteral("title");
     Qt::SortOrder m_sortOrder  = Qt::AscendingOrder;
 
@@ -243,10 +287,14 @@ private:
     QTimer *m_scanRefreshTimer = nullptr;
     QTimer *m_queueSaveTimer = nullptr;
     bool m_queueStateReady = false;
+    bool m_queueDirty = false;
+    int  m_lastEmittedQueueCount = 0;
     bool m_clearPending = false;
     QStringList m_desiredFolders;
     QSet<QString> m_deferredScanFolders;
 
+    int     m_repeatMode     = RepeatOff;
+    bool    m_gaplessPlayback = true;
     bool    m_rgEnabled      = false;
     int     m_rgMode         = ReplayGainMode::RgModeTrack;
     qreal   m_rgPreampDb     = 0.0;

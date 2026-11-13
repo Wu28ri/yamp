@@ -103,6 +103,6 @@ private:
         int retryCount = 0;
     };
     QList<PendingScrobble> m_pendingScrobbles;
+    QList<quint64> m_scrobbleInFlightIds;
     quint64 m_nextScrobbleId = 0;
-    quint64 m_scrobbleInFlightId = 0;
 };

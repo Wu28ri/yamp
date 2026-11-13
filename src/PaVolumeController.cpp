@@ -45,6 +45,11 @@ struct PaVolumeControllerPrivate {
     double targetUser = 1.0;
     bool   targetMuted = false;
 
+    double paTargetUser = 1.0;
+    bool   paTargetMuted = false;
+    int    inFlightVolumeOps = 0;
+    int    inFlightMuteOps = 0;
+
     double reportedUser = -1.0;
     bool   reportedMuted = false;
 
@@ -55,10 +60,15 @@ struct PaVolumeControllerPrivate {
     int pendingExclusive = -1;
     int activeExclusive = -1;
 
+    QSet<struct PaExclusiveRequest *> activeExclusiveReqs;
+    QSet<struct PaHardwareVolumeRequest *> activeHwVolReqs;
+
     static void onContextState(pa_context *c, void *ud);
     static void onSubscribe(pa_context *c, pa_subscription_event_type_t t, uint32_t idx, void *ud);
     static void onSinkInputInfo(pa_context *c, const pa_sink_input_info *info, int eol, void *ud);
     static void onClientInfo(pa_context *c, const pa_client_info *info, int eol, void *ud);
+    static void onVolumeOpDone(pa_context *c, int success, void *ud);
+    static void onMuteOpDone(pa_context *c, int success, void *ud);
 
     void requestClientInfo(uint32_t clientId);
     void rescanPendingSinkInputs();
@@ -81,6 +91,7 @@ struct PaExclusiveRequest {
 };
 
 struct PaHardwareVolumeRequest {
+    PaVolumeControllerPrivate *d = nullptr;
     QString cardId;
     QString deviceId;
     double volume = 1.0;
@@ -111,6 +122,7 @@ QString deviceIdFromMpvDevice(const QString &device) {
 void onExclusiveProfileSet(pa_context *, int success, void *userdata) {
     auto *request = static_cast<PaExclusiveRequest*>(userdata);
     auto *d = request->d;
+    d->activeExclusiveReqs.remove(request);
     if (request->generation == d->exclusiveGeneration) {
         d->activeExclusive = -1;
         if (success) {
@@ -130,8 +142,21 @@ void onExclusiveProfileSet(pa_context *, int success, void *userdata) {
 void onExclusiveCardInfo(pa_context *context, const pa_card_info *info,
                          int eol, void *userdata) {
     auto *request = static_cast<PaExclusiveRequest*>(userdata);
-    if (request->generation != request->d->exclusiveGeneration) {
-        if (eol) delete request;
+    auto *d = request->d;
+    if (eol < 0) {
+        d->activeExclusiveReqs.remove(request);
+        if (request->generation == d->exclusiveGeneration) {
+            d->activeExclusive = -1;
+            d->postExclusiveResult(request->exclusive, false);
+        }
+        delete request;
+        return;
+    }
+    if (request->generation != d->exclusiveGeneration) {
+        if (eol > 0) {
+            d->activeExclusiveReqs.remove(request);
+            delete request;
+        }
         return;
     }
     if (!eol && info && request->cardName.isEmpty() && info->proplist) {
@@ -144,22 +169,35 @@ void onExclusiveCardInfo(pa_context *context, const pa_card_info *info,
         return;
     }
     if (!eol) return;
-    if (request->cardName.isEmpty() || request->profile.isEmpty()) {
-        request->d->activeExclusive = -1;
-        request->d->postExclusiveResult(true, false);
+    if (request->cardName.isEmpty()) {
+        // Card is not managed by PulseAudio/PipeWire — already free for direct ALSA.
+        d->activeExclusiveReqs.remove(request);
+        d->activeExclusive = -1;
+        d->exclusiveCardName.clear();
+        d->exclusiveProfile.clear();
+        d->postExclusiveResult(true, true);
         delete request;
         return;
     }
-    request->d->exclusiveCardName = request->cardName;
-    request->d->exclusiveProfile = request->profile;
+    if (request->profile.isEmpty() || request->profile == QStringLiteral("off")) {
+        // Card profile is already "off" — do not overwrite user's "off" profile on release.
+        d->activeExclusiveReqs.remove(request);
+        d->activeExclusive = -1;
+        d->exclusiveCardName.clear();
+        d->exclusiveProfile.clear();
+        d->postExclusiveResult(true, true);
+        delete request;
+        return;
+    }
     pa_operation *operation = pa_context_set_card_profile_by_name(
         context, request->cardName.toUtf8().constData(), "off",
         &onExclusiveProfileSet, request);
     if (operation) {
         pa_operation_unref(operation);
     } else {
-        request->d->activeExclusive = -1;
-        request->d->postExclusiveResult(true, false);
+        d->activeExclusiveReqs.remove(request);
+        d->activeExclusive = -1;
+        d->postExclusiveResult(true, false);
         delete request;
     }
 }
@@ -167,7 +205,7 @@ void onExclusiveCardInfo(pa_context *context, const pa_card_info *info,
 void onHardwareSinkInfo(pa_context *context, const pa_sink_info *info,
                         int eol, void *userdata) {
     auto *request = static_cast<PaHardwareVolumeRequest*>(userdata);
-    if (!eol && info && !request->applied && info->proplist) {
+    if (eol == 0 && info && !request->applied && info->proplist) {
         const char *alsaId = pa_proplist_gets(info->proplist, "alsa.id");
         const char *alsaDevice = pa_proplist_gets(info->proplist, "alsa.device");
         const bool deviceMatches = request->deviceId.isEmpty() ||
@@ -186,7 +224,10 @@ void onHardwareSinkInfo(pa_context *context, const pa_sink_info *info,
             request->applied = true;
         }
     }
-    if (eol) delete request;
+    if (eol != 0) {
+        if (request->d) request->d->activeHwVolReqs.remove(request);
+        delete request;
+    }
 }
 
 struct SyncRestore {
@@ -220,13 +261,13 @@ void PaVolumeControllerPrivate::onContextState(pa_context *c, void *ud) {
             const bool exclusive = d->activeExclusive != 0;
             d->activeExclusive = -1;
             ++d->exclusiveGeneration;
-            d->postExclusiveResult(exclusive, false);
+            d->postExclusiveResult(exclusive, true);
         }
         if (d->pendingExclusive >= 0) {
             const bool exclusive = d->pendingExclusive != 0;
             d->pendingExclusive = -1;
             d->pendingExclusiveDevice.clear();
-            d->postExclusiveResult(exclusive, false);
+            d->postExclusiveResult(exclusive, true);
         }
         return;
     }
@@ -326,18 +367,37 @@ void PaVolumeControllerPrivate::onSinkInputInfo(pa_context *c,
     d->ourSinkInputs.insert(info->index, info->volume.channels);
     d->pendingSinkInputs.remove(info->index);
 
-    const double user = paToUser(pa_cvolume_avg(&info->volume));
-    if (std::fabs(user - d->reportedUser) > 1e-4) {
-        d->reportedUser = user;
-        d->postReportedVolume(user);
-    }
-    if (info->mute != d->reportedMuted) {
-        d->reportedMuted = info->mute;
-        d->postReportedMuted(info->mute);
+    if (!wasOurs) {
+        d->reportedUser = d->paTargetUser;
+        d->reportedMuted = d->paTargetMuted;
+        d->applyToSinkInput(info->index, info->volume.channels);
+        return;
     }
 
-    if (!wasOurs) d->applyToSinkInput(info->index, info->volume.channels);
+    const double user = paToUser(pa_cvolume_avg(&info->volume));
+    if (d->inFlightVolumeOps == 0 && std::fabs(user - d->reportedUser) > 1e-4) {
+        d->reportedUser = user;
+        d->paTargetUser = user;
+        d->postReportedVolume(user);
+    }
+    const bool muted = info->mute != 0;
+    if (d->inFlightMuteOps == 0 && muted != d->reportedMuted) {
+        d->reportedMuted = muted;
+        d->paTargetMuted = muted;
+        d->postReportedMuted(muted);
+    }
+
     Q_UNUSED(c);
+}
+
+void PaVolumeControllerPrivate::onVolumeOpDone(pa_context *, int, void *ud) {
+    auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
+    if (d->inFlightVolumeOps > 0) --d->inFlightVolumeOps;
+}
+
+void PaVolumeControllerPrivate::onMuteOpDone(pa_context *, int, void *ud) {
+    auto *d = static_cast<PaVolumeControllerPrivate*>(ud);
+    if (d->inFlightMuteOps > 0) --d->inFlightMuteOps;
 }
 
 void PaVolumeControllerPrivate::rescanPendingSinkInputs() {
@@ -356,14 +416,20 @@ void PaVolumeControllerPrivate::applyToSinkInput(uint32_t idx, uint8_t channels)
     if (channels > PA_CHANNELS_MAX) channels = PA_CHANNELS_MAX;
 
     pa_cvolume cv;
-    pa_cvolume_set(&cv, channels, userToPa(targetUser));
+    pa_cvolume_set(&cv, channels, userToPa(paTargetUser));
 
-    if (auto *op = pa_context_set_sink_input_volume(context, idx, &cv, nullptr, nullptr)) {
+    ++inFlightVolumeOps;
+    if (auto *op = pa_context_set_sink_input_volume(context, idx, &cv, &onVolumeOpDone, this)) {
         pa_operation_unref(op);
+    } else {
+        --inFlightVolumeOps;
     }
-    if (auto *op = pa_context_set_sink_input_mute(context, idx, targetMuted ? 1 : 0,
-                                                  nullptr, nullptr)) {
+    ++inFlightMuteOps;
+    if (auto *op = pa_context_set_sink_input_mute(context, idx, paTargetMuted ? 1 : 0,
+                                                  &onMuteOpDone, this)) {
         pa_operation_unref(op);
+    } else {
+        --inFlightMuteOps;
     }
 }
 
@@ -459,6 +525,10 @@ PaVolumeController::~PaVolumeController() {
             pa_context_disconnect(d->context);
             pa_context_unref(d->context);
             d->context = nullptr;
+            qDeleteAll(d->activeExclusiveReqs);
+            d->activeExclusiveReqs.clear();
+            qDeleteAll(d->activeHwVolReqs);
+            d->activeHwVolReqs.clear();
             pa_threaded_mainloop_unlock(d->mainloop);
         }
         pa_threaded_mainloop_stop(d->mainloop);
@@ -482,6 +552,8 @@ void PaVolumeController::setVolume(double v) {
     d->targetUser = v;
     if (d->mainloop) {
         pa_threaded_mainloop_lock(d->mainloop);
+        d->paTargetUser = v;
+        d->reportedUser = v;
         d->applyToAll();
         pa_threaded_mainloop_unlock(d->mainloop);
     }
@@ -493,6 +565,8 @@ void PaVolumeController::setMuted(bool muted) {
     d->targetMuted = muted;
     if (d->mainloop) {
         pa_threaded_mainloop_lock(d->mainloop);
+        d->paTargetMuted = muted;
+        d->reportedMuted = muted;
         d->applyToAll();
         pa_threaded_mainloop_unlock(d->mainloop);
     }
@@ -502,15 +576,19 @@ void PaVolumeController::setMuted(bool muted) {
 void PaVolumeController::setHardwareDeviceExclusive(const QString &mpvDevice,
                                                     bool exclusive) {
     if (!d->mainloop || !d->context) {
-        emit hardwareDeviceExclusiveChanged(exclusive, false);
+        // No PulseAudio/PipeWire context — ALSA device is not held by PA.
+        QMetaObject::invokeMethod(this, [this, exclusive]() {
+            emit hardwareDeviceExclusiveChanged(exclusive, true);
+        }, Qt::QueuedConnection);
         return;
     }
     pa_threaded_mainloop_lock(d->mainloop);
     const pa_context_state_t state = pa_context_get_state(d->context);
     if (state == PA_CONTEXT_FAILED || state == PA_CONTEXT_TERMINATED) {
         pa_threaded_mainloop_unlock(d->mainloop);
+        // PulseAudio/PipeWire daemon not running — proceed with direct ALSA.
         QMetaObject::invokeMethod(this, [this, exclusive]() {
-            emit hardwareDeviceExclusiveChanged(exclusive, false);
+            emit hardwareDeviceExclusiveChanged(exclusive, true);
         }, Qt::QueuedConnection);
         return;
     }
@@ -544,10 +622,13 @@ void PaVolumeController::setHardwareDeviceExclusive(const QString &mpvDevice,
     } else {
         delete request;
         pa_threaded_mainloop_unlock(d->mainloop);
-        emit hardwareDeviceExclusiveChanged(false, true);
+        QMetaObject::invokeMethod(this, [this]() {
+            emit hardwareDeviceExclusiveChanged(false, true);
+        }, Qt::QueuedConnection);
         return;
     }
     if (operation) {
+        d->activeExclusiveReqs.insert(request);
         d->activeExclusive = exclusive ? 1 : 0;
         pa_operation_unref(operation);
     } else {
@@ -572,12 +653,14 @@ void PaVolumeController::setHardwareDeviceVolume(const QString &mpvDevice,
         return;
     }
     auto *request = new PaHardwareVolumeRequest;
+    request->d = d;
     request->cardId = cardId;
     request->deviceId = deviceIdFromMpvDevice(mpvDevice);
     request->volume = qBound(0.0, volume, 1.0);
     request->muted = muted;
     if (pa_operation *operation = pa_context_get_sink_info_list(
             d->context, &onHardwareSinkInfo, request)) {
+        d->activeHwVolReqs.insert(request);
         pa_operation_unref(operation);
     } else {
         delete request;

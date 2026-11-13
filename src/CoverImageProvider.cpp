@@ -1,15 +1,50 @@
 #include "CoverImageProvider.h"
 #include "CoverExtractor.h"
 
+#include <QBuffer>
 #include <QCryptographicHash>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
 #include <QReadLocker>
+#include <QRunnable>
 #include <QUrl>
 #include <QWriteLocker>
+#include <atomic>
 
 namespace {
+
+class AsyncCoverResponse : public QQuickImageResponse, public QRunnable {
+public:
+    AsyncCoverResponse(CoverImageProvider *provider, QString id, QSize requestedSize)
+        : m_provider(provider), m_id(std::move(id)), m_requestedSize(requestedSize) {
+        setAutoDelete(false);
+    }
+
+    QQuickTextureFactory *textureFactory() const override {
+        return QQuickTextureFactory::textureFactoryForImage(m_image);
+    }
+
+    void cancel() override {
+        m_cancelled.store(true, std::memory_order_relaxed);
+    }
+
+    void run() override {
+        if (!m_cancelled.load(std::memory_order_relaxed) && m_provider) {
+            QSize sourceSize;
+            m_image = m_provider->loadCoverImage(m_id, &sourceSize, m_requestedSize);
+        }
+        emit finished();
+    }
+
+private:
+    CoverImageProvider *m_provider = nullptr;
+    QString m_id;
+    QSize m_requestedSize;
+    QImage m_image;
+    std::atomic<bool> m_cancelled{false};
+};
 
 QString fileSignature(const QFileInfo &info) {
     if (!info.exists()) return QStringLiteral("missing");
@@ -60,16 +95,8 @@ QImage makePlaceholder() {
     return img;
 }
 
-QByteArray hashCover(const CoverExtractor::CoverData &cover) {
-    QByteArray digest;
-    if (!cover.bytes.isEmpty()) {
-        digest = QCryptographicHash::hash(cover.bytes, QCryptographicHash::Md5);
-    } else {
-        QCryptographicHash h(QCryptographicHash::Md5);
-        h.addData(QByteArrayView(reinterpret_cast<const char *>(cover.image.constBits()),
-                                 cover.image.sizeInBytes()));
-        digest = h.result();
-    }
+QByteArray hashBytes(const QByteArray &bytes) {
+    const QByteArray digest = QCryptographicHash::hash(bytes, QCryptographicHash::Md5);
     QByteArray tagged;
     tagged.reserve(1 + digest.size());
     tagged.append('h');
@@ -77,12 +104,38 @@ QByteArray hashCover(const CoverExtractor::CoverData &cover) {
     return tagged;
 }
 
-QImage downscaleIfNeeded(const QImage &src, int maxEdge) {
-    if (src.width() > maxEdge || src.height() > maxEdge) {
-        return src.scaled(maxEdge, maxEdge,
-                          Qt::KeepAspectRatio, Qt::SmoothTransformation);
+QImage decodeCapped(const QByteArray &bytes, int maxEdge) {
+    QBuffer buffer;
+    buffer.setData(bytes);
+    if (!buffer.open(QIODevice::ReadOnly)) return {};
+
+    QImageReader reader(&buffer);
+    reader.setAutoTransform(true);
+    const QSize origSize = reader.size();
+    if (origSize.isValid() && maxEdge > 0 && (origSize.width() > maxEdge || origSize.height() > maxEdge)) {
+        reader.setScaledSize(origSize.scaled(maxEdge, maxEdge, Qt::KeepAspectRatio));
     }
-    return src;
+    QImage img = reader.read();
+    if (img.isNull()) {
+        img.loadFromData(bytes);
+        if (!img.isNull() && maxEdge > 0 && (img.width() > maxEdge || img.height() > maxEdge)) {
+            img = img.scaled(maxEdge, maxEdge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        }
+    }
+    return img;
+}
+
+QImage scaleForRequest(const QImage &src, int reqW, int reqH) {
+    if (src.isNull() || reqW <= 0 || reqH <= 0) return src;
+    if (src.width() == reqW && src.height() == reqH) return src;
+
+    if (reqW == reqH) {
+        QImage expanded = src.scaled(reqW, reqH, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+        const int x = qMax(0, (expanded.width() - reqW) / 2);
+        const int y = qMax(0, (expanded.height() - reqH) / 2);
+        return expanded.copy(x, y, reqW, reqH);
+    }
+    return src.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
 QImage roundCorners(const QImage &src) {
@@ -113,10 +166,29 @@ int imageKb(const QImage &img) {
 
 }
 
-CoverImageProvider::CoverImageProvider()
-    : QQuickImageProvider(QQuickImageProvider::Image) {
+CoverImageProvider::CoverImageProvider() {
     m_sources.setMaxCost(m_sourceBudgetKb);
     m_scaled.setMaxCost(m_scaledBudgetKb);
+    m_pool.setMaxThreadCount(4);
+}
+
+CoverImageProvider::~CoverImageProvider() {
+    m_pool.clear();
+    m_pool.waitForDone();
+}
+
+QQuickImageResponse *CoverImageProvider::requestImageResponse(const QString &id, const QSize &requestedSize) {
+    auto *response = new AsyncCoverResponse(this, id, requestedSize);
+    m_pool.start(response);
+    return response;
+}
+
+void CoverImageProvider::clearCache() {
+    QWriteLocker locker(&m_lock);
+    m_pathToHash.clear();
+    m_dirToHash.clear();
+    m_sources.clear();
+    m_scaled.clear();
 }
 
 void CoverImageProvider::setMaxEdge(int edge) {
@@ -146,7 +218,7 @@ void CoverImageProvider::setScaledBudgetKb(int kb) {
     m_scaled.setMaxCost(kb);
 }
 
-QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize) {
+QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const QSize &requestedSize) {
     QString path = QUrl::fromPercentEncoding(id.toUtf8());
     if (!path.startsWith(QLatin1Char('/'))) path.prepend(QLatin1Char('/'));
 
@@ -210,11 +282,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
 
         if (!cachedSource.isNull()) {
-            QImage out = cachedSource;
-            if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
-                out = cachedSource.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-            }
-            out = roundCorners(out);
+            QImage out = roundCorners(scaleForRequest(cachedSource, reqW, reqH));
             {
                 QWriteLocker locker(&m_lock);
                 m_scaled.insert(scaledKey,
@@ -225,12 +293,10 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
             if (size) *size = cachedSourceSize;
             return out;
         }
-
     }
 
-    CoverExtractor::CoverData cover = CoverExtractor::loadCoverWithBytes(path);
-
-    if (cover.image.isNull()) {
+    CoverExtractor::RawCoverData raw = CoverExtractor::loadRawCover(path);
+    if (raw.bytes.isEmpty()) {
         QWriteLocker locker(&m_lock);
         capHash(m_pathToHash);
         m_pathToHash.insert(pathKey, kPlaceholderHash);
@@ -240,7 +306,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         return img;
     }
 
-    contentHash = hashCover(cover);
+    contentHash = hashBytes(raw.bytes);
     const QByteArray sourceKey = makeSourceKey(contentHash, maxEdge);
 
     QImage source;
@@ -251,10 +317,21 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
         }
     }
 
-    const bool shareAcrossDir = (cover.source == CoverExtractor::Source::Sidecar);
-
     const bool cacheSource = source.isNull();
-    if (cacheSource) source = downscaleIfNeeded(cover.image, maxEdge);
+    if (cacheSource) {
+        source = decodeCapped(raw.bytes, maxEdge);
+        if (source.isNull()) {
+            QWriteLocker locker(&m_lock);
+            capHash(m_pathToHash);
+            m_pathToHash.insert(pathKey, kPlaceholderHash);
+
+            QImage img = makePlaceholder();
+            if (size) *size = img.size();
+            return img;
+        }
+    }
+
+    const bool shareAcrossDir = (raw.source == CoverExtractor::Source::Sidecar);
     {
         QWriteLocker locker(&m_lock);
         if (cacheSource)
@@ -267,11 +344,7 @@ QImage CoverImageProvider::requestImage(const QString &id, QSize *size, const QS
     }
 
     const QSize sourceSize = source.size();
-    QImage out = source;
-    if (reqW > 0 && reqH > 0 && (out.width() != reqW || out.height() != reqH)) {
-        out = source.scaled(reqW, reqH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    out = roundCorners(out);
+    QImage out = roundCorners(scaleForRequest(source, reqW, reqH));
     if (size) *size = sourceSize;
 
     {

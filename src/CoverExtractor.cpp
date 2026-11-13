@@ -18,26 +18,53 @@ QByteArray embeddedPicture(const QString &trackPath) {
     if (trackPath.isEmpty()) return {};
 
     const QByteArray pathBytes = trackPath.toUtf8();
-    TagLib::FileRef f(pathBytes.constData());
+    TagLib::FileRef f(pathBytes.constData(), false);
     if (f.isNull() || !f.file()) return {};
 
     TagLib::ByteVector pic;
 
     if (auto *flac = dynamic_cast<TagLib::FLAC::File *>(f.file())) {
         const auto &pictures = flac->pictureList();
-        if (!pictures.isEmpty()) pic = pictures.front()->data();
+        if (!pictures.isEmpty()) {
+            const TagLib::FLAC::Picture *chosen = pictures.front();
+            for (const auto *p : pictures) {
+                if (p && p->type() == TagLib::FLAC::Picture::FrontCover && !p->data().isEmpty()) {
+                    chosen = p;
+                    break;
+                }
+            }
+            if (chosen) pic = chosen->data();
+        }
     } else if (auto *mp3 = dynamic_cast<TagLib::MPEG::File *>(f.file())) {
         if (auto *tag = mp3->ID3v2Tag()) {
             const auto &frames = tag->frameListMap()["APIC"];
             if (!frames.isEmpty()) {
-                if (auto *frame = dynamic_cast<TagLib::ID3v2::AttachedPictureFrame *>(frames.front())) {
-                    pic = frame->picture();
+                TagLib::ID3v2::AttachedPictureFrame *chosen = nullptr;
+                for (auto *rawFrame : frames) {
+                    auto *frame = dynamic_cast<TagLib::ID3v2::AttachedPictureFrame *>(rawFrame);
+                    if (!frame || frame->picture().isEmpty()) continue;
+                    if (!chosen) chosen = frame;
+                    if (frame->type() == TagLib::ID3v2::AttachedPictureFrame::FrontCover) {
+                        chosen = frame;
+                        break;
+                    }
                 }
+                if (chosen) pic = chosen->picture();
             }
         }
     } else {
         const auto props = f.file()->complexProperties("PICTURE");
-        if (!props.isEmpty()) pic = props.front()["data"].toByteVector();
+        if (!props.isEmpty()) {
+            pic = props.front()["data"].toByteVector();
+            for (const auto &prop : props) {
+                const QString picType = QString::fromStdWString(prop["pictureType"].toString().toWString());
+                const auto candidate = prop["data"].toByteVector();
+                if (!candidate.isEmpty() && picType.compare(QStringLiteral("Front Cover"), Qt::CaseInsensitive) == 0) {
+                    pic = candidate;
+                    break;
+                }
+            }
+        }
     }
 
     if (pic.isEmpty()) return {};
@@ -55,44 +82,52 @@ QString sidecarImagePath(const QString &trackPath) {
         QStringLiteral("*.png"), QStringLiteral("*.webp"),
         QStringLiteral("*.bmp")
     };
-    static const QStringList preferredKeywords = {
-        QStringLiteral("cover"), QStringLiteral("folder"),
-        QStringLiteral("front"), QStringLiteral("album")
+
+    auto scoreFileName = [](const QString &fileName) -> int {
+        const QString base = QFileInfo(fileName).completeBaseName().toLower();
+        if (base == QLatin1String("cover") || base == QLatin1String("folder")
+            || base == QLatin1String("front") || base == QLatin1String("album")) {
+            return 100;
+        }
+        if (base.contains(QLatin1String("back")) || base.contains(QLatin1String("inlay"))
+            || base.contains(QLatin1String("booklet"))) {
+            return 5;
+        }
+        if (base.contains(QLatin1String("cover")) || base.contains(QLatin1String("folder"))
+            || base.contains(QLatin1String("front")) || base.contains(QLatin1String("album"))) {
+            return 80;
+        }
+        return 20;
     };
 
     const QString dirPath = info.absolutePath();
-    QString preferredBest;
-    QString fallbackBest;
+    QString bestPath;
+    int bestScore = -1;
 
     QDirIterator it(dirPath, nameFilters, QDir::Files);
     while (it.hasNext()) {
         const QString full = it.next();
         const QString fileName = QFileInfo(full).fileName();
-        bool isPreferred = false;
-        for (const QString &keyword : preferredKeywords) {
-            if (fileName.contains(keyword, Qt::CaseInsensitive)) { isPreferred = true; break; }
+        const int score = scoreFileName(fileName);
+        if (score > bestScore || (score == bestScore && (bestPath.isEmpty() || full < bestPath))) {
+            bestScore = score;
+            bestPath = full;
+            if (bestScore == 100 && QFileInfo(fileName).completeBaseName().compare(QStringLiteral("cover"), Qt::CaseInsensitive) == 0) {
+                break;
+            }
         }
-        if (isPreferred) {
-            preferredBest = full;
-            break;
-        }
-        if (fallbackBest.isEmpty()) fallbackBest = full;
     }
-    return preferredBest.isEmpty() ? fallbackBest : preferredBest;
+    return bestPath;
 }
 
-CoverData loadCoverWithBytes(const QString &trackPath) {
-    CoverData result;
+RawCoverData loadRawCover(const QString &trackPath) {
+    RawCoverData result;
 
     QByteArray data = embeddedPicture(trackPath);
     if (!data.isEmpty()) {
-        QImage image;
-        if (image.loadFromData(data)) {
-            result.image  = std::move(image);
-            result.bytes  = std::move(data);
-            result.source = Source::Embedded;
-            return result;
-        }
+        result.bytes  = std::move(data);
+        result.source = Source::Embedded;
+        return result;
     }
 
     const QString sidecar = sidecarImagePath(trackPath);
@@ -100,18 +135,26 @@ CoverData loadCoverWithBytes(const QString &trackPath) {
         QFile file(sidecar);
         if (file.open(QIODevice::ReadOnly)) {
             QByteArray raw = file.readAll();
-            QImage image;
-            if (!raw.isEmpty() && image.loadFromData(raw)) {
-                result.image  = std::move(image);
-                result.bytes  = std::move(raw);
-                result.source = Source::Sidecar;
+            if (!raw.isEmpty()) {
+                result.bytes       = std::move(raw);
+                result.sidecarPath = sidecar;
+                result.source      = Source::Sidecar;
                 return result;
             }
         }
+    }
+    return result;
+}
+
+CoverData loadCoverWithBytes(const QString &trackPath) {
+    CoverData result;
+    RawCoverData raw = loadRawCover(trackPath);
+    if (!raw.bytes.isEmpty()) {
         QImage image;
-        if (image.load(sidecar)) {
+        if (image.loadFromData(raw.bytes)) {
             result.image  = std::move(image);
-            result.source = Source::Sidecar;
+            result.bytes  = std::move(raw.bytes);
+            result.source = raw.source;
         }
     }
     return result;

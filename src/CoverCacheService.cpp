@@ -4,6 +4,7 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,15 +15,19 @@ namespace {
 constexpr int kPruneKeepCount = 256;
 }
 
-CoverCacheService::CoverCacheService(QObject *parent) : QObject(parent) {}
+CoverCacheService::CoverCacheService(QObject *parent) : QObject(parent) {
+    m_pool.setMaxThreadCount(2);
+}
 
 CoverCacheService::~CoverCacheService() {
+    m_pool.clear();
     m_pool.waitForDone();
 }
 
 QString CoverCacheService::cacheDir() {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
-                        + QStringLiteral("/covers");
+    QString base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (base.isEmpty()) base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dir = base + QStringLiteral("/covers");
     QDir().mkpath(dir);
     return dir;
 }
@@ -33,7 +38,13 @@ QString CoverCacheService::pathForHash(const QByteArray &hash, const QString &ex
 }
 
 bool CoverCacheService::writeAtomic(const QString &targetPath, const QByteArray &data) {
-    if (QFileInfo::exists(targetPath)) return true;
+    if (QFileInfo::exists(targetPath)) {
+        QFile existing(targetPath);
+        if (existing.open(QIODevice::ReadWrite)) {
+            existing.setFileTime(QDateTime::currentDateTimeUtc(), QFileDevice::FileModificationTime);
+        }
+        return true;
+    }
     const QString tmpPath = targetPath + QStringLiteral(".tmp.")
                             + QString::number(QCoreApplication::applicationPid())
                             + QLatin1Char('.')
@@ -63,19 +74,37 @@ bool CoverCacheService::writeAtomic(const QString &targetPath, const QByteArray 
 void CoverCacheService::pruneTo(int keepCount) {
     const QString dir = cacheDir();
     QDir d(dir);
-    const auto entries = d.entryInfoList(
+    const auto allEntries = d.entryInfoList(
         QDir::Files | QDir::NoDotAndDotDot,
         QDir::Time | QDir::Reversed);
-    if (entries.size() <= keepCount) return;
-    for (int i = 0; i < entries.size() - keepCount; ++i) {
-        QFile::remove(entries[i].absoluteFilePath());
+
+    const QDateTime staleTmpCutoff = QDateTime::currentDateTimeUtc().addSecs(-300);
+    QFileInfoList cacheFiles;
+    cacheFiles.reserve(allEntries.size());
+    for (const QFileInfo &info : allEntries) {
+        if (info.fileName().contains(QStringLiteral(".tmp."))) {
+            if (info.lastModified().toUTC() < staleTmpCutoff) {
+                QFile::remove(info.absoluteFilePath());
+            }
+            continue;
+        }
+        cacheFiles.push_back(info);
+    }
+
+    if (cacheFiles.size() <= keepCount) return;
+    for (int i = 0; i < cacheFiles.size() - keepCount; ++i) {
+        QFile::remove(cacheFiles[i].absoluteFilePath());
     }
 }
 
 void CoverCacheService::requestCoverFor(const QString &trackPath, quint64 generation) {
     if (trackPath.isEmpty()) return;
+    m_latestGeneration.store(generation, std::memory_order_relaxed);
+    m_pool.clear();
     m_pool.start([this, trackPath, generation]() {
+        if (m_latestGeneration.load(std::memory_order_relaxed) != generation) return;
         const QByteArray data = CoverExtractor::embeddedPicture(trackPath);
+        if (m_latestGeneration.load(std::memory_order_relaxed) != generation) return;
         QString resolved;
         if (!data.isEmpty()) {
             const QByteArray hash = QCryptographicHash::hash(data, QCryptographicHash::Md5);
@@ -89,6 +118,7 @@ void CoverCacheService::requestCoverFor(const QString &trackPath, quint64 genera
             resolved = CoverExtractor::sidecarImagePath(trackPath);
         }
 
+        if (m_latestGeneration.load(std::memory_order_relaxed) != generation) return;
         QMetaObject::invokeMethod(this, [this, trackPath, resolved, generation]() {
             emit coverResolved(trackPath, resolved, generation);
         }, Qt::QueuedConnection);

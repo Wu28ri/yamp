@@ -6,11 +6,16 @@
 #include "Settings.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QNetworkProxyFactory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+
+#ifndef YAMP_VERSION
+#define YAMP_VERSION "0.2"
+#endif
 
 int main(int argc, char *argv[]) {
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(
@@ -25,8 +30,10 @@ int main(int argc, char *argv[]) {
 
     QCoreApplication::setApplicationName(QStringLiteral("yamp"));
     QCoreApplication::setOrganizationName(QStringLiteral("yamp"));
+    QCoreApplication::setApplicationVersion(QStringLiteral(YAMP_VERSION));
     QGuiApplication::setApplicationDisplayName(QStringLiteral("YAMP"));
     QGuiApplication::setDesktopFileName(QStringLiteral("yamp"));
+    QGuiApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("yamp")));
 
     QQuickWindow::setTextRenderType(QQuickWindow::QtTextRendering);
 
@@ -42,24 +49,38 @@ int main(int argc, char *argv[]) {
     LastFmScrobbler   scrobbler(&backend, &settings);
     ArtistImageLoader artistImages(&settings, artistProvider);
 
-    QQmlApplicationEngine engine;
-    engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
-    engine.rootContext()->setContextProperty(QStringLiteral("appSettings"),   &settings);
-    engine.rootContext()->setContextProperty(QStringLiteral("lastfm"),        &scrobbler);
-    engine.rootContext()->setContextProperty(QStringLiteral("artistImages"),  &artistImages);
+    int exitCode = 0;
+    {
+        QQmlApplicationEngine engine;
+        engine.rootContext()->setContextProperty(QStringLiteral("playerBackend"), &backend);
+        engine.rootContext()->setContextProperty(QStringLiteral("appSettings"),   &settings);
+        engine.rootContext()->setContextProperty(QStringLiteral("lastfm"),        &scrobbler);
+        engine.rootContext()->setContextProperty(QStringLiteral("artistImages"),  &artistImages);
 
-    engine.addImageProvider(QStringLiteral("cover"),  coverProvider);
-    engine.addImageProvider(QStringLiteral("artist"), artistProvider);
+        engine.addImageProvider(QStringLiteral("cover"),  coverProvider);
+        engine.addImageProvider(QStringLiteral("artist"), artistProvider);
 
-    controller.wireSignals();
+        controller.wireSignals();
 
-    QObject::connect(&engine,
-                     &QQmlApplicationEngine::objectCreationFailed,
-                     &app,
-                     []() { QCoreApplication::exit(-1); },
-                     Qt::QueuedConnection);
+        QObject::connect(&backend, &PlayerBackend::libraryCleared, &engine,
+                         [coverProvider, &artistImages]() {
+            coverProvider->clearCache();
+            artistImages.clearCache();
+        });
 
-    engine.loadFromModule(QStringLiteral("yamp"), QStringLiteral("Main"));
+        QObject::connect(&engine,
+                         &QQmlApplicationEngine::objectCreationFailed,
+                         &app,
+                         []() { QCoreApplication::exit(-1); },
+                         Qt::QueuedConnection);
 
-    return app.exec();
+        engine.loadFromModule(QStringLiteral("yamp"), QStringLiteral("Main"));
+
+        exitCode = app.exec();
+
+        controller.detachCoverProvider();
+        artistImages.detachProvider();
+    }
+
+    return exitCode;
 }

@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QString>
 #include <QThreadPool>
+#include <atomic>
 
 class CoverCacheService : public QObject {
     Q_OBJECT
@@ -23,4 +24,5 @@ private:
     static void    pruneTo(int keepCount);
 
     QThreadPool m_pool;
+    std::atomic<quint64> m_latestGeneration{0};
 };

@@ -22,24 +22,46 @@
 #include <utility>
 
 namespace {
+#ifndef YAMP_VERSION
+#define YAMP_VERSION "0.2"
+#endif
+
 constexpr const char *kApiKey       = "1af929173f9ea4c2116ed32d25f8db59";
 constexpr const char *kSharedSecret = "515f52b0aa9f97182aa4641ce1660d15";
 constexpr const char *kApiRoot      = "https://ws.audioscrobbler.com/2.0/";
-constexpr const char *kUserAgent    = "YAMP/0.2 (+https://github.com/Wu28ri/yamp)";
+constexpr const char *kUserAgent    = "YAMP/" YAMP_VERSION " (+https://github.com/Wu28ri/yamp)";
 
-constexpr int kRequestTimeoutMs = 15000;
-constexpr int kAuthPollMs       = 2500;
-constexpr int kAuthDeadlineMs   = 5 * 60 * 1000;
-constexpr int kNowPlayingRetryMs = 15000;
+constexpr int kRequestTimeoutMs    = 15000;
+constexpr int kAuthPollMs          = 2500;
+constexpr int kAuthDeadlineMs      = 5 * 60 * 1000;
+constexpr int kNowPlayingRetryMs   = 15000;
+constexpr int kMaxPendingScrobbles = 500;
+constexpr int kMaxScrobbleBatch    = 50;
+constexpr int kMaxScrobbleRetries  = 12;
 
 QByteArray utf8(const QString &s) { return s.toUtf8(); }
+
+bool isScrobblableTrack(const Track &track) {
+    if (!track.isValid()) return false;
+    const QString artist = track.artist.trimmed();
+    const QString title  = track.title.trimmed();
+    if (artist.isEmpty() || title.isEmpty()) return false;
+    if (artist.compare(QStringLiteral("Unknown Artist"), Qt::CaseInsensitive) == 0 ||
+        artist.compare(QStringLiteral("[no artist]"), Qt::CaseInsensitive) == 0) {
+        return false;
+    }
+    if (title == QLatin1String("N/A")) return false;
+    return true;
+}
 
 QMap<QString, QString> trackParameters(const Track &track, const QString &suffix = {}) {
     QMap<QString, QString> params{{QStringLiteral("artist") + suffix, track.artist},
                                   {QStringLiteral("track") + suffix, track.title}};
-    if (!track.album.isEmpty())
+    if (!track.album.isEmpty() &&
+        track.album.compare(QStringLiteral("Unknown Album"), Qt::CaseInsensitive) != 0)
         params.insert(QStringLiteral("album") + suffix, track.album);
-    if (!track.albumArtist.isEmpty() && track.albumArtist != track.artist)
+    if (!track.albumArtist.isEmpty() && track.albumArtist != track.artist &&
+        track.albumArtist.compare(QStringLiteral("Unknown Artist"), Qt::CaseInsensitive) != 0)
         params.insert(QStringLiteral("albumArtist") + suffix, track.albumArtist);
     if (track.duration > 0)
         params.insert(QStringLiteral("duration") + suffix, QString::number(track.duration));
@@ -82,9 +104,15 @@ ParsedResponse parseResponse(const QByteArray &payload) {
 }
 
 void armHardTimeout(QNetworkReply *reply) {
-    QTimer::singleShot(kRequestTimeoutMs, reply, [reply]() {
+    if (!reply) return;
+    auto *timer = new QTimer(reply);
+    timer->setSingleShot(true);
+    timer->setInterval(kRequestTimeoutMs);
+    QObject::connect(timer, &QTimer::timeout, reply, [reply]() {
         if (reply->isRunning()) reply->abort();
     });
+    QObject::connect(reply, &QNetworkReply::finished, timer, &QTimer::stop);
+    timer->start();
 }
 }
 
@@ -375,7 +403,7 @@ void LastFmScrobbler::logout() {
     m_nowPlayingRetryTimer->stop();
     m_scrobbleRetryTimer->stop();
     m_nowPlayingInFlight = false;
-    m_scrobbleInFlightId = 0;
+    m_scrobbleInFlightIds.clear();
     m_pendingScrobbles.clear();
     saveScrobbleQueue();
     resetTrackedTrack();
@@ -439,9 +467,8 @@ void LastFmScrobbler::accumulatePlayTime() {
 
 void LastFmScrobbler::maybeScrobble() {
     if (m_scrobbleQueued || !m_enabled) return;
-    if (!m_trackedTrack.isValid()) return;
+    if (!isScrobblableTrack(m_trackedTrack)) return;
     if (m_trackedOwner.isEmpty()) return;
-    if (m_trackedTrack.artist.isEmpty() || m_trackedTrack.title.isEmpty()) return;
     if (m_trackedTrack.duration < 30) return;
 
     const qint64 halfMs = qint64(m_trackedTrack.duration) * 500;
@@ -455,6 +482,11 @@ void LastFmScrobbler::maybeScrobble() {
     pending.owner = m_trackedOwner;
     pending.startedAtUnix = m_trackedStartedAtUnix;
     m_pendingScrobbles.append(pending);
+    while (m_pendingScrobbles.size() > kMaxPendingScrobbles) {
+        const quint64 oldestId = m_pendingScrobbles.constFirst().id;
+        if (m_scrobbleInFlightIds.contains(oldestId)) break;
+        m_pendingScrobbles.removeFirst();
+    }
     saveScrobbleQueue();
     processScrobbleQueue();
 }
@@ -497,8 +529,7 @@ void LastFmScrobbler::maybeSendNowPlaying() {
         m_nowPlayingSent || m_nowPlayingInFlight)
         return;
     if (m_nowPlayingRetryTimer->isActive()) return;
-    if (!m_trackedTrack.isValid() || m_trackedTrack.artist.isEmpty() ||
-        m_trackedTrack.title.isEmpty()) return;
+    if (!isScrobblableTrack(m_trackedTrack)) return;
 
     const Track track = m_trackedTrack;
     const quint64 generation = m_playbackGeneration;
@@ -555,42 +586,73 @@ void LastFmScrobbler::maybeSendNowPlaying() {
 
 void LastFmScrobbler::processScrobbleQueue() {
     if (!m_enabled || !authenticated() || m_pendingScrobbles.isEmpty()) return;
-    if (m_scrobbleInFlightId != 0 || m_scrobbleRetryTimer->isActive()) return;
+    if (!m_scrobbleInFlightIds.isEmpty() || m_scrobbleRetryTimer->isActive()) return;
 
-    if (!m_pendingScrobbles.constFirst().owner.isEmpty() &&
-        m_pendingScrobbles.constFirst().owner != m_username) {
-        m_pendingScrobbles.removeFirst();
-        saveScrobbleQueue();
-        QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
-        return;
+    bool pruned = false;
+    while (!m_pendingScrobbles.isEmpty()) {
+        const PendingScrobble &head = m_pendingScrobbles.constFirst();
+        if ((!head.owner.isEmpty() && head.owner != m_username) ||
+            !isScrobblableTrack(head.track)) {
+            m_pendingScrobbles.removeFirst();
+            pruned = true;
+            continue;
+        }
+        break;
     }
+    if (pruned) saveScrobbleQueue();
+    if (m_pendingScrobbles.isEmpty()) return;
 
-    const PendingScrobble pending = m_pendingScrobbles.constFirst();
     const QString sessionKey = m_sessionKey;
-
-    QMap<QString, QString> params = trackParameters(pending.track, QStringLiteral("[0]"));
+    QMap<QString, QString> params;
     params.insert(QStringLiteral("method"), QStringLiteral("track.scrobble"));
     params.insert(QStringLiteral("sk"), sessionKey);
-    params.insert(QStringLiteral("timestamp[0]"), QString::number(pending.startedAtUnix));
 
-    m_scrobbleInFlightId = pending.id;
+    QList<quint64> batchIds;
+    const int batchCount = qMin<int>(m_pendingScrobbles.size(), kMaxScrobbleBatch);
+    int idx = 0;
+    for (int i = 0; i < batchCount; ++i) {
+        const PendingScrobble &item = m_pendingScrobbles.at(i);
+        if (!item.owner.isEmpty() && item.owner != m_username) break;
+        if (!isScrobblableTrack(item.track)) break;
+
+        const QString suffix = QStringLiteral("[%1]").arg(idx);
+        const auto itemParams = trackParameters(item.track, suffix);
+        for (auto it = itemParams.constBegin(); it != itemParams.constEnd(); ++it) {
+            params.insert(it.key(), it.value());
+        }
+        params.insert(QStringLiteral("timestamp") + suffix, QString::number(item.startedAtUnix));
+        batchIds.append(item.id);
+        ++idx;
+    }
+
+    if (batchIds.isEmpty()) return;
+    m_scrobbleInFlightIds = batchIds;
+
     QNetworkReply *reply = requestSigned(params);
     connect(reply, &QNetworkReply::finished, this,
-            [this, reply, pending, sessionKey]() {
+            [this, reply, batchIds, sessionKey]() {
         const QNetworkReply::NetworkError networkError = reply->error();
         const QString networkMessage = reply->errorString();
         const ParsedResponse response = parseResponse(reply->readAll());
         const QJsonObject &object = response.object;
         reply->deleteLater();
 
-        if (m_scrobbleInFlightId != pending.id) return;
-        m_scrobbleInFlightId = 0;
-        if (m_pendingScrobbles.isEmpty() || m_pendingScrobbles.constFirst().id != pending.id)
-            return;
+        if (m_scrobbleInFlightIds != batchIds) return;
+        m_scrobbleInFlightIds.clear();
+        if (m_pendingScrobbles.isEmpty()) return;
         if (sessionKey != m_sessionKey) {
             QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
             return;
         }
+
+        auto removeBatchIds = [this, &batchIds]() {
+            for (qsizetype i = m_pendingScrobbles.size(); i > 0; --i) {
+                if (batchIds.contains(m_pendingScrobbles.at(i - 1).id)) {
+                    m_pendingScrobbles.removeAt(i - 1);
+                }
+            }
+            saveScrobbleQueue();
+        };
 
         const int apiError = apiErrorCode(object);
         if (apiError == 9) {
@@ -606,8 +668,7 @@ void LastFmScrobbler::processScrobbleQueue() {
             return;
         }
         if (apiError != 0) {
-            m_pendingScrobbles.removeFirst();
-            saveScrobbleQueue();
+            removeBatchIds();
             QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
             return;
         }
@@ -621,8 +682,7 @@ void LastFmScrobbler::processScrobbleQueue() {
             scheduleScrobbleRetry();
             return;
         }
-        m_pendingScrobbles.removeFirst();
-        saveScrobbleQueue();
+        removeBatchIds();
         QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
     });
 }
@@ -630,9 +690,15 @@ void LastFmScrobbler::processScrobbleQueue() {
 void LastFmScrobbler::scheduleScrobbleRetry() {
     if (m_pendingScrobbles.isEmpty()) return;
     PendingScrobble &pending = m_pendingScrobbles.first();
-    const int shift = qMin(pending.retryCount, 6);
-    const int delayMs = qMin(5 * 60 * 1000, 5000 * (1 << shift));
     ++pending.retryCount;
+    if (pending.retryCount > kMaxScrobbleRetries) {
+        m_pendingScrobbles.removeFirst();
+        saveScrobbleQueue();
+        QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
+        return;
+    }
+    const int shift = qMin(pending.retryCount - 1, 6);
+    const int delayMs = qMin(5 * 60 * 1000, 5000 * (1 << shift));
     saveScrobbleQueue();
     m_scrobbleRetryTimer->start(delayMs);
 }
@@ -656,7 +722,10 @@ void LastFmScrobbler::restoreScrobbleQueue() {
         pending.track.duration = track.value(QStringLiteral("duration")).toInt();
         pending.track.trackNo = track.value(QStringLiteral("trackNo")).toInt();
         if (pending.id == 0 || pending.owner.isEmpty() ||
-            pending.track.artist.isEmpty() || pending.track.title.isEmpty()) continue;
+            !isScrobblableTrack(pending.track)) continue;
+        if (m_pendingScrobbles.size() >= kMaxPendingScrobbles) {
+            m_pendingScrobbles.removeFirst();
+        }
         m_pendingScrobbles.append(pending);
         m_nextScrobbleId = qMax(m_nextScrobbleId, pending.id);
     }

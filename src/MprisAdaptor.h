@@ -24,7 +24,7 @@ public:
     explicit MprisRootAdaptor(PlayerBackend *backend);
 
     bool        canQuit()             const { return true; }
-    bool        canRaise()            const { return false; }
+    bool        canRaise()            const { return true; }
     bool        hasTrackList()        const { return false; }
     QString     identity()            const { return QStringLiteral("YAMP Music Player"); }
     QString     desktopEntry()        const { return QStringLiteral("yamp"); }
@@ -51,13 +51,18 @@ public:
     }
 
 public slots:
+    void Raise();
     void Quit() { qApp->quit(); }
+
+private:
+    PlayerBackend *m_backend = nullptr;
 };
 
 class MprisPlayerAdaptor : public QDBusAbstractAdaptor {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.mpris.MediaPlayer2.Player")
     Q_PROPERTY(QString     PlaybackStatus READ playbackStatus NOTIFY statusChanged)
+    Q_PROPERTY(QString     LoopStatus     READ loopStatus     WRITE setLoopStatus NOTIFY loopStatusChanged)
     Q_PROPERTY(QVariantMap Metadata       READ metadata       NOTIFY metadataChanged)
     Q_PROPERTY(qlonglong   Position       READ position       NOTIFY positionChanged)
     Q_PROPERTY(double      Volume         READ volume         WRITE setVolume  NOTIFY volumeChanged)
@@ -65,17 +70,18 @@ class MprisPlayerAdaptor : public QDBusAbstractAdaptor {
     Q_PROPERTY(double      Rate           READ rate           CONSTANT)
     Q_PROPERTY(double      MinimumRate    READ minimumRate    CONSTANT)
     Q_PROPERTY(double      MaximumRate    READ maximumRate    CONSTANT)
-    Q_PROPERTY(bool        CanGoNext      READ canControl     CONSTANT)
-    Q_PROPERTY(bool        CanGoPrevious  READ canControl     CONSTANT)
-    Q_PROPERTY(bool        CanPlay        READ canControl     CONSTANT)
-    Q_PROPERTY(bool        CanPause       READ canControl     CONSTANT)
-    Q_PROPERTY(bool        CanSeek        READ canControl     CONSTANT)
+    Q_PROPERTY(bool        CanGoNext      READ canGoNext      NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool        CanGoPrevious  READ canGoPrevious  NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool        CanPlay        READ canPlay        NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool        CanPause       READ canPause       NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool        CanSeek        READ canSeek        NOTIFY capabilitiesChanged)
     Q_PROPERTY(bool        CanControl     READ canControl     CONSTANT)
 
 public:
     explicit MprisPlayerAdaptor(PlayerBackend *backend);
 
     QString     playbackStatus() const;
+    QString     loopStatus()     const;
     QVariantMap metadata()       const;
     qlonglong   position()       const;
     double      volume()         const;
@@ -83,8 +89,14 @@ public:
     double      rate()           const { return 1.0; }
     double      minimumRate()    const { return 1.0; }
     double      maximumRate()    const { return 1.0; }
+    bool        canGoNext()      const;
+    bool        canGoPrevious()  const;
+    bool        canPlay()        const;
+    bool        canPause()       const;
+    bool        canSeek()        const;
     bool        canControl()     const { return true; }
 
+    void setLoopStatus(const QString &status);
     void setVolume(double v);
     void setShuffle(bool s);
 
@@ -97,6 +109,7 @@ public slots:
     void Play()      { emit playRequested(); }
     void Seek(qlonglong offsetUs);
     void SetPosition(const QDBusObjectPath &trackId, qlonglong positionUs);
+    void OpenUri(const QString &uri);
 
 signals:
     void nextRequested();
@@ -108,13 +121,16 @@ signals:
     void Seeked(qlonglong positionUs);
 
     void statusChanged();
+    void loopStatusChanged();
     void metadataChanged();
     void positionChanged();
     void volumeChanged();
     void shuffleChanged();
+    void capabilitiesChanged();
 
 private:
     void emitProperties(const QVariantMap &props);
+    void syncCapabilities();
     void scheduleMetadataPush();
     void invalidateMetadataCache();
     QString currentTrackIdPath() const;
@@ -127,4 +143,10 @@ private:
     mutable bool        m_metadataDirty = true;
     mutable QString     m_lastTrackIdPath;
     mutable quint64     m_trackIdCounter = 0;
+
+    bool m_lastCanGoNext     = false;
+    bool m_lastCanGoPrevious = false;
+    bool m_lastCanPlay       = false;
+    bool m_lastCanPause      = false;
+    bool m_lastCanSeek       = false;
 };

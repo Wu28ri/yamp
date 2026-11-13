@@ -30,7 +30,9 @@ public:
                       int currentIndex, int detachedPosition,
                       bool currentDetached, bool shuffle);
     void insertNext(const Track &track);
+    void appendTrack(const Track &track);
     void removeTrack(int position);
+    void clear(bool keepCurrentDetached = false);
     void retainPaths(const QSet<QString> &paths);
     void moveTrack(int from, int to);
 
@@ -38,10 +40,15 @@ public:
     void jumpToPosition(int pos);
     void setIndexByPath(const QString &path);
 
-    Track next();
-    Track previous();
+    Track peekNext(bool wrapAround = false) const;
+    Track next(bool wrapAround = false);
+    Track previous(bool wrapAround = false);
+
+    bool hasNext(bool wrapAround = false) const { return peekNext(wrapAround).isValid(); }
+    bool hasPrevious(bool wrapAround = false) const;
 
 private:
+    int ensureTrackStored(const Track &track);
     int positionOfId(int globalId) const;
     void resetPlayOrder();
     void rebuildPlayOrder();

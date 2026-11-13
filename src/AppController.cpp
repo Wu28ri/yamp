@@ -14,15 +14,21 @@ void AppController::applyInitialSettings() {
     m_backend->setAudioDevice(m_settings->audioDevice());
     m_backend->setSoftwareVolume(m_settings->audioSoftwareVolume());
     m_backend->setVolume(m_settings->volume());
+    m_backend->setGaplessPlayback(m_settings->gaplessPlayback());
     m_backend->setBitPerfect(m_settings->audioBitPerfect());
     m_settings->setAudioDevice(m_backend->audioDevice());
     m_settings->setAudioSoftwareVolume(m_backend->softwareVolume());
     m_settings->setAudioBitPerfect(m_backend->bitPerfect());
     m_backend->setShuffle(m_settings->shuffle());
+    m_backend->setRepeatMode(m_settings->repeatMode());
     m_backend->setReplayGainEnabled(m_settings->replayGainEnabled());
     m_backend->setReplayGainMode(m_settings->replayGainMode());
     m_backend->setReplayGainPreampDb(m_settings->replayGainPreampDb());
     m_backend->setReplayGainClipProtect(m_settings->replayGainClipProtect());
+
+    if (!m_settings->musicFolders().isEmpty() && m_backend->watchedFolders().isEmpty()) {
+        m_backend->syncWithFolders(m_settings->musicFolders());
+    }
 
     if (m_coverProvider) {
         m_coverProvider->setMaxEdge(m_settings->coverMaxEdge());
@@ -47,6 +53,7 @@ void AppController::wireSignals() {
         if (!b->bitPerfect() || b->softwareVolume()) s->setVolume(b->volume());
     });
     connect(b, &PlayerBackend::shuffleChanged,        s, [s, b]() { s->setShuffle(b->shuffle()); });
+    connect(b, &PlayerBackend::repeatModeChanged,     s, [s, b]() { s->setRepeatMode(b->repeatMode()); });
     connect(b, &PlayerBackend::audioDeviceChanged,    s, [s, b]() { s->setAudioDevice(b->audioDevice()); });
     connect(b, &PlayerBackend::softwareVolumeChanged, s, [s, b]() { s->setAudioSoftwareVolume(b->softwareVolume()); });
     connect(b, &PlayerBackend::bitPerfectChanged,     s, [s, b]() { s->setAudioBitPerfect(b->bitPerfect()); });
@@ -59,17 +66,15 @@ void AppController::wireSignals() {
     connect(s, &Settings::audioDeviceChanged,         b, [s, b]() { b->setAudioDevice(s->audioDevice()); });
     connect(s, &Settings::audioSoftwareVolumeChanged, b, [s, b]() { b->setSoftwareVolume(s->audioSoftwareVolume()); });
     connect(s, &Settings::audioBitPerfectChanged,     b, [s, b]() { b->setBitPerfect(s->audioBitPerfect()); });
+    connect(s, &Settings::gaplessPlaybackChanged,     b, [s, b]() { b->setGaplessPlayback(s->gaplessPlayback()); });
 
-    if (m_coverProvider) {
-        CoverImageProvider *p = m_coverProvider;
-        connect(s, &Settings::coverMaxEdgeChanged, this, [p, s]() {
-            p->setMaxEdge(s->coverMaxEdge());
-        });
-        connect(s, &Settings::coverSourceBudgetMbChanged, this, [p, s]() {
-            p->setSourceBudgetKb(s->coverSourceBudgetMb() * 1024);
-        });
-        connect(s, &Settings::coverScaledBudgetMbChanged, this, [p, s]() {
-            p->setScaledBudgetKb(s->coverScaledBudgetMb() * 1024);
-        });
-    }
+    connect(s, &Settings::coverMaxEdgeChanged, this, [this, s]() {
+        if (m_coverProvider) m_coverProvider->setMaxEdge(s->coverMaxEdge());
+    });
+    connect(s, &Settings::coverSourceBudgetMbChanged, this, [this, s]() {
+        if (m_coverProvider) m_coverProvider->setSourceBudgetKb(s->coverSourceBudgetMb() * 1024);
+    });
+    connect(s, &Settings::coverScaledBudgetMbChanged, this, [this, s]() {
+        if (m_coverProvider) m_coverProvider->setScaledBudgetKb(s->coverScaledBudgetMb() * 1024);
+    });
 }

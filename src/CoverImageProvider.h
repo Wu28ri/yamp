@@ -5,19 +5,23 @@
 #include <QHash>
 #include <QImage>
 #include <QReadWriteLock>
-#include <QQuickImageProvider>
+#include <QQuickAsyncImageProvider>
 #include <QSize>
 #include <QString>
+#include <QThreadPool>
 
-class CoverImageProvider : public QQuickImageProvider {
+class CoverImageProvider : public QQuickAsyncImageProvider {
 public:
     CoverImageProvider();
+    ~CoverImageProvider() override;
 
-    QImage requestImage(const QString &id, QSize *size, const QSize &requestedSize) override;
+    QQuickImageResponse *requestImageResponse(const QString &id, const QSize &requestedSize) override;
+    QImage loadCoverImage(const QString &id, QSize *size, const QSize &requestedSize);
 
     void setMaxEdge(int edge);
     void setSourceBudgetKb(int kb);
     void setScaledBudgetKb(int kb);
+    void clearCache();
 
 private:
     struct ScaledEntry {
@@ -32,8 +36,9 @@ private:
     QCache<QByteArray, ScaledEntry> m_scaled;
 
     QReadWriteLock m_lock;
+    QThreadPool    m_pool;
 
-    int    m_maxEdge        = 384;
+    int    m_maxEdge        = 512;
     int    m_sourceBudgetKb = 48 * 1024;
     int    m_scaledBudgetKb = 16 * 1024;
 };
