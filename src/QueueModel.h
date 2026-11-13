@@ -32,6 +32,7 @@ public:
 
 signals:
     void queueChanged();
+    void userModified();
 
 private:
     TrackQueue *m_queue;

@@ -664,7 +664,7 @@ void LastFmScrobbler::processScrobbleQueue() {
                 ? apiErrorMessage(object, QStringLiteral("temporary Last.fm error"))
                 : networkMessage;
             qWarning("Last.fm scrobble failed, will retry: %s", qUtf8Printable(message));
-            scheduleScrobbleRetry();
+            scheduleScrobbleRetry(true);
             return;
         }
         if (apiError != 0) {
@@ -676,10 +676,11 @@ void LastFmScrobbler::processScrobbleQueue() {
         const QJsonObject scrobbles = object.value(QStringLiteral("scrobbles")).toObject();
         const QJsonObject attributes = scrobbles.value(QStringLiteral("@attr")).toObject();
         if (!response.valid || attributes.isEmpty()) {
-            const QString message = networkError == QNetworkReply::NoError
+            const bool networkFailure = (networkError != QNetworkReply::NoError);
+            const QString message = !networkFailure
                 ? QStringLiteral("invalid response") : networkMessage;
             qWarning("Last.fm scrobble failed, will retry: %s", qUtf8Printable(message));
-            scheduleScrobbleRetry();
+            scheduleScrobbleRetry(networkFailure);
             return;
         }
         removeBatchIds();
@@ -687,11 +688,11 @@ void LastFmScrobbler::processScrobbleQueue() {
     });
 }
 
-void LastFmScrobbler::scheduleScrobbleRetry() {
+void LastFmScrobbler::scheduleScrobbleRetry(bool transient) {
     if (m_pendingScrobbles.isEmpty()) return;
     PendingScrobble &pending = m_pendingScrobbles.first();
     ++pending.retryCount;
-    if (pending.retryCount > kMaxScrobbleRetries) {
+    if (!transient && pending.retryCount > kMaxScrobbleRetries) {
         m_pendingScrobbles.removeFirst();
         saveScrobbleQueue();
         QTimer::singleShot(0, this, &LastFmScrobbler::processScrobbleQueue);
@@ -699,7 +700,7 @@ void LastFmScrobbler::scheduleScrobbleRetry() {
     }
     const int shift = qMin(pending.retryCount - 1, 6);
     const int delayMs = qMin(5 * 60 * 1000, 5000 * (1 << shift));
-    saveScrobbleQueue();
+    if (pending.retryCount <= kMaxScrobbleRetries) saveScrobbleQueue();
     m_scrobbleRetryTimer->start(delayMs);
 }
 

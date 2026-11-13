@@ -59,7 +59,7 @@ private:
     void maybeScrobble();
     void maybeSendNowPlaying();
     void processScrobbleQueue();
-    void scheduleScrobbleRetry();
+    void scheduleScrobbleRetry(bool transient);
     void invalidateSession(const QString &expectedKey);
     void restoreScrobbleQueue();
     void saveScrobbleQueue();

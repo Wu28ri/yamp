@@ -14,19 +14,23 @@ public:
     int  detachedPosition() const { return m_detachedPosition; }
     int  nextInsertionPosition() const;
     int  count()           const { return static_cast<int>(m_playOrder.size()); }
+    qint64 totalDuration() const;
     bool isShuffle()       const { return m_shuffle; }
     bool isCurrentDetached() const { return m_currentDetached; }
 
     bool containsPath(const QString &path) const;
     int  positionOfPath(const QString &path) const;
+    Track trackForPath(const QString &path) const;
 
     const std::vector<int>& playOrder() const { return m_playOrder; }
+    const std::vector<int>& unshuffledOrder() const { return m_unshuffledOrder; }
     const QList<Track>&     tracks()    const { return m_tracks; }
 
     Track current() const;
 
     void setTracks(const QList<Track> &tracks);
     void restoreState(const QList<Track> &tracks, const std::vector<int> &playOrder,
+                      const std::vector<int> &unshuffledOrder,
                       int currentIndex, int detachedPosition,
                       bool currentDetached, bool shuffle);
     void insertNext(const Track &track);
@@ -56,6 +60,7 @@ private:
 
     QList<Track> m_tracks;
     std::vector<int> m_playOrder;
+    std::vector<int> m_unshuffledOrder;
     QHash<QString, int> m_pathToGlobalId;
     int m_currentIndex = -1;
     int m_detachedPosition = -1;

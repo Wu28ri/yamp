@@ -73,8 +73,13 @@ QMutex& queueSaveMutex() {
     return mutex;
 }
 
-void writeQueuePayloadToDisk(const QString &path, const QByteArray &payload) {
+void writeQueuePayloadToDisk(const QString &path, const QByteArray &payload, quint64 seq) {
     QMutexLocker locker(&queueSaveMutex());
+    static quint64 lastWrittenSeq = 0;
+    if (seq > 0) {
+        if (seq < lastWrittenSeq) return;
+        lastWrittenSeq = seq;
+    }
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly) ||
         file.write(payload) < 0 ||
@@ -283,12 +288,12 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_queueSaveTimer->setSingleShot(true);
     m_queueSaveTimer->setInterval(800);
     connect(m_queueSaveTimer, &QTimer::timeout, this, &PlayerBackend::saveQueueStateAsync);
+    connect(m_queueModel, &QueueModel::userModified, this, [this]() {
+        m_queueManuallyModified = true;
+    });
     connect(m_queueModel, &QueueModel::queueChanged, this, [this]() {
         scheduleQueueSave();
-        if (m_lastEmittedQueueCount != m_queue.count()) {
-            m_lastEmittedQueueCount = m_queue.count();
-            emit queueCountChanged();
-        }
+        syncQueueStats();
         emit currentQueuePositionChanged();
         syncMpvPrefetch();
     });
@@ -460,10 +465,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
         m_queueStateReady = true;
         if (!restored) rebuildQueueFromCurrentFilter();
         else scheduleQueueSave();
-        if (m_lastEmittedQueueCount != m_queue.count()) {
-            m_lastEmittedQueueCount = m_queue.count();
-            emit queueCountChanged();
-        }
+        syncQueueStats();
         emit currentQueuePositionChanged();
     });
 }
@@ -991,6 +993,7 @@ void PlayerBackend::setShuffle(bool enabled) {
     if (m_queue.isShuffle() == enabled) return;
     m_queue.setShuffle(enabled);
     m_queueModel->resetAll();
+    syncQueueStats();
     syncMpvPrefetch();
     scheduleQueueSave();
     emit shuffleChanged();
@@ -1089,8 +1092,13 @@ void PlayerBackend::setPosition(qint64 ms) {
 
 void PlayerBackend::play() {
     if (!m_mpv) return;
-    if (!m_hasFile && m_currentTrack.isValid()) {
-        loadTrack(m_currentTrack);
+    if (!m_hasFile) {
+        if (m_currentTrack.isValid()) {
+            loadTrack(m_currentTrack, true, qMax<qint64>(0, m_lastPositionMs));
+            return;
+        }
+        if (m_queue.count() == 0) rebuildQueueFromCurrentFilter();
+        if (m_queue.count() > 0) playFromQueue(0);
         return;
     }
     if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
@@ -1124,16 +1132,8 @@ void PlayerBackend::stop() {
 
 void PlayerBackend::togglePlayback() {
     if (!m_mpv) return;
-    if (m_hasFile) {
-        if (m_paused) play();
-        else pause();
-        return;
-    }
-    if (m_currentTrack.isValid()) {
-        loadTrack(m_currentTrack);
-    } else if (m_queue.count() > 0) {
-        playFromQueue(0);
-    }
+    if (m_hasFile && !m_paused) pause();
+    else play();
 }
 
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
@@ -1151,6 +1151,16 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
     return out;
 }
 
+void PlayerBackend::syncQueueStats() {
+    const int c = m_queue.count();
+    const qint64 d = m_queue.totalDuration();
+    if (m_lastEmittedQueueCount != c || m_lastEmittedQueueDuration != d) {
+        m_lastEmittedQueueCount = c;
+        m_lastEmittedQueueDuration = d;
+        emit queueCountChanged();
+    }
+}
+
 void PlayerBackend::rebuildQueueFromCurrentFilter() {
     const QString currentPath = m_currentPath;
     const QString orderBy = TrackModel::orderColumnsClause(
@@ -1159,14 +1169,17 @@ void PlayerBackend::rebuildQueueFromCurrentFilter() {
     m_queue.setTracks(queryTracks(m_categoryFilter, orderBy));
     if (!currentPath.isEmpty() && m_queue.containsPath(currentPath))
         m_queue.setIndexByPath(currentPath);
-    m_queueBuiltFromFilter = m_categoryFilter;
-    m_queueBuiltFromSort   = m_sortColumn;
-    m_queueBuiltFromOrder  = m_sortOrder;
-    m_queueModel->resetAll();
-    if (m_lastEmittedQueueCount != m_queue.count()) {
-        m_lastEmittedQueueCount = m_queue.count();
-        emit queueCountChanged();
+    m_queueBuiltFromFilter  = m_categoryFilter;
+    m_queueBuiltFromSort    = m_sortColumn;
+    m_queueBuiltFromOrder   = m_sortOrder;
+    m_queueManuallyModified = false;
+    if (!currentPath.isEmpty() && m_externalQueuePaths.contains(currentPath)) {
+        m_externalQueuePaths = {currentPath};
+    } else {
+        m_externalQueuePaths.clear();
     }
+    m_queueModel->resetAll();
+    syncQueueStats();
     syncMpvPrefetch();
     scheduleQueueSave();
 }
@@ -1199,18 +1212,49 @@ bool PlayerBackend::restoreQueueState() {
     availableTracks.reserve(libraryTracks.size());
     for (const Track &track : libraryTracks) availableTracks.insert(track.path, track);
 
+    const QJsonObject externalMeta = state.value(QStringLiteral("externalMeta")).toObject();
+    auto resolveSavedTrack = [&](const QString &path, Track &out) -> bool {
+        if (path.isEmpty()) return false;
+        const auto libIt = availableTracks.constFind(path);
+        if (libIt != availableTracks.constEnd()) {
+            out = libIt.value();
+            return true;
+        }
+        if (!QFileInfo::exists(path)) return false;
+        const QJsonValue extVal = externalMeta.value(path);
+        if (extVal.isObject()) {
+            const QJsonObject obj = extVal.toObject();
+            out.path        = path;
+            out.title       = obj.value(QStringLiteral("title")).toString();
+            out.artist      = obj.value(QStringLiteral("artist")).toString();
+            out.album       = obj.value(QStringLiteral("album")).toString();
+            out.albumArtist = obj.value(QStringLiteral("albumArtist")).toString();
+            out.duration    = obj.value(QStringLiteral("duration")).toInt();
+            out.techInfo    = obj.value(QStringLiteral("techInfo")).toString();
+            out.trackNo     = obj.value(QStringLiteral("trackNo")).toInt();
+            out.discNo      = obj.value(QStringLiteral("discNo")).toInt();
+            m_externalQueuePaths.insert(path);
+            return true;
+        }
+        qint64 fileSize = 0;
+        qint64 fileMtime = 0;
+        if (MusicLibrary::readTrackFromFile(path, out, fileSize, fileMtime) && out.isValid()) {
+            m_externalQueuePaths.insert(path);
+            return true;
+        }
+        return false;
+    };
+
     const QJsonArray savedTracks = state.value(QStringLiteral("tracks")).toArray();
     QList<Track> tracks;
     tracks.reserve(savedTracks.size());
     QList<int> oldToNew(savedTracks.size(), -1);
     for (int oldId = 0; oldId < savedTracks.size(); ++oldId) {
         const QString path = savedTracks.at(oldId).toString();
-        const auto track = availableTracks.constFind(path);
-        if (path.isEmpty() || track == availableTracks.constEnd()) {
-            continue;
-        }
+        Track resolved;
+        if (!resolveSavedTrack(path, resolved)) continue;
         oldToNew[oldId] = tracks.size();
-        tracks.append(track.value());
+        tracks.append(std::move(resolved));
     }
 
     const QJsonArray savedOrder = state.value(QStringLiteral("playOrder")).toArray();
@@ -1225,6 +1269,15 @@ bool PlayerBackend::restoreQueueState() {
         const int id = remap(value.toInt(-1));
         survivingBefore.append(survivingBefore.last() + (id >= 0 ? 1 : 0));
         if (id >= 0) playOrder.push_back(id);
+    }
+    std::vector<int> unshuffledOrder;
+    if (state.value(QStringLiteral("unshuffledOrder")).isArray()) {
+        const QJsonArray savedUnshuffled = state.value(QStringLiteral("unshuffledOrder")).toArray();
+        unshuffledOrder.reserve(static_cast<size_t>(savedUnshuffled.size()));
+        for (const QJsonValue &value : savedUnshuffled) {
+            const int id = remap(value.toInt(-1));
+            if (id >= 0) unshuffledOrder.push_back(id);
+        }
     }
     const auto survivingCount = [&survivingBefore, &savedOrder](int position) {
         return survivingBefore.at(qBound(0, position, static_cast<int>(savedOrder.size())));
@@ -1248,21 +1301,29 @@ bool PlayerBackend::restoreQueueState() {
         ? survivingCount(state.value(QStringLiteral("detachedPosition")).toInt()) : -1;
 
     const bool oldShuffle = m_queue.isShuffle();
-    m_queue.restoreState(tracks, playOrder, currentIndex, detachedPosition,
+    m_queue.restoreState(tracks, playOrder, unshuffledOrder, currentIndex, detachedPosition,
                          detached, state.value(QStringLiteral("shuffle")).toBool());
     Track current = m_queue.current();
     if (state.contains(QStringLiteral("currentPath"))) {
         const QString path = state.value(QStringLiteral("currentPath")).toString();
-        const auto saved = availableTracks.constFind(path);
+        Track savedCurrent;
         if (path.isEmpty()) {
             current = Track();
-        } else if (saved != availableTracks.constEnd() && QFileInfo::exists(path)) {
-            current = saved.value();
+        } else if (resolveSavedTrack(path, savedCurrent) && QFileInfo::exists(path)) {
+            current = savedCurrent;
             if (!m_queue.isCurrentDetached() && m_queue.current().path != path) {
-                m_queue.jumpToPosition(m_queue.positionOfPath(path));
+                const int pos = m_queue.positionOfPath(path);
+                if (pos >= 0) m_queue.jumpToPosition(pos);
             }
         }
     }
+
+    if (m_queue.count() == 0 && !current.isValid()) {
+        return false;
+    }
+
+    m_queueBuiltFromFilter  = QStringLiteral("__restored__");
+    m_queueManuallyModified = true;
     m_queueModel->resetAll();
     if (oldShuffle != m_queue.isShuffle()) emit shuffleChanged();
     if (current.isValid()) loadTrack(current, false);
@@ -1277,7 +1338,25 @@ void PlayerBackend::scheduleQueueSave() {
 
 QByteArray PlayerBackend::serializeQueueState() const {
     QJsonArray tracks;
-    for (const Track &track : m_queue.tracks()) tracks.append(track.path);
+    QJsonObject externalMeta;
+    const auto serializeExternal = [&](const Track &track) {
+        if (track.path.isEmpty() || !m_externalQueuePaths.contains(track.path)) return;
+        QJsonObject obj;
+        obj.insert(QStringLiteral("title"), track.title);
+        obj.insert(QStringLiteral("artist"), track.artist);
+        obj.insert(QStringLiteral("album"), track.album);
+        obj.insert(QStringLiteral("albumArtist"), track.albumArtist);
+        obj.insert(QStringLiteral("duration"), track.duration);
+        obj.insert(QStringLiteral("techInfo"), track.techInfo);
+        obj.insert(QStringLiteral("trackNo"), track.trackNo);
+        obj.insert(QStringLiteral("discNo"), track.discNo);
+        externalMeta.insert(track.path, obj);
+    };
+    for (const Track &track : m_queue.tracks()) {
+        tracks.append(track.path);
+        serializeExternal(track);
+    }
+    if (m_currentTrack.isValid()) serializeExternal(m_currentTrack);
 
     QJsonArray playOrder;
     for (int id : m_queue.playOrder()) playOrder.append(id);
@@ -1286,6 +1365,14 @@ QByteArray PlayerBackend::serializeQueueState() const {
     state.insert(QStringLiteral("version"), 1);
     state.insert(QStringLiteral("tracks"), tracks);
     state.insert(QStringLiteral("playOrder"), playOrder);
+    if (m_queue.isShuffle()) {
+        QJsonArray unshuffled;
+        for (int id : m_queue.unshuffledOrder()) unshuffled.append(id);
+        state.insert(QStringLiteral("unshuffledOrder"), unshuffled);
+    }
+    if (!externalMeta.isEmpty()) {
+        state.insert(QStringLiteral("externalMeta"), externalMeta);
+    }
     state.insert(QStringLiteral("currentIndex"), m_queue.rawCurrentIndex());
     state.insert(QStringLiteral("currentPath"), m_currentPath);
     state.insert(QStringLiteral("currentDetached"), m_queue.isCurrentDetached());
@@ -1297,10 +1384,11 @@ QByteArray PlayerBackend::serializeQueueState() const {
 void PlayerBackend::saveQueueStateAsync() {
     if (!m_queueStateReady || !m_queueDirty) return;
     m_queueDirty = false;
+    const quint64 seq = ++m_queueSaveSeq;
     const QString path = queueStatePath();
     const QByteArray payload = serializeQueueState();
-    m_ioPool.start([path, payload]() {
-        writeQueuePayloadToDisk(path, payload);
+    m_ioPool.start([path, payload, seq]() {
+        writeQueuePayloadToDisk(path, payload, seq);
     });
 }
 
@@ -1309,7 +1397,8 @@ void PlayerBackend::saveQueueState() {
     if (m_queueSaveTimer) m_queueSaveTimer->stop();
     m_ioPool.waitForDone();
     m_queueDirty = false;
-    writeQueuePayloadToDisk(queueStatePath(), serializeQueueState());
+    const quint64 seq = ++m_queueSaveSeq;
+    writeQueuePayloadToDisk(queueStatePath(), serializeQueueState(), seq);
 }
 
 void PlayerBackend::playMusic(const QString &filePath) {
@@ -1319,7 +1408,8 @@ void PlayerBackend::playMusic(const QString &filePath) {
                              : filePath;
     if (path.isEmpty()) return;
 
-    const bool queueMatchesView = (m_queueBuiltFromFilter == m_categoryFilter &&
+    const bool queueMatchesView = !m_queueManuallyModified &&
+                                  (m_queueBuiltFromFilter == m_categoryFilter &&
                                    m_queueBuiltFromSort   == m_sortColumn   &&
                                    m_queueBuiltFromOrder  == m_sortOrder);
     const int existing = queueMatchesView ? m_queue.positionOfPath(path) : -1;
@@ -1327,6 +1417,7 @@ void PlayerBackend::playMusic(const QString &filePath) {
         if (m_queue.isShuffle()) {
             m_queue.setIndexByPath(path);
             m_queueModel->resetAll();
+            syncQueueStats();
         } else {
             m_queue.jumpToPosition(existing);
         }
@@ -1335,15 +1426,12 @@ void PlayerBackend::playMusic(const QString &filePath) {
         if (m_queue.containsPath(path)) {
             m_queue.setIndexByPath(path);
             m_queueModel->resetAll();
+            syncQueueStats();
         } else {
             // External URI opened via MPRIS OpenUri or outside current filter
-            Track external = queryTrackByPath(path);
-            if (!external.isValid() && QFileInfo::exists(path)) {
-                qint64 fileSize = 0;
-                qint64 fileMtime = 0;
-                MusicLibrary::readTrackFromFile(path, external, fileSize, fileMtime);
-            }
+            const Track external = resolveTrackForPath(path);
             if (!external.isValid()) return;
+            m_queueManuallyModified = true;
             m_queueModel->insertTrack(external);
             m_queue.jumpToPosition(m_queue.positionOfPath(path));
         }
@@ -1666,9 +1754,10 @@ void PlayerBackend::sortTracks(const QString &columnName, bool ascending) {
     m_trackModel->setSortSpec(m_sortColumn, m_sortOrder);
     m_trackModel->select();
     if (sortDiff) emit sortChanged();
+    if (m_queueManuallyModified || m_queueBuiltFromFilter != m_categoryFilter) {
+        return;
+    }
     if (m_queue.isShuffle()) {
-        m_queueBuiltFromSort = m_sortColumn;
-        m_queueBuiltFromOrder = m_sortOrder;
         return;
     }
     rebuildQueueFromCurrentFilter();
@@ -1707,25 +1796,51 @@ Track PlayerBackend::queryTrackByPath(const QString &path) const {
     return trackFromQuery(q);
 }
 
+Track PlayerBackend::resolveTrackForPath(const QString &path) {
+    if (path.isEmpty()) return {};
+    Track track = queryTrackByPath(path);
+    if (track.isValid()) return track;
+    track = m_queue.trackForPath(path);
+    if (track.isValid()) return track;
+    if (m_currentTrack.path == path && m_currentTrack.isValid()) return m_currentTrack;
+    if (QFileInfo::exists(path)) {
+        qint64 fileSize = 0;
+        qint64 fileMtime = 0;
+        if (MusicLibrary::readTrackFromFile(path, track, fileSize, fileMtime) && track.isValid()) {
+            m_externalQueuePaths.insert(path);
+            return track;
+        }
+    }
+    return {};
+}
+
 void PlayerBackend::addPlayNext(const QString &path) {
-    const Track track = queryTrackByPath(path);
+    const Track track = resolveTrackForPath(path);
     if (!track.isValid()) return;
     const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
     m_queueModel->insertTrack(track);
     emit currentQueuePositionChanged();
     if (wasEmpty) loadTrack(m_queue.current(), false);
 }
 
 void PlayerBackend::addToQueue(const QString &path) {
-    const Track track = queryTrackByPath(path);
+    const Track track = resolveTrackForPath(path);
     if (!track.isValid()) return;
     const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
     m_queueModel->appendTrack(track);
     emit currentQueuePositionChanged();
     if (wasEmpty) loadTrack(m_queue.current(), false);
 }
 
 void PlayerBackend::clearQueue() {
+    m_queueManuallyModified = true;
+    if (!m_currentPath.isEmpty() && m_externalQueuePaths.contains(m_currentPath)) {
+        m_externalQueuePaths = {m_currentPath};
+    } else {
+        m_externalQueuePaths.clear();
+    }
     m_queueModel->clear(m_hasFile || m_currentTrack.isValid());
     m_queueBuiltFromFilter = QStringLiteral("__cleared__");
     emit currentQueuePositionChanged();
@@ -1822,6 +1937,14 @@ void PlayerBackend::pruneQueueToLibrary() {
     QSet<QString> paths;
     while (query.next()) paths.insert(query.value(0).toString());
     if (m_hasFile && !m_currentPath.isEmpty()) paths.insert(m_currentPath);
+    for (auto it = m_externalQueuePaths.begin(); it != m_externalQueuePaths.end();) {
+        if (QFileInfo::exists(*it)) {
+            paths.insert(*it);
+            ++it;
+        } else {
+            it = m_externalQueuePaths.erase(it);
+        }
+    }
     if (m_queueModel->retainPaths(paths)) {
         emit currentQueuePositionChanged();
     }

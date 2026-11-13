@@ -48,6 +48,7 @@ void QueueModel::move(int from, int to) {
     }
     endMoveRows();
     notifyCurrentChanged();
+    emit userModified();
     emit queueChanged();
 }
 
@@ -63,6 +64,7 @@ void QueueModel::remove(int position) {
     }
     endRemoveRows();
     notifyCurrentChanged();
+    emit userModified();
     emit queueChanged();
 }
 

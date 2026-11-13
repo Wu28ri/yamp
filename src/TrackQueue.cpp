@@ -37,10 +37,28 @@ int TrackQueue::positionOfPath(const QString &path) const {
     return it == m_pathToGlobalId.constEnd() ? -1 : positionOfId(it.value());
 }
 
+Track TrackQueue::trackForPath(const QString &path) const {
+    if (path.isEmpty()) return {};
+    const auto it = m_pathToGlobalId.constFind(path);
+    if (it == m_pathToGlobalId.constEnd()) return {};
+    const int id = it.value();
+    return (id >= 0 && id < m_tracks.size()) ? m_tracks.at(id) : Track();
+}
+
 int TrackQueue::positionOfId(int globalId) const {
     const auto it = std::find(m_playOrder.cbegin(), m_playOrder.cend(), globalId);
     return it == m_playOrder.cend() ? -1
         : static_cast<int>(std::distance(m_playOrder.cbegin(), it));
+}
+
+qint64 TrackQueue::totalDuration() const {
+    qint64 sum = 0;
+    for (int id : m_playOrder) {
+        if (id >= 0 && id < m_tracks.size()) {
+            sum += qMax<qint64>(0, m_tracks[id].duration);
+        }
+    }
+    return sum;
 }
 
 void TrackQueue::setTracks(const QList<Track> &tracks) {
@@ -56,10 +74,25 @@ void TrackQueue::setTracks(const QList<Track> &tracks) {
         deduped.append(t);
     }
 
+    bool sameNaturalOrder = !m_shuffle &&
+        static_cast<int>(m_playOrder.size()) == deduped.size();
+    if (sameNaturalOrder) {
+        for (int i = 0; i < deduped.size(); ++i) {
+            if (m_playOrder[static_cast<size_t>(i)] != i) {
+                sameNaturalOrder = false;
+                break;
+            }
+        }
+    }
+
     if (m_tracks.size() == deduped.size() &&
         static_cast<int>(m_playOrder.size()) == deduped.size() &&
+        static_cast<int>(m_unshuffledOrder.size()) == deduped.size() &&
+        (m_shuffle || sameNaturalOrder) &&
         std::equal(m_tracks.cbegin(), m_tracks.cend(), deduped.cbegin(),
                    [](const Track &left, const Track &right) { return left.path == right.path; })) {
+        // Refresh metadata in-place without disturbing play order
+        m_tracks = std::move(deduped);
         return;
     }
     m_tracks = std::move(deduped);
@@ -69,6 +102,7 @@ void TrackQueue::setTracks(const QList<Track> &tracks) {
 
 void TrackQueue::restoreState(const QList<Track> &tracks,
                               const std::vector<int> &playOrder,
+                              const std::vector<int> &unshuffledOrder,
                               int currentIndex, int detachedPosition,
                               bool currentDetached, bool shuffle) {
     m_tracks.clear();
@@ -112,6 +146,26 @@ void TrackQueue::restoreState(const QList<Track> &tracks,
     }
 
     m_shuffle = shuffle;
+    m_unshuffledOrder.clear();
+    if (!m_shuffle) {
+        m_unshuffledOrder = m_playOrder;
+    } else {
+        std::vector<int> mappedUnshuffled;
+        mappedUnshuffled.reserve(unshuffledOrder.size());
+        for (int oldId : unshuffledOrder) {
+            if (oldId < 0 || oldId >= tracks.size()) continue;
+            const int newId = oldToNewId[static_cast<size_t>(oldId)];
+            if (newId >= 0 && newId < m_tracks.size()) mappedUnshuffled.push_back(newId);
+        }
+        std::vector<int> sortedPlay = m_playOrder;
+        std::sort(sortedPlay.begin(), sortedPlay.end());
+        std::vector<int> sortedUnshuffled = mappedUnshuffled;
+        std::sort(sortedUnshuffled.begin(), sortedUnshuffled.end());
+        m_unshuffledOrder = (sortedPlay == sortedUnshuffled)
+            ? std::move(mappedUnshuffled)
+            : std::move(sortedPlay);
+    }
+
     if (m_playOrder.empty()) {
         m_currentIndex = -1;
         m_detachedPosition = -1;
@@ -147,6 +201,9 @@ int TrackQueue::ensureTrackStored(const Track &track) {
 void TrackQueue::insertNext(const Track &track) {
     const int trackId = ensureTrackStored(track);
     const bool wasEmpty = m_playOrder.empty();
+    const int currentId = (!m_currentDetached && m_currentIndex >= 0 &&
+                           m_currentIndex < static_cast<int>(m_playOrder.size()))
+                              ? m_playOrder[static_cast<size_t>(m_currentIndex)] : -1;
     const int insertionPosition = nextInsertionPosition();
     m_playOrder.insert(m_playOrder.begin() + insertionPosition, trackId);
     if (!m_currentDetached) {
@@ -156,12 +213,22 @@ void TrackQueue::insertNext(const Track &track) {
             ++m_currentIndex;
         }
     }
+    if (!m_shuffle) {
+        m_unshuffledOrder = m_playOrder;
+    } else if (currentId >= 0) {
+        const auto it = std::find(m_unshuffledOrder.begin(), m_unshuffledOrder.end(), currentId);
+        if (it != m_unshuffledOrder.end()) m_unshuffledOrder.insert(it + 1, trackId);
+        else m_unshuffledOrder.push_back(trackId);
+    } else {
+        m_unshuffledOrder.push_back(trackId);
+    }
 }
 
 void TrackQueue::appendTrack(const Track &track) {
     const int trackId = ensureTrackStored(track);
     const bool wasEmpty = m_playOrder.empty();
     m_playOrder.push_back(trackId);
+    m_unshuffledOrder.push_back(trackId);
     if (wasEmpty && !m_currentDetached) {
         m_currentIndex = 0;
     }
@@ -175,11 +242,21 @@ void TrackQueue::removeTrack(int position) {
     const int globalId = m_playOrder[position];
     m_playOrder.erase(m_playOrder.begin() + position);
 
+    if (!m_shuffle && position < static_cast<int>(m_unshuffledOrder.size())) {
+        m_unshuffledOrder.erase(m_unshuffledOrder.begin() + position);
+    } else {
+        const auto uit = std::find(m_unshuffledOrder.begin(), m_unshuffledOrder.end(), globalId);
+        if (uit != m_unshuffledOrder.end()) m_unshuffledOrder.erase(uit);
+    }
+
     const bool stillReferenced = std::find(m_playOrder.cbegin(), m_playOrder.cend(), globalId) != m_playOrder.cend();
     if (!stillReferenced && globalId >= 0 && globalId < m_tracks.size()) {
         m_tracks.removeAt(globalId);
 
         for (int &id : m_playOrder) {
+            if (id > globalId) --id;
+        }
+        for (int &id : m_unshuffledOrder) {
             if (id > globalId) --id;
         }
         rebuildPathIndex();
@@ -211,6 +288,7 @@ void TrackQueue::removeTrack(int position) {
 void TrackQueue::clear(bool keepCurrentDetached) {
     m_tracks.clear();
     m_playOrder.clear();
+    m_unshuffledOrder.clear();
     m_pathToGlobalId.clear();
     m_currentIndex = -1;
     m_currentDetached = keepCurrentDetached;
@@ -221,6 +299,7 @@ void TrackQueue::retainPaths(const QSet<QString> &paths) {
     if (m_playOrder.empty()) {
         if (!m_tracks.isEmpty()) {
             m_tracks.clear();
+            m_unshuffledOrder.clear();
             m_pathToGlobalId.clear();
         }
         return;
@@ -261,6 +340,20 @@ void TrackQueue::retainPaths(const QSet<QString> &paths) {
         }
     }
 
+    if (!m_shuffle) {
+        m_unshuffledOrder = newPlayOrder;
+    } else {
+        std::vector<int> newUnshuffled;
+        newUnshuffled.reserve(newPlayOrder.size());
+        for (int oldId : m_unshuffledOrder) {
+            if (oldId >= 0 && oldId < static_cast<int>(oldToNewId.size())) {
+                const int newId = oldToNewId[static_cast<size_t>(oldId)];
+                if (newId >= 0) newUnshuffled.push_back(newId);
+            }
+        }
+        m_unshuffledOrder = std::move(newUnshuffled);
+    }
+
     m_tracks = std::move(newTracks);
     m_playOrder = std::move(newPlayOrder);
     rebuildPathIndex();
@@ -299,12 +392,10 @@ void TrackQueue::moveTrack(int from, int to) {
     const int n = static_cast<int>(m_playOrder.size());
     if (from < 0 || from >= n || to < 0 || to >= n || from == to) return;
 
-    const int detachedNextId = m_currentDetached && m_detachedPosition >= 0 &&
-                                       m_detachedPosition < n
-                                   ? m_playOrder[m_detachedPosition] : -1;
     const int trackId = m_playOrder[from];
     m_playOrder.erase(m_playOrder.begin() + from);
     m_playOrder.insert(m_playOrder.begin() + to, trackId);
+    if (!m_shuffle) m_unshuffledOrder = m_playOrder;
 
     if (m_currentIndex == from) {
         m_currentIndex = to;
@@ -313,14 +404,20 @@ void TrackQueue::moveTrack(int from, int to) {
     } else if (from > m_currentIndex && to <= m_currentIndex) {
         ++m_currentIndex;
     }
-    if (m_currentDetached) {
-        m_detachedPosition = detachedNextId < 0 ? n : positionOfId(detachedNextId);
+    if (m_currentDetached && m_detachedPosition >= 0 && m_detachedPosition < n) {
+        if (from < m_detachedPosition && to >= m_detachedPosition) {
+            --m_detachedPosition;
+        } else if (from > m_detachedPosition && to < m_detachedPosition) {
+            ++m_detachedPosition;
+        }
+        m_detachedPosition = qBound(0, m_detachedPosition, n);
     }
 }
 
 void TrackQueue::resetPlayOrder() {
-    m_playOrder.resize(m_tracks.size());
-    std::iota(m_playOrder.begin(), m_playOrder.end(), 0);
+    m_unshuffledOrder.resize(m_tracks.size());
+    std::iota(m_unshuffledOrder.begin(), m_unshuffledOrder.end(), 0);
+    m_playOrder = m_unshuffledOrder;
     if (m_shuffle) std::shuffle(m_playOrder.begin(), m_playOrder.end(), rng());
 }
 
@@ -342,22 +439,34 @@ void TrackQueue::rebuildPathIndex() {
 
 void TrackQueue::setShuffle(bool enabled) {
     if (m_shuffle == enabled) return;
-    if (m_currentDetached) {
-        const int nextId = m_detachedPosition >= 0 &&
-                                   m_detachedPosition < static_cast<int>(m_playOrder.size())
-                               ? m_playOrder[m_detachedPosition] : -1;
-        m_shuffle = enabled;
-        resetPlayOrder();
-        m_detachedPosition = nextId < 0 ? count() : positionOfId(nextId);
-        return;
-    }
     m_shuffle = enabled;
+    if (m_playOrder.empty()) return;
 
-    const Track cur = current();
-    if (cur.isValid()) {
-        setIndexByPath(cur.path);
+    if (enabled) {
+        m_unshuffledOrder = m_playOrder;
+        if (!m_currentDetached && m_currentIndex >= 0 &&
+            m_currentIndex < static_cast<int>(m_playOrder.size())) {
+            std::iter_swap(m_playOrder.begin(), m_playOrder.begin() + m_currentIndex);
+            std::shuffle(m_playOrder.begin() + 1, m_playOrder.end(), rng());
+            m_currentIndex = 0;
+        } else {
+            std::shuffle(m_playOrder.begin(), m_playOrder.end(), rng());
+            if (m_currentDetached) m_detachedPosition = 0;
+            else m_currentIndex = 0;
+        }
     } else {
-        rebuildPlayOrder();
+        const int curId = (!m_currentDetached && m_currentIndex >= 0 &&
+                           m_currentIndex < static_cast<int>(m_playOrder.size()))
+                              ? m_playOrder[static_cast<size_t>(m_currentIndex)] : -1;
+        m_playOrder = m_unshuffledOrder;
+        if (m_currentDetached) {
+            m_detachedPosition = qBound(0, m_detachedPosition, count());
+        } else if (curId >= 0) {
+            const int pos = positionOfId(curId);
+            m_currentIndex = pos >= 0 ? pos : (m_playOrder.empty() ? -1 : 0);
+        } else {
+            m_currentIndex = m_playOrder.empty() ? -1 : 0;
+        }
     }
 }
 
@@ -374,13 +483,18 @@ void TrackQueue::setIndexByPath(const QString &path) {
     if (it == m_pathToGlobalId.constEnd()) return;
     const int globalId = it.value();
 
-    resetPlayOrder();
+    int pos = positionOfId(globalId);
+    if (pos < 0) {
+        m_playOrder = m_unshuffledOrder;
+        pos = positionOfId(globalId);
+        if (pos < 0) return;
+    }
     if (m_shuffle) {
-        std::iter_swap(m_playOrder.begin(),
-                       std::find(m_playOrder.begin(), m_playOrder.end(), globalId));
+        std::iter_swap(m_playOrder.begin(), m_playOrder.begin() + pos);
+        std::shuffle(m_playOrder.begin() + 1, m_playOrder.end(), rng());
         m_currentIndex = 0;
     } else {
-        m_currentIndex = globalId;
+        m_currentIndex = pos;
     }
     m_currentDetached = false;
     m_detachedPosition = -1;

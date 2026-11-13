@@ -52,6 +52,7 @@ class PlayerBackend : public QObject {
 
     Q_PROPERTY(int currentQueuePosition READ currentQueuePosition NOTIFY currentQueuePositionChanged)
     Q_PROPERTY(int queueCount           READ queueCount           NOTIFY queueCountChanged)
+    Q_PROPERTY(qint64 queueDuration     READ queueDuration        NOTIFY queueCountChanged)
     Q_PROPERTY(QString sortColumn       READ sortColumn           NOTIFY sortChanged)
     Q_PROPERTY(bool    sortAscending    READ sortAscending        NOTIFY sortChanged)
 
@@ -110,6 +111,7 @@ public:
 
     int currentQueuePosition() const { return m_queue.currentPosition(); }
     int queueCount()           const { return m_queue.count(); }
+    qint64 queueDuration()     const { return m_queue.totalDuration(); }
     QString sortColumn()       const { return m_sortColumn; }
     bool sortAscending()       const { return m_sortOrder == Qt::AscendingOrder; }
 
@@ -215,6 +217,8 @@ private:
     QByteArray serializeQueueState() const;
     void saveQueueStateAsync();
     void saveQueueState();
+    void syncQueueStats();
+    Track resolveTrackForPath(const QString &path);
     void refreshAllModels();
     void pruneQueueToLibrary();
     void clearLibraryDatabase();
@@ -286,12 +290,16 @@ private:
     QString       m_queueBuiltFromFilter;
     QString       m_queueBuiltFromSort;
     Qt::SortOrder m_queueBuiltFromOrder = Qt::AscendingOrder;
+    bool          m_queueManuallyModified = false;
+    QSet<QString> m_externalQueuePaths;
 
     QTimer *m_scanRefreshTimer = nullptr;
     QTimer *m_queueSaveTimer = nullptr;
     bool m_queueStateReady = false;
     bool m_queueDirty = false;
+    quint64 m_queueSaveSeq = 0;
     int  m_lastEmittedQueueCount = 0;
+    qint64 m_lastEmittedQueueDuration = 0;
     bool m_clearPending = false;
     QStringList m_desiredFolders;
     QSet<QString> m_deferredScanFolders;
