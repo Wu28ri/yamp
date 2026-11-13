@@ -29,18 +29,22 @@ void ArtistModel::reload() {
     if (!m_search.isEmpty()) {
         const QString pattern =
             SqlUtils::containsPattern(SqlUtils::normalizeSearch(m_search));
-        where = QStringLiteral("WHERE %1 LIKE %2 ESCAPE '\\' ")
-            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("a.name")), pattern);
+        where = QStringLiteral(
+            "WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+            "a.name_norm, CHAR(1105), CHAR(1077)), '''', ''), "
+            "CHAR(8216), ''), CHAR(8217), ''), CHAR(700), '') LIKE %1 ESCAPE '\\' ")
+            .arg(pattern);
     }
     setQuery(QStringLiteral(
         "SELECT a.name, "
-        "COUNT(DISTINCT t.album) AS album_count, "
+        "COUNT(DISTINCT t.album COLLATE NOCASE) AS album_count, "
         "COUNT(DISTINCT t.id) AS track_count "
         "FROM artists a "
         "JOIN track_artists ta ON ta.artist_id = a.id "
         "JOIN tracks t ON t.id = ta.track_id ") + where + QStringLiteral(
         "GROUP BY a.id, a.name "
         "ORDER BY a.name COLLATE NOCASE"));
+    while (canFetchMore()) fetchMore();
 }
 
 void ArtistModel::setSearch(const QString &query) {

@@ -3,6 +3,7 @@
 #include "AudioFormats.h"
 #include "LibraryDb.h"
 #include "ScannerHelpers.h"
+#include "SqlUtils.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -64,6 +65,16 @@ QString fallbackFormatLabel(const QString &filePath) {
     return {};
 }
 
+int parseLeadingInt(const QString &raw) {
+    const QString trimmed = raw.trimmed();
+    if (trimmed.isEmpty()) return 0;
+    const int slash = trimmed.indexOf(QLatin1Char('/'));
+    const QString head = (slash >= 0 ? trimmed.left(slash) : trimmed).trimmed();
+    bool ok = false;
+    const int val = head.toInt(&ok);
+    return (ok && val > 0) ? val : 0;
+}
+
 }
 
 namespace MusicLibrary {
@@ -102,10 +113,30 @@ bool initialize() {
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "title TEXT, artist TEXT, album TEXT, "
             "path TEXT UNIQUE, duration INTEGER, "
-            "search_text TEXT, track_no INTEGER, "
+            "search_text TEXT, track_no INTEGER, disc_no INTEGER DEFAULT 0, "
             "tech_info TEXT, file_size INTEGER DEFAULT 0, "
             "album_artist TEXT, file_mtime INTEGER DEFAULT 0)"),
             "create tracks table")) return false;
+
+    {
+        bool hasDiscNo = false;
+        QSqlQuery info(db);
+        if (info.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
+            while (info.next()) {
+                if (info.value(1).toString() == QLatin1String("disc_no")) {
+                    hasDiscNo = true;
+                    break;
+                }
+            }
+        }
+        if (!hasDiscNo) {
+            if (!execRequired(QStringLiteral(
+                    "ALTER TABLE tracks ADD COLUMN disc_no INTEGER DEFAULT 0"),
+                    "migrate tracks.disc_no")) return false;
+            execRequired(QStringLiteral("UPDATE tracks SET file_mtime = 0"),
+                         "schedule metadata refresh for disc_no and artist links");
+        }
+    }
 
     if (!execRequired(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS watch_roots (path TEXT PRIMARY KEY)"),
@@ -147,6 +178,9 @@ bool initialize() {
             "CREATE INDEX IF NOT EXISTS idx_tracks_track_no ON tracks(track_no)"),
             "create track number index") ||
         !execRequired(QStringLiteral(
+            "CREATE INDEX IF NOT EXISTS idx_tracks_disc_track ON tracks(disc_no, track_no)"),
+            "create disc/track index") ||
+        !execRequired(QStringLiteral(
             "CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name COLLATE NOCASE)"),
             "create normalized artist index") ||
         !execRequired(QStringLiteral(
@@ -171,7 +205,7 @@ QStringList splitArtists(const QString &raw) {
 
     static const QRegularExpression splitter(
         QStringLiteral(
-            R"(\s*(?:[,;/\\&×]|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bpresents\b|\bwith\b)\s*)"
+            R"(\s*(?:[;×]|,(?!\s*the\b)|\s+/\s+|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bpresents\b|\bwith\b)\s*)"
             R"(|(?-i:\s+x\s+))"),
         QRegularExpression::CaseInsensitiveOption);
 
@@ -192,8 +226,9 @@ QStringList splitArtists(const QString &raw) {
 QString pickAlbumArtist(const QString &albumArtistTag, const QString &artist) {
     const QString tag = albumArtistTag.trimmed();
     if (!tag.isEmpty()) {
-        const QStringList tagParts = splitArtists(tag);
-        if (!tagParts.isEmpty()) return tagParts.first();
+        const int semi = tag.indexOf(QLatin1Char(';'));
+        const QString primary = (semi >= 0 ? tag.left(semi) : tag).trimmed();
+        if (!primary.isEmpty()) return primary;
         return tag;
     }
     const QStringList parts = splitArtists(artist);
@@ -216,7 +251,8 @@ bool linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
                                 QSqlQuery &upsertArtist,
                                 QSqlQuery &findArtistId,
-                                QSqlQuery &linkTrackArtist) {
+                                QSqlQuery &linkTrackArtist,
+                                QHash<QString, qint64> *artistIdCache) {
     if (trackId <= 0) return false;
     const QStringList names = splitArtists(rawArtists);
 
@@ -224,14 +260,18 @@ bool linkTrackToArtistsPrepared(qint64 trackId,
         const QString norm = normalizeArtistName(display);
         if (norm.isEmpty()) continue;
 
-        upsertArtist.bindValue(0, display);
-        upsertArtist.bindValue(1, norm);
-        if (!upsertArtist.exec()) return false;
+        qint64 artistId = artistIdCache ? artistIdCache->value(norm, 0) : 0;
+        if (artistId <= 0) {
+            upsertArtist.bindValue(0, display);
+            upsertArtist.bindValue(1, norm);
+            if (!upsertArtist.exec()) return false;
 
-        findArtistId.bindValue(0, norm);
-        if (!findArtistId.exec() || !findArtistId.next()) return false;
-        const qint64 artistId = findArtistId.value(0).toLongLong();
-        findArtistId.finish();
+            findArtistId.bindValue(0, norm);
+            if (!findArtistId.exec() || !findArtistId.next()) return false;
+            artistId = findArtistId.value(0).toLongLong();
+            findArtistId.finish();
+            if (artistIdCache && artistId > 0) artistIdCache->insert(norm, artistId);
+        }
 
         linkTrackArtist.bindValue(0, trackId);
         linkTrackArtist.bindValue(1, artistId);
@@ -249,71 +289,81 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
 
     const QByteArray pathBytes = filePath.toUtf8();
     TagLib::FileRef f(pathBytes.constData());
+    if (f.isNull()) return false;
 
-    QString title  = info.fileName();
+    QString title  = info.completeBaseName().isEmpty() ? info.fileName() : info.completeBaseName();
     QString artist = QStringLiteral("Unknown Artist");
     QString album  = QStringLiteral("Unknown Album");
     QString albumArtistTag;
     QString techInfo;
     int duration = 0;
     int trackNo  = 0;
+    int discNo   = 0;
 
-    if (!f.isNull()) {
-        if (auto *tag = f.tag()) {
-            const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true));
-            const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true));
-            const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true));
-            if (!tTitle.isEmpty())  title  = tTitle;
-            if (!tArtist.isEmpty()) artist = tArtist;
-            if (!tAlbum.isEmpty())  album  = tAlbum;
-            trackNo = tag->track();
+    if (auto *tag = f.tag()) {
+        const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true)).trimmed();
+        const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true)).trimmed();
+        const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true)).trimmed();
+        if (!tTitle.isEmpty())  title  = tTitle;
+        if (!tArtist.isEmpty()) artist = tArtist;
+        if (!tAlbum.isEmpty())  album  = tAlbum;
+        trackNo = tag->track();
+    }
+    if (auto *file = f.file()) {
+        const TagLib::PropertyMap props = file->properties();
+        const auto pickProp = [&props](const char *key) -> QString {
+            const auto it = props.find(key);
+            if (it == props.end() || it->second.isEmpty()) return {};
+            return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
+        };
+        albumArtistTag = pickProp("ALBUMARTIST");
+        if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
+        if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
+
+        QString discRaw = pickProp("DISCNUMBER");
+        if (discRaw.isEmpty()) discRaw = pickProp("DISCNUM");
+        if (discRaw.isEmpty()) discRaw = pickProp("DISC");
+        if (discRaw.isEmpty()) discRaw = pickProp("TPOS");
+        discNo = parseLeadingInt(discRaw);
+
+        if (trackNo <= 0) {
+            trackNo = parseLeadingInt(pickProp("TRACKNUMBER"));
         }
-        if (auto *file = f.file()) {
-            const TagLib::PropertyMap props = file->properties();
-            const auto pickProp = [&props](const char *key) -> QString {
-                const auto it = props.find(key);
-                if (it == props.end() || it->second.isEmpty()) return {};
-                return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
-            };
-            albumArtistTag = pickProp("ALBUMARTIST");
-            if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
-            if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
-        }
-        if (auto *audio = f.audioProperties()) {
-            duration = audio->lengthInSeconds();
-            int bitDepth = 0;
-            QString formatLabel;
-            if (auto *p = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
+    }
+    if (auto *audio = f.audioProperties()) {
+        duration = audio->lengthInSeconds();
+        int bitDepth = 0;
+        QString formatLabel;
+        if (auto *p = dynamic_cast<TagLib::FLAC::Properties*>(audio)) {
+            bitDepth = p->bitsPerSample();
+            formatLabel = QStringLiteral("FLAC");
+        } else if (auto *p = dynamic_cast<TagLib::RIFF::WAV::Properties*>(audio)) {
+            bitDepth = p->bitsPerSample();
+            formatLabel = QStringLiteral("WAV");
+        } else if (auto *p = dynamic_cast<TagLib::RIFF::AIFF::Properties*>(audio)) {
+            bitDepth = p->bitsPerSample();
+            formatLabel = QStringLiteral("AIFF");
+        } else if (auto *p = dynamic_cast<TagLib::MP4::Properties*>(audio)) {
+            if (p->codec() == TagLib::MP4::Properties::ALAC) {
                 bitDepth = p->bitsPerSample();
-                formatLabel = QStringLiteral("FLAC");
-            } else if (auto *p = dynamic_cast<TagLib::RIFF::WAV::Properties*>(audio)) {
-                bitDepth = p->bitsPerSample();
-                formatLabel = QStringLiteral("WAV");
-            } else if (auto *p = dynamic_cast<TagLib::RIFF::AIFF::Properties*>(audio)) {
-                bitDepth = p->bitsPerSample();
-                formatLabel = QStringLiteral("AIFF");
-            } else if (auto *p = dynamic_cast<TagLib::MP4::Properties*>(audio)) {
-                if (p->codec() == TagLib::MP4::Properties::ALAC) {
-                    bitDepth = p->bitsPerSample();
-                    formatLabel = QStringLiteral("ALAC");
-                } else {
-                    formatLabel = QStringLiteral("M4A");
-                }
-            } else if (auto *p = dynamic_cast<TagLib::APE::Properties*>(audio)) {
-                bitDepth = p->bitsPerSample();
-                formatLabel = QStringLiteral("APE");
-            } else if (dynamic_cast<TagLib::MPEG::Properties*>(audio)) {
-                formatLabel = QStringLiteral("MP3");
-            } else if (dynamic_cast<TagLib::Ogg::Vorbis::Properties*>(audio)) {
-                formatLabel = QStringLiteral("OGG");
-            } else if (dynamic_cast<TagLib::Ogg::Opus::Properties*>(audio)) {
-                formatLabel = QStringLiteral("Opus");
-            } else if (dynamic_cast<TagLib::ASF::Properties*>(audio)) {
-                formatLabel = QStringLiteral("WMA");
+                formatLabel = QStringLiteral("ALAC");
+            } else {
+                formatLabel = QStringLiteral("M4A");
             }
-            if (formatLabel.isEmpty()) formatLabel = fallbackFormatLabel(filePath);
-            techInfo = makeTechInfo(formatLabel, audio->sampleRate(), audio->bitrate(), bitDepth);
+        } else if (auto *p = dynamic_cast<TagLib::APE::Properties*>(audio)) {
+            bitDepth = p->bitsPerSample();
+            formatLabel = QStringLiteral("APE");
+        } else if (dynamic_cast<TagLib::MPEG::Properties*>(audio)) {
+            formatLabel = QStringLiteral("MP3");
+        } else if (dynamic_cast<TagLib::Ogg::Vorbis::Properties*>(audio)) {
+            formatLabel = QStringLiteral("OGG");
+        } else if (dynamic_cast<TagLib::Ogg::Opus::Properties*>(audio)) {
+            formatLabel = QStringLiteral("Opus");
+        } else if (dynamic_cast<TagLib::ASF::Properties*>(audio)) {
+            formatLabel = QStringLiteral("WMA");
         }
+        if (formatLabel.isEmpty()) formatLabel = fallbackFormatLabel(filePath);
+        techInfo = makeTechInfo(formatLabel, audio->sampleRate(), audio->bitrate(), bitDepth);
     }
 
     t.path        = filePath;
@@ -324,6 +374,7 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
     t.duration    = duration;
     t.techInfo    = techInfo;
     t.trackNo     = trackNo;
+    t.discNo      = discNo;
     return true;
 }
 
@@ -371,8 +422,30 @@ void LibraryScanner::run() {
         return;
     }
 
+    struct DbFileState {
+        qint64 size = 0;
+        qint64 mtime = 0;
+    };
+    QHash<QString, DbFileState> existingFiles;
+    {
+        const auto bounds = SqlUtils::pathPrefixBounds(QDir(m_rootPath).absolutePath());
+        QSqlQuery existingQuery(db);
+        existingQuery.prepare(QStringLiteral(
+            "SELECT path, file_size, file_mtime FROM tracks WHERE path >= ? AND path < ?"));
+        existingQuery.addBindValue(bounds.first);
+        existingQuery.addBindValue(bounds.second);
+        if (existingQuery.exec()) {
+            while (existingQuery.next()) {
+                existingFiles.insert(existingQuery.value(0).toString(),
+                                     DbFileState{existingQuery.value(1).toLongLong(),
+                                                 existingQuery.value(2).toLongLong()});
+            }
+        }
+    }
+
     QList<Track> newTracks;
     bool dbFailed = false;
+    bool anyChanged = false;
     int processed = 0;
     while (processed < allFiles.size() &&
            !QThread::currentThread()->isInterruptionRequested()) {
@@ -386,15 +459,28 @@ void LibraryScanner::run() {
         batchTimer.start();
         while (processed < allFiles.size() && prepared.size() < kBatchSize) {
             if (QThread::currentThread()->isInterruptionRequested()) break;
-            PreparedTrack item;
-            if (MusicLibrary::readTrackFromFile(allFiles.at(processed), item.track,
-                                                item.fileSize, item.modifiedTime)) {
-                prepared.append(item);
+            const QString &filePath = allFiles.at(processed);
+            const QFileInfo info(filePath);
+            if (info.exists() && info.isFile()) {
+                const qint64 diskSize = info.size();
+                const qint64 diskMtime = info.lastModified().toMSecsSinceEpoch();
+                const auto existingIt = existingFiles.constFind(filePath);
+                const bool unchanged = existingIt != existingFiles.constEnd() &&
+                                       existingIt->size == diskSize &&
+                                       existingIt->mtime == diskMtime &&
+                                       diskMtime > 0;
+                if (!unchanged) {
+                    PreparedTrack item;
+                    if (MusicLibrary::readTrackFromFile(filePath, item.track,
+                                                        item.fileSize, item.modifiedTime)) {
+                        prepared.append(item);
+                    }
+                }
             }
             ++processed;
             if (processed % kProgressEveryN == 0 || processed == allFiles.size())
                 emit progress(processed, allFiles.size());
-            if (batchTimer.elapsed() >= kBatchMaxMs) break;
+            if (!prepared.isEmpty() && batchTimer.elapsed() >= kBatchMaxMs) break;
         }
         if (QThread::currentThread()->isInterruptionRequested()) break;
         if (prepared.isEmpty()) continue;
@@ -405,6 +491,7 @@ void LibraryScanner::run() {
             break;
         }
         ScannerHelpers::TrackInserter inserter(db);
+        bool batchChanged = false;
         for (const PreparedTrack &item : std::as_const(prepared)) {
             if (QThread::currentThread()->isInterruptionRequested()) {
                 dbFailed = true;
@@ -414,8 +501,7 @@ void LibraryScanner::run() {
             if (!current.exists() || !current.isFile() ||
                 current.size() != item.fileSize ||
                 current.lastModified().toMSecsSinceEpoch() != item.modifiedTime) {
-                dbFailed = true;
-                break;
+                continue;
             }
             const auto writeResult = inserter.upsert(
                 item.track, item.fileSize, item.modifiedTime);
@@ -425,6 +511,7 @@ void LibraryScanner::run() {
                 dbFailed = true;
                 break;
             }
+            batchChanged = true;
         }
         if (dbFailed) {
             db.rollback();
@@ -434,14 +521,25 @@ void LibraryScanner::run() {
             db.rollback();
             break;
         }
-        MusicLibrary::pruneOrphanArtists(db);
         if (!db.commit()) {
             db.rollback();
             dbFailed = true;
             break;
         }
-        emit batchReady();
+        if (batchChanged) {
+            anyChanged = true;
+            emit batchReady();
+        }
     }
+
+    if (!dbFailed && !QThread::currentThread()->isInterruptionRequested() && anyChanged) {
+        QSqlQuery begin(db);
+        if (begin.exec(QStringLiteral("BEGIN IMMEDIATE"))) {
+            MusicLibrary::pruneOrphanArtists(db);
+            db.commit();
+        }
+    }
+
     LibraryDb::closeScopedConnection(connName, db);
 
     const bool success = !QThread::currentThread()->isInterruptionRequested() && !dbFailed;

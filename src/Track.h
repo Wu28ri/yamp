@@ -13,6 +13,7 @@ struct Track {
     Q_PROPERTY(int     duration    MEMBER duration)
     Q_PROPERTY(QString techInfo    MEMBER techInfo)
     Q_PROPERTY(int     trackNo     MEMBER trackNo)
+    Q_PROPERTY(int     discNo      MEMBER discNo)
 
 public:
     QString path;
@@ -23,6 +24,7 @@ public:
     int duration = 0;
     QString techInfo;
     int trackNo = 0;
+    int discNo = 0;
 
     bool isValid() const { return !path.isEmpty(); }
 };

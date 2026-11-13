@@ -40,12 +40,12 @@ struct FileState {
 using FileStates = QHash<QString, FileState>;
 
 bool loadDbFilesUnder(QSqlDatabase &db, const QString &root, FileStates &out) {
-    QString prefix = root;
-    if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
+    const auto bounds = SqlUtils::pathPrefixBounds(root);
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
-        "SELECT path, file_size, file_mtime FROM tracks WHERE path LIKE ? ESCAPE '\\'"));
-    q.addBindValue(SqlUtils::prefixPattern(prefix));
+        "SELECT path, file_size, file_mtime FROM tracks WHERE path >= ? AND path < ?"));
+    q.addBindValue(bounds.first);
+    q.addBindValue(bounds.second);
     if (!q.exec()) return false;
     while (q.next()) {
         out.insert(q.value(0).toString(),
@@ -374,7 +374,10 @@ void LibraryWatcher::onDirectoryChanged(const QString &dir) {
         m_pendingDirs.insert(dir);
     } else {
         for (const QString &root : m_roots) {
-            if (isWithin(dir, root)) m_pendingDirs.insert(root);
+            if (isWithin(dir, root)) {
+                m_pendingDirs.insert(dir);
+                break;
+            }
         }
     }
     m_debounce->start();
@@ -515,9 +518,13 @@ QStringList LibraryWatcher::watchDirectories(const QStringList &paths) {
     }
     if (!filtered.isEmpty()) {
         const QStringList failed = m_watcher->addPaths(filtered);
-        if (!failed.isEmpty())
+        if (!failed.isEmpty()) {
             qWarning() << "[LibraryWatcher] could not watch directories" << failed;
-        for (const QString &path : failed) filtered.removeAll(path);
+            const QSet<QString> failedSet(failed.begin(), failed.end());
+            filtered.removeIf([&failedSet](const QString &path) {
+                return failedSet.contains(path);
+            });
+        }
     }
     return filtered;
 }

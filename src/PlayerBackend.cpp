@@ -72,6 +72,7 @@ Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
     t.techInfo    = q.value(offset + 5).toString();
     t.trackNo     = q.value(offset + 6).toInt();
     t.albumArtist = q.value(offset + 7).toString();
+    t.discNo      = q.value(offset + 8).toInt();
     return t;
 }
 
@@ -244,7 +245,7 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_trackModel = new TrackModel(this);
     m_trackModel->setTable(QStringLiteral("tracks"));
     m_trackModel->setEditStrategy(QSqlTableModel::OnManualSubmit);
-    m_trackModel->setSort(m_trackModel->columnFor(m_sortColumn), m_sortOrder);
+    m_trackModel->setSortSpec(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 
     m_albumModel = new AlbumModel(this);
@@ -986,10 +987,10 @@ void PlayerBackend::togglePlayback() {
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
     QList<Track> out;
     QString sql = QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist "
+        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist, disc_no "
         "FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
-    sql += QStringLiteral(" ORDER BY ") + (orderBy.isEmpty() ? QStringLiteral("id") : orderBy);
+    sql += QStringLiteral(" ORDER BY ") + (orderBy.isEmpty() ? QStringLiteral("id ASC") : orderBy);
 
     QSqlQuery q;
     q.setForwardOnly(true);
@@ -1000,11 +1001,9 @@ QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QStrin
 
 void PlayerBackend::rebuildQueueFromCurrentFilter() {
     const QString currentPath = m_currentPath;
-    QString orderBy;
-    if (!m_sortColumn.isEmpty()) {
-        orderBy = m_sortColumn + (m_sortOrder == Qt::AscendingOrder
-                                  ? QStringLiteral(" ASC") : QStringLiteral(" DESC"));
-    }
+    const QString orderBy = TrackModel::orderColumnsClause(
+        m_sortColumn.isEmpty() ? QStringLiteral("id") : m_sortColumn,
+        m_sortOrder);
     m_queue.setTracks(queryTracks(m_categoryFilter, orderBy));
     if (!currentPath.isEmpty() && m_queue.containsPath(currentPath))
         m_queue.setIndexByPath(currentPath);
@@ -1263,7 +1262,7 @@ QString PlayerBackend::combinedFilter() const {
 
 void PlayerBackend::applyFilter() {
     m_trackModel->setFilter(combinedFilter());
-    m_trackModel->setSort(m_trackModel->columnFor(m_sortColumn), m_sortOrder);
+    m_trackModel->setSortSpec(m_sortColumn, m_sortOrder);
     m_trackModel->select();
 }
 
@@ -1279,9 +1278,9 @@ void PlayerBackend::setCategoryFilter(const QString &filter, const QString &sort
 void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
     QString filter;
     if (!albumName.isEmpty()) {
-        filter = QStringLiteral("album = %1").arg(SqlUtils::quote(albumName));
+        filter = QStringLiteral("album = %1 COLLATE NOCASE").arg(SqlUtils::quote(albumName));
         if (!artistName.isEmpty()) {
-            filter += QStringLiteral(" AND COALESCE(NULLIF(album_artist, ''), artist) = %1")
+            filter += QStringLiteral(" AND COALESCE(NULLIF(album_artist, ''), artist) = %1 COLLATE NOCASE")
                 .arg(SqlUtils::quote(artistName));
         }
     }
@@ -1291,7 +1290,9 @@ void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artis
 void PlayerBackend::filterByArtist(const QString &artistName) {
     QString filter;
     if (!artistName.isEmpty()) {
-        const QString norm = MusicLibrary::normalizeArtistName(artistName);
+        const QStringList split = MusicLibrary::splitArtists(artistName);
+        const QString target = split.isEmpty() ? artistName : split.first();
+        const QString norm = MusicLibrary::normalizeArtistName(target);
         filter = QStringLiteral(
             "id IN (SELECT track_id FROM track_artists ta "
             "JOIN artists a ON a.id = ta.artist_id "
@@ -1303,9 +1304,8 @@ void PlayerBackend::filterByArtist(const QString &artistName) {
 void PlayerBackend::searchTracks(const QString &query) {
     QString newFilter;
     if (!query.isEmpty()) {
-        newFilter = QStringLiteral("%1 LIKE %2 ESCAPE '\\'")
-            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("search_text")),
-                 SqlUtils::containsPattern(SqlUtils::normalizeSearch(query)));
+        newFilter = QStringLiteral("search_text LIKE %1 ESCAPE '\\'")
+            .arg(SqlUtils::containsPattern(SqlUtils::normalizeSearch(query)));
     }
     if (newFilter == m_searchFilter) return;
     m_searchFilter = newFilter;
@@ -1324,7 +1324,7 @@ void PlayerBackend::sortTracks(const QString &columnName, bool ascending) {
     if (!isValidSortColumn(columnName)) return;
     m_sortColumn = columnName;
     m_sortOrder  = ascending ? Qt::AscendingOrder : Qt::DescendingOrder;
-    m_trackModel->setSort(m_trackModel->columnFor(m_sortColumn), m_sortOrder);
+    m_trackModel->setSortSpec(m_sortColumn, m_sortOrder);
     m_trackModel->select();
     if (m_queue.isShuffle()) {
         m_queueBuiltFromSort = m_sortColumn;
@@ -1339,14 +1339,13 @@ int PlayerBackend::getRowForPath(const QString &path) {
     if (path.isEmpty()) return -1;
 
     const QString colName = m_sortColumn.isEmpty() ? QStringLiteral("id") : m_sortColumn;
-    const QString order   = m_sortOrder == Qt::AscendingOrder
-                              ? QStringLiteral("ASC") : QStringLiteral("DESC");
+    const QString orderCols = TrackModel::orderColumnsClause(colName, m_sortOrder);
     const QString filter  = combinedFilter();
 
     QString sql = QStringLiteral(
         "WITH ranked AS (SELECT path, "
-        "ROW_NUMBER() OVER (ORDER BY %1 %2, id ASC) - 1 AS rn "
-        "FROM tracks").arg(colName, order);
+        "ROW_NUMBER() OVER (ORDER BY %1) - 1 AS rn "
+        "FROM tracks").arg(orderCols);
     if (!filter.isEmpty()) sql += QStringLiteral(" WHERE ") + filter;
     sql += QStringLiteral(") SELECT rn FROM ranked WHERE path = ?");
 
@@ -1360,7 +1359,7 @@ int PlayerBackend::getRowForPath(const QString &path) {
 void PlayerBackend::addPlayNext(const QString &path) {
     QSqlQuery q;
     q.prepare(QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist "
+        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist, disc_no "
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
     if (!q.exec() || !q.next()) return;
@@ -1373,16 +1372,39 @@ QVariantMap PlayerBackend::trackContextForPath(const QString &path) {
 
     QSqlQuery q;
     q.prepare(QStringLiteral(
-        "SELECT album, "
+        "SELECT id, album, "
         "COALESCE(NULLIF(album_artist, ''), artist) AS album_artist, "
         "artist "
         "FROM tracks WHERE path = ?"));
     q.addBindValue(path);
     if (!q.exec() || !q.next()) return result;
 
-    result[QStringLiteral("album")]       = q.value(0).toString();
-    result[QStringLiteral("albumArtist")] = q.value(1).toString();
-    result[QStringLiteral("artist")]      = q.value(2).toString();
+    const qint64 trackId  = q.value(0).toLongLong();
+    const QString album   = q.value(1).toString();
+    const QString albArt  = q.value(2).toString();
+    const QString rawArt  = q.value(3).toString();
+
+    QString primaryArtist;
+    const QStringList split = MusicLibrary::splitArtists(rawArt);
+    if (!split.isEmpty()) {
+        QSqlQuery aq;
+        aq.prepare(QStringLiteral(
+            "SELECT a.name FROM artists a "
+            "JOIN track_artists ta ON ta.artist_id = a.id "
+            "WHERE ta.track_id = ? AND a.name_norm = ? LIMIT 1"));
+        aq.addBindValue(trackId);
+        aq.addBindValue(MusicLibrary::normalizeArtistName(split.first()));
+        if (aq.exec() && aq.next()) {
+            primaryArtist = aq.value(0).toString();
+        } else {
+            primaryArtist = split.first();
+        }
+    }
+    if (primaryArtist.isEmpty()) primaryArtist = rawArt;
+
+    result[QStringLiteral("album")]       = album;
+    result[QStringLiteral("albumArtist")] = albArt;
+    result[QStringLiteral("artist")]      = primaryArtist;
     return result;
 }
 
@@ -1579,21 +1601,25 @@ void PlayerBackend::removeFolderFromDatabase(const QString &clean) {
         QSqlQuery del(db);
         if (removeTracks) {
             QString sql = QStringLiteral(
-                "DELETE FROM tracks WHERE (path = ? OR path LIKE ? ESCAPE '\\')");
+                "DELETE FROM tracks WHERE (path = ? OR (path >= ? AND path < ?))");
             QStringList descendants;
             for (const QString &root : roots) {
                 if (root.startsWith(clean + QLatin1Char('/'))) {
                     sql += QStringLiteral(
-                        " AND NOT (path = ? OR path LIKE ? ESCAPE '\\')");
+                        " AND NOT (path = ? OR (path >= ? AND path < ?))");
                     descendants.append(root);
                 }
             }
             del.prepare(sql);
+            const auto cleanBounds = SqlUtils::pathPrefixBounds(clean);
             del.addBindValue(clean);
-            del.addBindValue(SqlUtils::prefixPattern(clean + QLatin1Char('/')));
+            del.addBindValue(cleanBounds.first);
+            del.addBindValue(cleanBounds.second);
             for (const QString &root : descendants) {
+                const auto rootBounds = SqlUtils::pathPrefixBounds(root);
                 del.addBindValue(root);
-                del.addBindValue(SqlUtils::prefixPattern(root + QLatin1Char('/')));
+                del.addBindValue(rootBounds.first);
+                del.addBindValue(rootBounds.second);
             }
         }
         QSqlQuery delRoot(db);

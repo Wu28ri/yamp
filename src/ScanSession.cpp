@@ -8,10 +8,17 @@ ScanSession::ScanSession(const QString &path, QObject *parent)
     : QObject(parent), m_rootPath(path) {}
 
 ScanSession::~ScanSession() {
-    if (m_thread && m_thread->isRunning()) {
-        m_thread->requestInterruption();
-        m_thread->quit();
-        m_thread->wait();
+    if (m_thread) {
+        disconnect(m_thread, nullptr, this, nullptr);
+        if (m_thread->isRunning()) {
+            m_thread->requestInterruption();
+            m_thread->quit();
+            m_thread->wait();
+        }
+        delete m_scanner;
+        m_scanner = nullptr;
+        delete m_thread;
+        m_thread = nullptr;
     }
 }
 
@@ -46,8 +53,9 @@ void ScanSession::start() {
         emit finished(m_rootPath, newTracks, success);
         m_thread->quit();
     });
-    connect(m_thread, &QThread::finished, m_scanner, &QObject::deleteLater);
     connect(m_thread, &QThread::finished, this, [this]() {
+        delete m_scanner;
+        m_scanner = nullptr;
         QThread *t = m_thread;
         m_thread = nullptr;
         if (t) t->deleteLater();

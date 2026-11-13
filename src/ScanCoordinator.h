@@ -16,7 +16,7 @@ class ScanCoordinator : public QObject {
 public:
     explicit ScanCoordinator(LibraryWatcher *watcher, QObject *parent = nullptr);
 
-    bool active() const { return !m_progresses.isEmpty(); }
+    bool active() const { return m_activeCached; }
     int  progress() const { return m_progressCached; }
     int  total() const { return m_totalCached; }
     QSet<QString> activeRoots() const;

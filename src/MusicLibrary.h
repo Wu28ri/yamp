@@ -2,6 +2,7 @@
 
 #include "Track.h"
 
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QSqlDatabase>
@@ -39,7 +40,8 @@ bool linkTrackToArtistsPrepared(qint64 trackId,
                                 const QString &rawArtists,
                                 QSqlQuery &upsertArtist,
                                 QSqlQuery &findArtistId,
-                                QSqlQuery &linkTrackArtist);
+                                QSqlQuery &linkTrackArtist,
+                                QHash<QString, qint64> *artistIdCache = nullptr);
 
 bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
                        qint64 &modifiedTime);

@@ -2,8 +2,10 @@
 
 #include "Track.h"
 
+#include <QHash>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+#include <QString>
 
 namespace ScannerHelpers {
 
@@ -22,6 +24,7 @@ private:
     QSqlQuery m_upsertArtist;
     QSqlQuery m_findArtistId;
     QSqlQuery m_linkTrackArtist;
+    QHash<QString, qint64> m_artistIdCache;
 };
 
 }

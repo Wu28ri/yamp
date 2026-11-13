@@ -2,6 +2,7 @@
 
 #include <QLatin1Char>
 #include <QLatin1String>
+#include <QPair>
 #include <QString>
 
 namespace SqlUtils {
@@ -48,8 +49,12 @@ inline QString normalizedSearchExpression(const QString &expression) {
         .arg(out);
 }
 
-inline QString prefixPattern(const QString &prefix) {
-    return escapeLike(prefix) + QLatin1Char('%');
+inline QPair<QString, QString> pathPrefixBounds(const QString &dirPath) {
+    QString lower = dirPath;
+    if (!lower.endsWith(QLatin1Char('/'))) lower += QLatin1Char('/');
+    QString upper = lower;
+    upper[upper.size() - 1] = QChar(QLatin1Char('/').unicode() + 1);
+    return {lower, upper};
 }
 
 }

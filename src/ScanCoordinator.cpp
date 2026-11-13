@@ -67,6 +67,7 @@ void ScanCoordinator::cancelAll() {
     for (auto it = m_startGenerations.begin(); it != m_startGenerations.end(); ++it)
         ++it.value();
     for (ScanSession *session : m_progresses.keys()) session->cancel();
+    recomputeTotals();
 }
 
 void ScanCoordinator::cancelRoot(const QString &folderPath) {
@@ -79,16 +80,19 @@ void ScanCoordinator::cancelRoot(const QString &folderPath) {
         const QString sessionRoot = QDir(session->rootPath()).absolutePath();
         if (sessionRoot == root || sessionRoot.startsWith(prefix)) session->cancel();
     }
+    recomputeTotals();
 }
 
 void ScanCoordinator::recomputeTotals() {
     int progress = 0;
     int total    = 0;
+    bool isActive = false;
     for (auto it = m_progresses.cbegin(); it != m_progresses.cend(); ++it) {
+        if (it.key()->cancelled()) continue;
+        isActive = true;
         progress += it.value().first;
         total    += it.value().second;
     }
-    const bool isActive = active();
     if (progress == m_progressCached && total == m_totalCached &&
         isActive == m_activeCached) return;
     m_progressCached = progress;

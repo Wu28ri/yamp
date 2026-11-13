@@ -10,6 +10,42 @@ void TrackModel::setTable(const QString &tableName) {
     rebuildColumnCache();
 }
 
+void TrackModel::setSortSpec(const QString &columnName, Qt::SortOrder order) {
+    m_sortColumnName = columnName;
+    m_sortOrder = order;
+    QSqlTableModel::setSort(columnFor(columnName), order);
+}
+
+QString TrackModel::orderColumnsClause(const QString &columnName, Qt::SortOrder order) {
+    const QString dir = (order == Qt::AscendingOrder)
+                            ? QStringLiteral("ASC")
+                            : QStringLiteral("DESC");
+    if (columnName == QLatin1String("track_no")) {
+        return QStringLiteral("disc_no %1, track_no %1, title COLLATE NOCASE ASC, id ASC").arg(dir);
+    }
+    if (columnName == QLatin1String("album")) {
+        return QStringLiteral("album COLLATE NOCASE %1, disc_no ASC, track_no ASC, title COLLATE NOCASE ASC, id ASC").arg(dir);
+    }
+    if (columnName == QLatin1String("artist")) {
+        return QStringLiteral("artist COLLATE NOCASE %1, album COLLATE NOCASE ASC, disc_no ASC, track_no ASC, id ASC").arg(dir);
+    }
+    if (columnName == QLatin1String("duration")) {
+        return QStringLiteral("duration %1, title COLLATE NOCASE ASC, id ASC").arg(dir);
+    }
+    if (columnName == QLatin1String("title")) {
+        return QStringLiteral("title COLLATE NOCASE %1, id ASC").arg(dir);
+    }
+    return QStringLiteral("id %1").arg(dir);
+}
+
+QString TrackModel::orderSqlClause(const QString &columnName, Qt::SortOrder order) {
+    return QStringLiteral("ORDER BY ") + orderColumnsClause(columnName, order);
+}
+
+QString TrackModel::orderByClause() const {
+    return orderSqlClause(m_sortColumnName, m_sortOrder);
+}
+
 void TrackModel::rebuildColumnCache() {
     m_columnIndex.clear();
     const QSqlRecord rec = record();
@@ -29,6 +65,8 @@ int TrackModel::columnFromRole(int role) const {
     case AlbumRole:    return columnFor(QStringLiteral("album"));
     case PathRole:     return columnFor(QStringLiteral("path"));
     case DurationRole: return columnFor(QStringLiteral("duration"));
+    case TrackNoRole:  return columnFor(QStringLiteral("track_no"));
+    case DiscNoRole:   return columnFor(QStringLiteral("disc_no"));
     default:           return -1;
     }
 }
@@ -47,6 +85,8 @@ QHash<int, QByteArray> TrackModel::roleNames() const {
         {AlbumRole,    "album"},
         {PathRole,     "path"},
         {DurationRole, "duration"},
+        {TrackNoRole,  "trackNo"},
+        {DiscNoRole,   "discNo"},
     };
 }
 
