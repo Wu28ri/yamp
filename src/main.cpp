@@ -6,12 +6,16 @@
 #include "Settings.h"
 
 #include <QApplication>
+#include <QDir>
 #include <QIcon>
 #include <QNetworkProxyFactory>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QUrl>
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusMessage>
 
 #ifndef YAMP_VERSION
 #define YAMP_VERSION "0.2"
@@ -35,9 +39,65 @@ int main(int argc, char *argv[]) {
     QGuiApplication::setDesktopFileName(QStringLiteral("yamp"));
     QGuiApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("yamp")));
 
+    QList<QUrl> cliUrls;
+    QStringList cliUrlStrings;
+    const QStringList args = QCoreApplication::arguments();
+    for (int i = 1; i < args.size(); ++i) {
+        const QString &arg = args.at(i);
+        if (arg.startsWith(QLatin1Char('-'))) continue;
+        const QUrl url = QUrl::fromUserInput(arg, QDir::currentPath(), QUrl::AssumeLocalFile);
+        if (url.isValid()) {
+            cliUrls.append(url);
+            cliUrlStrings.append(url.toString());
+        }
+    }
+
+    {
+        QDBusConnection bus = QDBusConnection::sessionBus();
+        if (bus.isConnected() && !bus.registerService(QStringLiteral("org.mpris.MediaPlayer2.yamp"))) {
+            if (!cliUrlStrings.isEmpty()) {
+                QDBusMessage openMsg = QDBusMessage::createMethodCall(
+                    QStringLiteral("org.mpris.MediaPlayer2.yamp"),
+                    QStringLiteral("/org/mpris/MediaPlayer2"),
+                    QStringLiteral("org.yamp.Instance"),
+                    QStringLiteral("OpenUrls"));
+                openMsg << cliUrlStrings;
+                const QDBusMessage reply = bus.call(openMsg, QDBus::Block, 2000);
+                if (reply.type() == QDBusMessage::ErrorMessage) {
+                    for (const QString &u : std::as_const(cliUrlStrings)) {
+                        QDBusMessage uriMsg = QDBusMessage::createMethodCall(
+                            QStringLiteral("org.mpris.MediaPlayer2.yamp"),
+                            QStringLiteral("/org/mpris/MediaPlayer2"),
+                            QStringLiteral("org.mpris.MediaPlayer2.Player"),
+                            QStringLiteral("OpenUri"));
+                        uriMsg << u;
+                        bus.call(uriMsg, QDBus::Block, 1000);
+                    }
+                    QDBusMessage raiseMsg = QDBusMessage::createMethodCall(
+                        QStringLiteral("org.mpris.MediaPlayer2.yamp"),
+                        QStringLiteral("/org/mpris/MediaPlayer2"),
+                        QStringLiteral("org.mpris.MediaPlayer2"),
+                        QStringLiteral("Raise"));
+                    bus.call(raiseMsg, QDBus::Block, 1000);
+                }
+            } else {
+                QDBusMessage raiseMsg = QDBusMessage::createMethodCall(
+                    QStringLiteral("org.mpris.MediaPlayer2.yamp"),
+                    QStringLiteral("/org/mpris/MediaPlayer2"),
+                    QStringLiteral("org.mpris.MediaPlayer2"),
+                    QStringLiteral("Raise"));
+                bus.call(raiseMsg, QDBus::Block, 2000);
+            }
+            return 0;
+        }
+    }
+
     QQuickWindow::setTextRenderType(QQuickWindow::QtTextRendering);
 
     PlayerBackend backend;
+    if (!cliUrls.isEmpty()) {
+        backend.setStartupUrls(cliUrls);
+    }
     Settings      settings;
 
     auto *coverProvider  = new CoverImageProvider;

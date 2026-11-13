@@ -2,11 +2,12 @@
 Name=YAMP
 GenericName=Music Player
 Comment=yet another music player
-Exec=appyamp
+Exec=appyamp %U
 Icon=yamp
 Terminal=false
 Type=Application
 StartupNotify=true
 StartupWMClass=appyamp
 Categories=AudioVideo;Audio;Player;Qt;
+MimeType=audio/flac;audio/x-flac;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/ogg;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/aiff;audio/x-aiff;audio/x-ape;audio/x-wavpack;audio/x-musepack;audio/x-ms-wma;
 Keywords=music;audio;player;mpv;flac;alsa;

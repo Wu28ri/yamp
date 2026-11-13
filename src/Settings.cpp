@@ -132,6 +132,20 @@ void Settings::setQueuePanelOpen(bool open) {
     store(m_queuePanelOpen, open, "queuePanelOpen", &Settings::queuePanelOpenChanged);
 }
 
+void Settings::setWindowWidth(int w) {
+    if (w < 640) return;
+    store(m_windowWidth, w, "windowWidth", &Settings::windowWidthChanged);
+}
+
+void Settings::setWindowHeight(int h) {
+    if (h < 420) return;
+    store(m_windowHeight, h, "windowHeight", &Settings::windowHeightChanged);
+}
+
+void Settings::setWindowMaximized(bool maximized) {
+    store(m_windowMaximized, maximized, "windowMaximized", &Settings::windowMaximizedChanged);
+}
+
 void Settings::setCoverMaxEdge(int edge) {
     if (edge <= 0) return;
     store(m_coverMaxEdge, edge, "coverMaxEdge", &Settings::coverMaxEdgeChanged);
@@ -177,6 +191,10 @@ void Settings::setReplayGainPreampDb(qreal db) {
     store(m_rgPreampDb, clampPreamp(db), "replayGainPreampDb", &Settings::replayGainPreampDbChanged);
 }
 
+void Settings::setReplayGainFallbackDb(qreal db) {
+    store(m_rgFallbackDb, clampPreamp(db), "replayGainFallbackDb", &Settings::replayGainFallbackDbChanged);
+}
+
 void Settings::setReplayGainClipProtect(bool enabled) {
     store(m_rgClipProtect, enabled, "replayGainClipProtect", &Settings::replayGainClipProtectChanged);
 }
@@ -216,6 +234,9 @@ void Settings::loadSettings() {
     m_sidebarWidth        = loadPositiveInt("sidebarWidth",        250);
     m_queuePanelWidth     = loadPositiveInt("queuePanelWidth",     320);
     m_queuePanelOpen      = m_settings.value("queuePanelOpen",      false).toBool();
+    m_windowWidth         = qMax(640, loadPositiveInt("windowWidth",  1150));
+    m_windowHeight        = qMax(420, loadPositiveInt("windowHeight", 760));
+    m_windowMaximized     = m_settings.value("windowMaximized",     false).toBool();
     m_coverMaxEdge        = loadPositiveInt("coverMaxEdge",        384);
     m_coverSourceBudgetMb = loadPositiveInt("coverSourceBudgetMb", 48);
     m_coverScaledBudgetMb = loadPositiveInt("coverScaledBudgetMb", 16);
@@ -228,6 +249,7 @@ void Settings::loadSettings() {
     m_rgMode              = m_settings.value("replayGainMode",      RgModeTrack).toInt();
     if (m_rgMode != RgModeTrack && m_rgMode != RgModeAlbum) m_rgMode = RgModeTrack;
     m_rgPreampDb          = clampPreamp(m_settings.value("replayGainPreampDb", 0.0).toReal());
+    m_rgFallbackDb        = clampPreamp(m_settings.value("replayGainFallbackDb", 0.0).toReal());
     m_rgClipProtect       = m_settings.value("replayGainClipProtect", true).toBool();
     m_lastfmEnabled       = m_settings.value("lastfmEnabled",       false).toBool();
     m_lastfmArtistImages  = m_settings.value("lastfmArtistImages",  false).toBool();

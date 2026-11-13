@@ -69,21 +69,47 @@ void QueueModel::remove(int position) {
 }
 
 void QueueModel::insertTrack(const Track &track) {
-    const int insertIdx = m_queue->nextInsertionPosition();
+    if (!track.isValid()) return;
+    insertTracksNext({track});
+}
 
-    beginInsertRows({}, insertIdx, insertIdx);
-    m_queue->insertNext(track);
-    if (m_lastCurrentRow >= insertIdx) ++m_lastCurrentRow;
+void QueueModel::insertTracksNext(const QList<Track> &tracks) {
+    QList<Track> valid;
+    valid.reserve(tracks.size());
+    for (const Track &t : tracks) {
+        if (t.isValid()) valid.append(t);
+    }
+    if (valid.isEmpty()) return;
+
+    const int insertIdx = m_queue->nextInsertionPosition();
+    const int lastIdx = insertIdx + valid.size() - 1;
+
+    beginInsertRows({}, insertIdx, lastIdx);
+    m_queue->insertTracksNext(valid);
+    if (m_lastCurrentRow >= insertIdx) m_lastCurrentRow += valid.size();
     endInsertRows();
     notifyCurrentChanged();
     emit queueChanged();
 }
 
 void QueueModel::appendTrack(const Track &track) {
-    const int appendIdx = m_queue->count();
+    if (!track.isValid()) return;
+    appendTracks({track});
+}
 
-    beginInsertRows({}, appendIdx, appendIdx);
-    m_queue->appendTrack(track);
+void QueueModel::appendTracks(const QList<Track> &tracks) {
+    QList<Track> valid;
+    valid.reserve(tracks.size());
+    for (const Track &t : tracks) {
+        if (t.isValid()) valid.append(t);
+    }
+    if (valid.isEmpty()) return;
+
+    const int appendIdx = m_queue->count();
+    const int lastIdx = appendIdx + valid.size() - 1;
+
+    beginInsertRows({}, appendIdx, lastIdx);
+    m_queue->appendTracks(valid);
     endInsertRows();
     notifyCurrentChanged();
     emit queueChanged();

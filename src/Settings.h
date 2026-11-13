@@ -11,6 +11,9 @@ class Settings : public QObject {
     Q_PROPERTY(int     sidebarWidth      READ sidebarWidth      WRITE setSidebarWidth      NOTIFY sidebarWidthChanged)
     Q_PROPERTY(int     queuePanelWidth   READ queuePanelWidth   WRITE setQueuePanelWidth   NOTIFY queuePanelWidthChanged)
     Q_PROPERTY(bool    queuePanelOpen    READ queuePanelOpen    WRITE setQueuePanelOpen    NOTIFY queuePanelOpenChanged)
+    Q_PROPERTY(int     windowWidth       READ windowWidth       WRITE setWindowWidth       NOTIFY windowWidthChanged)
+    Q_PROPERTY(int     windowHeight      READ windowHeight      WRITE setWindowHeight      NOTIFY windowHeightChanged)
+    Q_PROPERTY(bool    windowMaximized   READ windowMaximized   WRITE setWindowMaximized   NOTIFY windowMaximizedChanged)
     Q_PROPERTY(int     coverMaxEdge        READ coverMaxEdge        WRITE setCoverMaxEdge        NOTIFY coverMaxEdgeChanged)
     Q_PROPERTY(int     coverSourceBudgetMb READ coverSourceBudgetMb WRITE setCoverSourceBudgetMb NOTIFY coverSourceBudgetMbChanged)
     Q_PROPERTY(int     coverScaledBudgetMb READ coverScaledBudgetMb WRITE setCoverScaledBudgetMb NOTIFY coverScaledBudgetMbChanged)
@@ -21,6 +24,7 @@ class Settings : public QObject {
     Q_PROPERTY(bool    replayGainEnabled READ replayGainEnabled WRITE setReplayGainEnabled NOTIFY replayGainEnabledChanged)
     Q_PROPERTY(int     replayGainMode    READ replayGainMode    WRITE setReplayGainMode    NOTIFY replayGainModeChanged)
     Q_PROPERTY(qreal   replayGainPreampDb    READ replayGainPreampDb    WRITE setReplayGainPreampDb    NOTIFY replayGainPreampDbChanged)
+    Q_PROPERTY(qreal   replayGainFallbackDb  READ replayGainFallbackDb  WRITE setReplayGainFallbackDb  NOTIFY replayGainFallbackDbChanged)
     Q_PROPERTY(bool    replayGainClipProtect READ replayGainClipProtect WRITE setReplayGainClipProtect NOTIFY replayGainClipProtectChanged)
 
 public:
@@ -40,6 +44,9 @@ public:
     int     sidebarWidth()        const { return m_sidebarWidth; }
     int     queuePanelWidth()     const { return m_queuePanelWidth; }
     bool    queuePanelOpen()      const { return m_queuePanelOpen; }
+    int     windowWidth()         const { return m_windowWidth; }
+    int     windowHeight()        const { return m_windowHeight; }
+    bool    windowMaximized()     const { return m_windowMaximized; }
     int     coverMaxEdge()        const { return m_coverMaxEdge; }
     int     coverSourceBudgetMb() const { return m_coverSourceBudgetMb; }
     int     coverScaledBudgetMb() const { return m_coverScaledBudgetMb; }
@@ -50,6 +57,7 @@ public:
     bool    replayGainEnabled()     const { return m_rgEnabled; }
     int     replayGainMode()        const { return m_rgMode; }
     qreal   replayGainPreampDb()    const { return m_rgPreampDb; }
+    qreal   replayGainFallbackDb()  const { return m_rgFallbackDb; }
     bool    replayGainClipProtect() const { return m_rgClipProtect; }
     bool    lastfmEnabled()         const { return m_lastfmEnabled; }
     bool    lastfmArtistImages()    const { return m_lastfmArtistImages; }
@@ -63,6 +71,9 @@ public:
     void setSidebarWidth(int w);
     void setQueuePanelWidth(int w);
     void setQueuePanelOpen(bool open);
+    void setWindowWidth(int w);
+    void setWindowHeight(int h);
+    void setWindowMaximized(bool maximized);
     void setCoverMaxEdge(int edge);
     void setCoverSourceBudgetMb(int mb);
     void setCoverScaledBudgetMb(int mb);
@@ -73,6 +84,7 @@ public:
     void setReplayGainEnabled(bool enabled);
     void setReplayGainMode(int mode);
     void setReplayGainPreampDb(qreal db);
+    void setReplayGainFallbackDb(qreal db);
     void setReplayGainClipProtect(bool enabled);
     void setLastfmEnabled(bool enabled);
     void setLastfmArtistImages(bool enabled);
@@ -97,6 +109,9 @@ signals:
     void sidebarWidthChanged();
     void queuePanelWidthChanged();
     void queuePanelOpenChanged();
+    void windowWidthChanged();
+    void windowHeightChanged();
+    void windowMaximizedChanged();
     void coverMaxEdgeChanged();
     void coverSourceBudgetMbChanged();
     void coverScaledBudgetMbChanged();
@@ -107,6 +122,7 @@ signals:
     void replayGainEnabledChanged();
     void replayGainModeChanged();
     void replayGainPreampDbChanged();
+    void replayGainFallbackDbChanged();
     void replayGainClipProtectChanged();
     void lastfmEnabledChanged();
     void lastfmArtistImagesChanged();
@@ -126,6 +142,9 @@ private:
     int     m_sidebarWidth        = 250;
     int     m_queuePanelWidth     = 320;
     bool    m_queuePanelOpen      = false;
+    int     m_windowWidth         = 1150;
+    int     m_windowHeight        = 760;
+    bool    m_windowMaximized     = false;
     int     m_coverMaxEdge        = 384;
     int     m_coverSourceBudgetMb = 48;
     int     m_coverScaledBudgetMb = 16;
@@ -136,6 +155,7 @@ private:
     bool    m_rgEnabled           = false;
     int     m_rgMode              = RgModeTrack;
     qreal   m_rgPreampDb          = 0.0;
+    qreal   m_rgFallbackDb        = 0.0;
     bool    m_rgClipProtect       = true;
     bool    m_lastfmEnabled       = false;
     bool    m_lastfmArtistImages  = false;

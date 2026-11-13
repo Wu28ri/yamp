@@ -34,7 +34,9 @@ public:
                       int currentIndex, int detachedPosition,
                       bool currentDetached, bool shuffle);
     void insertNext(const Track &track);
+    void insertTracksNext(const QList<Track> &tracks);
     void appendTrack(const Track &track);
+    void appendTracks(const QList<Track> &tracks);
     void removeTrack(int position);
     void clear(bool keepCurrentDetached = false);
     void retainPaths(const QSet<QString> &paths);

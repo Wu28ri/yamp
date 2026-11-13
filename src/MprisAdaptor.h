@@ -46,7 +46,9 @@ public:
             QStringLiteral("audio/x-ms-wma"),
             QStringLiteral("audio/aiff"),
             QStringLiteral("audio/x-aiff"),
-            QStringLiteral("audio/x-ape")
+            QStringLiteral("audio/x-ape"),
+            QStringLiteral("audio/x-wavpack"),
+            QStringLiteral("audio/x-musepack")
         };
     }
 
@@ -149,4 +151,17 @@ private:
     bool m_lastCanPlay       = false;
     bool m_lastCanPause      = false;
     bool m_lastCanSeek       = false;
+};
+
+class YampInstanceAdaptor : public QDBusAbstractAdaptor {
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.yamp.Instance")
+public:
+    explicit YampInstanceAdaptor(PlayerBackend *backend);
+
+public slots:
+    void OpenUrls(const QStringList &urls);
+
+private:
+    PlayerBackend *m_backend = nullptr;
 };

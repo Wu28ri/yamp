@@ -1,6 +1,7 @@
 #include "PlayerBackend.h"
 
 #include "AlsaDevicesService.h"
+#include "AudioFormats.h"
 #include "CoverCacheService.h"
 #include "LibraryDb.h"
 #include "LibraryWatcher.h"
@@ -10,8 +11,10 @@
 #include "ScanCoordinator.h"
 #include "SqlUtils.h"
 
+#include <QCollator>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -293,10 +296,14 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_queueSaveTimer->setSingleShot(true);
     m_queueSaveTimer->setInterval(800);
     connect(m_queueSaveTimer, &QTimer::timeout, this, &PlayerBackend::saveQueueStateAsync);
+    connect(m_queueModel, &QAbstractItemModel::modelReset, this, [this]() {
+        m_queueJsonCacheValid = false;
+    });
     connect(m_queueModel, &QueueModel::userModified, this, [this]() {
         m_queueManuallyModified = true;
     });
     connect(m_queueModel, &QueueModel::queueChanged, this, [this]() {
+        m_queueJsonCacheValid = false;
         scheduleQueueSave();
         syncQueueStats();
         emit currentQueuePositionChanged();
@@ -469,6 +476,10 @@ PlayerBackend::PlayerBackend(QObject *parent)
                 m_lastPositionMs = ms;
                 updateCurrentLyricIndex(ms);
                 emit positionChanged();
+                if (qAbs(ms - m_lastSavedPositionMs) >= 15000) {
+                    m_lastSavedPositionMs = ms;
+                    scheduleQueueSave();
+                }
             }
         }
     });
@@ -476,10 +487,15 @@ PlayerBackend::PlayerBackend(QObject *parent)
     m_libraryWatcher->start();
 
     QTimer::singleShot(0, this, [this]() {
+        const bool hasStartupUrls = !m_startupUrls.isEmpty();
         const bool restored = restoreQueueState();
         m_queueStateReady = true;
         if (!restored) rebuildQueueFromCurrentFilter();
         else scheduleQueueSave();
+        if (hasStartupUrls) {
+            const QList<QUrl> urls = std::exchange(m_startupUrls, {});
+            enqueueExternalUrls(urls, true, true);
+        }
         syncQueueStats();
         emit currentQueuePositionChanged();
     });
@@ -488,7 +504,13 @@ PlayerBackend::PlayerBackend(QObject *parent)
 PlayerBackend::~PlayerBackend() {
     m_ioPool.clear();
     m_ioPool.waitForDone();
-    if (m_queueStateReady && m_queueDirty) saveQueueState();
+    if (m_mpv && m_hasFile) {
+        double t = 0;
+        if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+            m_lastPositionMs = static_cast<qint64>(t * 1000.0);
+        }
+    }
+    if (m_queueStateReady) saveQueueState();
     shutdownMpv();
 }
 
@@ -533,6 +555,7 @@ void PlayerBackend::initMpv() {
     mpv_set_option_string(m_mpv, "gapless-audio",      "yes");
     mpv_set_option_string(m_mpv, "replaygain",         "no");
     mpv_set_option_string(m_mpv, "replaygain-preamp",  "0");
+    mpv_set_option_string(m_mpv, "replaygain-fallback","0");
     mpv_set_option_string(m_mpv, "replaygain-clip",    "no");
 
     if (mpv_initialize(m_mpv) < 0) {
@@ -762,6 +785,7 @@ void PlayerBackend::handleMpvEndFile(mpv_event_end_file *ev) {
 void PlayerBackend::setupMpris() {
     new MprisRootAdaptor(this);
     auto *mprisPlayer = new MprisPlayerAdaptor(this);
+    new YampInstanceAdaptor(this);
 
     QDBusConnection bus = QDBusConnection::sessionBus();
     if (!bus.registerObject(QStringLiteral("/org/mpris/MediaPlayer2"), this)) return;
@@ -1063,6 +1087,13 @@ void PlayerBackend::setReplayGainPreampDb(qreal db) {
     applyReplayGainSettings();
 }
 
+void PlayerBackend::setReplayGainFallbackDb(qreal db) {
+    db = qBound(Settings::kReplayGainPreampMinDb, db, Settings::kReplayGainPreampMaxDb);
+    if (qFuzzyCompare(m_rgFallbackDb + 100.0, db + 100.0)) return;
+    m_rgFallbackDb = db;
+    applyReplayGainSettings();
+}
+
 void PlayerBackend::setReplayGainClipProtect(bool enabled) {
     if (m_rgClipProtect == enabled) return;
     m_rgClipProtect = enabled;
@@ -1080,28 +1111,43 @@ void PlayerBackend::applyReplayGainSettings() {
     double preamp = m_rgPreampDb;
     mpv_set_property(m_mpv, "replaygain-preamp", MPV_FORMAT_DOUBLE, &preamp);
 
+    double fallback = m_rgEnabled ? m_rgFallbackDb : 0.0;
+    mpv_set_property(m_mpv, "replaygain-fallback", MPV_FORMAT_DOUBLE, &fallback);
+
     mpv_set_property_string(m_mpv, "replaygain-clip", m_rgClipProtect ? "no" : "yes");
 }
 
 qint64 PlayerBackend::position() const {
-    if (!m_mpv) return 0;
-    double t = 0;
-    if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
-        return static_cast<qint64>(t * 1000.0);
+    if (m_mpv && m_hasFile) {
+        double t = 0;
+        if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+            return static_cast<qint64>(t * 1000.0);
+        }
     }
-    return 0;
+    return qMax<qint64>(0, m_lastPositionMs);
 }
 
 void PlayerBackend::setPosition(qint64 ms) {
     if (!m_mpv) return;
     if (ms < 0) ms = 0;
     if (m_durationMs > 0 && ms > m_durationMs) ms = m_durationMs;
-    double t = static_cast<double>(ms) / 1000.0;
-    if (mpv_set_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+    if (!m_hasFile && m_currentTrack.isValid()) {
         m_lastPositionMs = ms;
+        m_lastSavedPositionMs = ms;
         updateCurrentLyricIndex(ms);
         emit positionChanged();
         emit seeked(ms);
+        scheduleQueueSave();
+        return;
+    }
+    double t = static_cast<double>(ms) / 1000.0;
+    if (mpv_set_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &t) >= 0) {
+        m_lastPositionMs = ms;
+        m_lastSavedPositionMs = ms;
+        updateCurrentLyricIndex(ms);
+        emit positionChanged();
+        emit seeked(ms);
+        scheduleQueueSave();
     }
 }
 
@@ -1133,6 +1179,8 @@ void PlayerBackend::pause() {
     int p = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &p);
     if (m_bitPerfectEnabled) releaseExclusiveDevice();
+    m_lastSavedPositionMs = qMax<qint64>(0, m_lastPositionMs);
+    scheduleQueueSave();
 }
 
 void PlayerBackend::stop() {
@@ -1143,6 +1191,8 @@ void PlayerBackend::stop() {
     const char *cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
     if (m_bitPerfectEnabled) releaseExclusiveDevice();
+    m_lastSavedPositionMs = 0;
+    scheduleQueueSave();
 }
 
 void PlayerBackend::togglePlayback() {
@@ -1151,7 +1201,7 @@ void PlayerBackend::togglePlayback() {
     else play();
 }
 
-QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
+QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) const {
     QList<Track> out;
     QString sql = QStringLiteral("SELECT ") + kTrackSelectColumns + QStringLiteral(" FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
@@ -1220,10 +1270,41 @@ bool PlayerBackend::restoreQueueState() {
         return false;
     }
 
+    const QJsonArray savedTracks = state.value(QStringLiteral("tracks")).toArray();
+    const QString savedCurrentPath = state.value(QStringLiteral("currentPath")).toString();
+
     QHash<QString, Track> availableTracks;
-    const QList<Track> libraryTracks = queryTracks();
-    availableTracks.reserve(libraryTracks.size());
-    for (const Track &track : libraryTracks) availableTracks.insert(track.path, track);
+    if (savedTracks.size() <= 450) {
+        QSet<QString> wantedPaths;
+        wantedPaths.reserve(savedTracks.size() + 1);
+        for (const QJsonValue &v : savedTracks) {
+            const QString p = v.toString();
+            if (!p.isEmpty()) wantedPaths.insert(p);
+        }
+        if (!savedCurrentPath.isEmpty()) wantedPaths.insert(savedCurrentPath);
+        if (!wantedPaths.isEmpty()) {
+            QStringList placeholders;
+            placeholders.reserve(wantedPaths.size());
+            for (int i = 0; i < wantedPaths.size(); ++i) placeholders.append(QStringLiteral("?"));
+            QSqlQuery q;
+            q.setForwardOnly(true);
+            q.prepare(QStringLiteral("SELECT ") + kTrackSelectColumns +
+                      QStringLiteral(" FROM tracks WHERE path IN (") +
+                      placeholders.join(QLatin1Char(',')) + QLatin1Char(')'));
+            for (const QString &p : std::as_const(wantedPaths)) q.addBindValue(p);
+            if (q.exec()) {
+                availableTracks.reserve(wantedPaths.size());
+                while (q.next()) {
+                    Track t = trackFromQuery(q);
+                    availableTracks.insert(t.path, std::move(t));
+                }
+            }
+        }
+    } else {
+        const QList<Track> libraryTracks = queryTracks();
+        availableTracks.reserve(libraryTracks.size());
+        for (const Track &track : libraryTracks) availableTracks.insert(track.path, track);
+    }
 
     const QJsonObject externalMeta = state.value(QStringLiteral("externalMeta")).toObject();
     auto resolveSavedTrack = [&](const QString &path, Track &out) -> bool {
@@ -1246,6 +1327,8 @@ bool PlayerBackend::restoreQueueState() {
             out.techInfo    = obj.value(QStringLiteral("techInfo")).toString();
             out.trackNo     = obj.value(QStringLiteral("trackNo")).toInt();
             out.discNo      = obj.value(QStringLiteral("discNo")).toInt();
+            out.year        = obj.value(QStringLiteral("year")).toInt();
+            out.genre       = obj.value(QStringLiteral("genre")).toString();
             m_externalQueuePaths.insert(path);
             return true;
         }
@@ -1258,7 +1341,6 @@ bool PlayerBackend::restoreQueueState() {
         return false;
     };
 
-    const QJsonArray savedTracks = state.value(QStringLiteral("tracks")).toArray();
     QList<Track> tracks;
     tracks.reserve(savedTracks.size());
     QList<int> oldToNew(savedTracks.size(), -1);
@@ -1339,7 +1421,13 @@ bool PlayerBackend::restoreQueueState() {
     m_queueManuallyModified = true;
     m_queueModel->resetAll();
     if (oldShuffle != m_queue.isShuffle()) emit shuffleChanged();
-    if (current.isValid()) loadTrack(current, false);
+    if (current.isValid() && m_startupUrls.isEmpty()) {
+        qint64 savedPosMs = qMax<qint64>(0, state.value(QStringLiteral("positionMs")).toInteger(0));
+        if (current.duration > 0 && savedPosMs >= static_cast<qint64>(current.duration) * 1000 - 1000) {
+            savedPosMs = 0;
+        }
+        loadTrack(current, false, savedPosMs);
+    }
     return true;
 }
 
@@ -1350,9 +1438,7 @@ void PlayerBackend::scheduleQueueSave() {
 }
 
 QByteArray PlayerBackend::serializeQueueState() const {
-    QJsonArray tracks;
-    QJsonObject externalMeta;
-    const auto serializeExternal = [&](const Track &track) {
+    const auto serializeExternalTo = [&](QJsonObject &target, const Track &track) {
         if (track.path.isEmpty() || !m_externalQueuePaths.contains(track.path)) return;
         QJsonObject obj;
         obj.insert(QStringLiteral("title"), track.title);
@@ -1363,31 +1449,51 @@ QByteArray PlayerBackend::serializeQueueState() const {
         obj.insert(QStringLiteral("techInfo"), track.techInfo);
         obj.insert(QStringLiteral("trackNo"), track.trackNo);
         obj.insert(QStringLiteral("discNo"), track.discNo);
-        externalMeta.insert(track.path, obj);
+        obj.insert(QStringLiteral("year"), track.year);
+        obj.insert(QStringLiteral("genre"), track.genre);
+        target.insert(track.path, obj);
     };
-    for (const Track &track : m_queue.tracks()) {
-        tracks.append(track.path);
-        serializeExternal(track);
-    }
-    if (m_currentTrack.isValid()) serializeExternal(m_currentTrack);
 
-    QJsonArray playOrder;
-    for (int id : m_queue.playOrder()) playOrder.append(id);
+    if (!m_queueJsonCacheValid) {
+        QJsonArray tracks;
+        QJsonObject externalMeta;
+        for (const Track &track : m_queue.tracks()) {
+            tracks.append(track.path);
+            serializeExternalTo(externalMeta, track);
+        }
+        QJsonArray playOrder;
+        for (int id : m_queue.playOrder()) playOrder.append(id);
+
+        QJsonArray unshuffled;
+        if (m_queue.isShuffle()) {
+            for (int id : m_queue.unshuffledOrder()) unshuffled.append(id);
+        }
+
+        m_cachedTracksJson = std::move(tracks);
+        m_cachedPlayOrderJson = std::move(playOrder);
+        m_cachedUnshuffledJson = std::move(unshuffled);
+        m_cachedExternalMetaJson = std::move(externalMeta);
+        m_queueJsonCacheValid = true;
+    }
+
+    QJsonObject externalMeta = m_cachedExternalMetaJson;
+    if (m_currentTrack.isValid()) {
+        serializeExternalTo(externalMeta, m_currentTrack);
+    }
 
     QJsonObject state;
     state.insert(QStringLiteral("version"), 1);
-    state.insert(QStringLiteral("tracks"), tracks);
-    state.insert(QStringLiteral("playOrder"), playOrder);
+    state.insert(QStringLiteral("tracks"), m_cachedTracksJson);
+    state.insert(QStringLiteral("playOrder"), m_cachedPlayOrderJson);
     if (m_queue.isShuffle()) {
-        QJsonArray unshuffled;
-        for (int id : m_queue.unshuffledOrder()) unshuffled.append(id);
-        state.insert(QStringLiteral("unshuffledOrder"), unshuffled);
+        state.insert(QStringLiteral("unshuffledOrder"), m_cachedUnshuffledJson);
     }
     if (!externalMeta.isEmpty()) {
         state.insert(QStringLiteral("externalMeta"), externalMeta);
     }
     state.insert(QStringLiteral("currentIndex"), m_queue.rawCurrentIndex());
     state.insert(QStringLiteral("currentPath"), m_currentPath);
+    state.insert(QStringLiteral("positionMs"), qMax<qint64>(0, m_lastPositionMs));
     state.insert(QStringLiteral("currentDetached"), m_queue.isCurrentDetached());
     state.insert(QStringLiteral("detachedPosition"), m_queue.detachedPosition());
     state.insert(QStringLiteral("shuffle"), m_queue.isShuffle());
@@ -1513,21 +1619,28 @@ void PlayerBackend::loadTrack(const Track &t, bool startPlayback, qint64 startPo
     m_currentAlbum    = t.album;
     m_currentTechInfo = t.techInfo;
     m_currentCoverPath.clear();
-    if (startPositionMs > 0 && m_lastPositionMs != startPositionMs) {
-        m_lastPositionMs = startPositionMs;
-        emit positionChanged();
-    } else if (startPositionMs <= 0 && m_lastPositionMs != 0) {
-        m_lastPositionMs = 0;
+    const qint64 fallbackDurationMs = qMax<qint64>(0, static_cast<qint64>(t.duration) * 1000);
+    if (fallbackDurationMs > 0 && m_durationMs != fallbackDurationMs) {
+        m_durationMs = fallbackDurationMs;
+        emit durationChanged();
+    }
+    const qint64 targetPosMs = qMax<qint64>(0, startPositionMs);
+    m_lastSavedPositionMs = targetPosMs;
+    if (m_lastPositionMs != targetPosMs) {
+        m_lastPositionMs = targetPosMs;
         emit positionChanged();
     }
     loadLyrics(t.path);
+    updateCurrentLyricIndex(targetPosMs);
 
-    if (startPlayback && m_bitPerfectEnabled && !m_audioExclusiveHeld) {
-        m_pendingExclusiveTrack = t;
-        m_pendingExclusivePositionMs = qMax<qint64>(0, startPositionMs);
-        requestExclusiveForPlayback();
+    if (m_bitPerfectEnabled && !m_audioExclusiveHeld) {
+        if (startPlayback) {
+            m_pendingExclusiveTrack = t;
+            m_pendingExclusivePositionMs = targetPosMs;
+            requestExclusiveForPlayback();
+        }
     } else {
-        loadTrackIntoMpv(t, startPlayback, startPositionMs);
+        loadTrackIntoMpv(t, startPlayback, targetPosMs);
     }
 
     m_queueModel->notifyCurrentChanged();
@@ -1716,9 +1829,11 @@ void PlayerBackend::clearCategoryFilter() {
 void PlayerBackend::filterByAlbum(const QString &albumName, const QString &artistName) {
     QString filter;
     if (!albumName.isEmpty()) {
-        filter = QStringLiteral("album = %1 COLLATE NOCASE").arg(SqlUtils::quote(albumName));
+        filter = QStringLiteral("COALESCE(NULLIF(album, ''), 'Unknown Album') = %1 COLLATE NOCASE")
+            .arg(SqlUtils::quote(albumName));
         if (!artistName.isEmpty()) {
-            filter += QStringLiteral(" AND COALESCE(NULLIF(album_artist, ''), artist) = %1 COLLATE NOCASE")
+            filter += QStringLiteral(
+                " AND COALESCE(NULLIF(COALESCE(NULLIF(album_artist, ''), artist), ''), 'Unknown Artist') = %1 COLLATE NOCASE")
                 .arg(SqlUtils::quote(artistName));
         }
     }
@@ -1894,10 +2009,287 @@ QVariantMap PlayerBackend::trackContextForPath(const QString &path) {
     }
     if (primaryArtist.isEmpty()) primaryArtist = rawArt;
 
-    result[QStringLiteral("album")]       = album;
-    result[QStringLiteral("albumArtist")] = albArt;
-    result[QStringLiteral("artist")]      = primaryArtist;
+    result[QStringLiteral("inLibrary")]   = true;
+    result[QStringLiteral("album")]       = album.isEmpty() ? QStringLiteral("Unknown Album") : album;
+    result[QStringLiteral("albumArtist")] = albArt.isEmpty() ? QStringLiteral("Unknown Artist") : albArt;
+    result[QStringLiteral("artist")]      = primaryArtist.isEmpty() ? QStringLiteral("Unknown Artist") : primaryArtist;
     return result;
+}
+
+QList<Track> PlayerBackend::tracksForAlbum(const QString &albumName, const QString &artistName) const {
+    if (albumName.isEmpty()) return {};
+    QString where = QStringLiteral("COALESCE(NULLIF(album, ''), 'Unknown Album') = %1 COLLATE NOCASE")
+        .arg(SqlUtils::quote(albumName));
+    if (!artistName.isEmpty()) {
+        where += QStringLiteral(
+            " AND COALESCE(NULLIF(COALESCE(NULLIF(album_artist, ''), artist), ''), 'Unknown Artist') = %1 COLLATE NOCASE")
+            .arg(SqlUtils::quote(artistName));
+    }
+    return queryTracks(where, TrackModel::orderColumnsClause(kColumnTrackNo, Qt::AscendingOrder));
+}
+
+QList<Track> PlayerBackend::tracksForArtist(const QString &artistName) const {
+    if (artistName.isEmpty()) return {};
+    const QStringList split = MusicLibrary::splitArtists(artistName);
+    const QString target = split.isEmpty() ? artistName : split.first();
+    const QString norm = MusicLibrary::normalizeArtistName(target);
+    const QString where = QStringLiteral(
+        "id IN (SELECT track_id FROM track_artists ta "
+        "JOIN artists a ON a.id = ta.artist_id "
+        "WHERE a.name_norm = %1)").arg(SqlUtils::quote(norm));
+    return queryTracks(where, TrackModel::orderColumnsClause(kColumnAlbum, Qt::AscendingOrder));
+}
+
+void PlayerBackend::playTrackList(const QList<Track> &tracks, bool shufflePlay) {
+    if (tracks.isEmpty()) return;
+    const bool oldShuffle = m_queue.isShuffle();
+    m_queue.setTracks(tracks);
+    if (shufflePlay && !m_queue.isShuffle()) {
+        m_queue.setShuffle(true);
+    } else if (!shufflePlay && m_queue.isShuffle()) {
+        m_queue.setShuffle(false);
+    } else if (shufflePlay) {
+        m_queue.setShuffle(false);
+        m_queue.setShuffle(true);
+    }
+    m_queueBuiltFromFilter = QStringLiteral("__custom__");
+    m_queueManuallyModified = true;
+    if (!m_currentPath.isEmpty() && m_externalQueuePaths.contains(m_currentPath)) {
+        m_externalQueuePaths = {m_currentPath};
+    } else {
+        m_externalQueuePaths.clear();
+    }
+    m_queueModel->resetAll();
+    syncQueueStats();
+    if (oldShuffle != m_queue.isShuffle()) emit shuffleChanged();
+    playFromQueue(0);
+}
+
+void PlayerBackend::playAlbum(const QString &albumName, const QString &artistName, bool shufflePlay) {
+    playTrackList(tracksForAlbum(albumName, artistName), shufflePlay);
+}
+
+void PlayerBackend::addAlbumPlayNext(const QString &albumName, const QString &artistName) {
+    const QList<Track> tracks = tracksForAlbum(albumName, artistName);
+    if (tracks.isEmpty()) return;
+    const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
+    m_queueModel->insertTracksNext(tracks);
+    emit currentQueuePositionChanged();
+    if (wasEmpty) loadTrack(m_queue.current(), false);
+}
+
+void PlayerBackend::addAlbumToQueue(const QString &albumName, const QString &artistName) {
+    const QList<Track> tracks = tracksForAlbum(albumName, artistName);
+    if (tracks.isEmpty()) return;
+    const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
+    m_queueModel->appendTracks(tracks);
+    emit currentQueuePositionChanged();
+    if (wasEmpty) loadTrack(m_queue.current(), false);
+}
+
+void PlayerBackend::playArtist(const QString &artistName, bool shufflePlay) {
+    playTrackList(tracksForArtist(artistName), shufflePlay);
+}
+
+void PlayerBackend::addArtistPlayNext(const QString &artistName) {
+    const QList<Track> tracks = tracksForArtist(artistName);
+    if (tracks.isEmpty()) return;
+    const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
+    m_queueModel->insertTracksNext(tracks);
+    emit currentQueuePositionChanged();
+    if (wasEmpty) loadTrack(m_queue.current(), false);
+}
+
+void PlayerBackend::addArtistToQueue(const QString &artistName) {
+    const QList<Track> tracks = tracksForArtist(artistName);
+    if (tracks.isEmpty()) return;
+    const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
+    m_queueModel->appendTracks(tracks);
+    emit currentQueuePositionChanged();
+    if (wasEmpty) loadTrack(m_queue.current(), false);
+}
+
+QVariantMap PlayerBackend::albumDetails(const QString &albumName, const QString &artistName) const {
+    QVariantMap out;
+    if (albumName.isEmpty()) return out;
+
+    QString where = QStringLiteral("COALESCE(NULLIF(album, ''), 'Unknown Album') = %1 COLLATE NOCASE")
+        .arg(SqlUtils::quote(albumName));
+    if (!artistName.isEmpty()) {
+        where += QStringLiteral(
+            " AND COALESCE(NULLIF(COALESCE(NULLIF(album_artist, ''), artist), ''), 'Unknown Artist') = %1 COLLATE NOCASE")
+            .arg(SqlUtils::quote(artistName));
+    }
+
+    QSqlQuery q;
+    if (q.exec(QStringLiteral(
+            "SELECT COUNT(*), COALESCE(SUM(duration), 0), "
+            "COUNT(DISTINCT CASE WHEN disc_no > 0 THEN disc_no END), "
+            "COALESCE(MAX(year), 0) "
+            "FROM tracks WHERE ") + where) && q.next()) {
+        out[QStringLiteral("trackCount")]    = q.value(0).toInt();
+        out[QStringLiteral("totalDuration")] = q.value(1).toLongLong();
+        out[QStringLiteral("discCount")]     = q.value(2).toInt();
+        out[QStringLiteral("year")]          = q.value(3).toInt();
+    }
+
+    QSqlQuery gq;
+    if (gq.exec(QStringLiteral(
+            "SELECT genre FROM tracks WHERE (") + where + QStringLiteral(
+            ") AND genre != '' "
+            "GROUP BY genre COLLATE NOCASE "
+            "ORDER BY COUNT(*) DESC, id ASC LIMIT 1")) && gq.next()) {
+        out[QStringLiteral("genre")] = gq.value(0).toString();
+    } else {
+        out[QStringLiteral("genre")] = QString();
+    }
+    return out;
+}
+
+QVariantMap PlayerBackend::artistDetails(const QString &artistName) const {
+    QVariantMap out;
+    if (artistName.isEmpty()) return out;
+    const QStringList split = MusicLibrary::splitArtists(artistName);
+    const QString target = split.isEmpty() ? artistName : split.first();
+    const QString norm = MusicLibrary::normalizeArtistName(target);
+
+    QSqlQuery q;
+    q.prepare(QStringLiteral(
+        "SELECT COUNT(*), COALESCE(SUM(t.duration), 0), "
+        "COUNT(DISTINCT LOWER(COALESCE(NULLIF(t.album, ''), 'Unknown Album'))) "
+        "FROM tracks t "
+        "WHERE t.id IN ("
+        "SELECT ta.track_id FROM track_artists ta "
+        "JOIN artists a ON a.id = ta.artist_id "
+        "WHERE a.name_norm = ?)"));
+    q.addBindValue(norm);
+    if (q.exec() && q.next()) {
+        out[QStringLiteral("trackCount")]    = q.value(0).toInt();
+        out[QStringLiteral("totalDuration")] = q.value(1).toLongLong();
+        out[QStringLiteral("albumCount")]    = q.value(2).toInt();
+    }
+    return out;
+}
+
+QVariantList PlayerBackend::artistAlbums(const QString &artistName) const {
+    QVariantList out;
+    if (artistName.isEmpty()) return out;
+    const QStringList split = MusicLibrary::splitArtists(artistName);
+    const QString target = split.isEmpty() ? artistName : split.first();
+    const QString norm = MusicLibrary::normalizeArtistName(target);
+
+    QSqlQuery q;
+    q.setForwardOnly(true);
+    q.prepare(QStringLiteral(
+        "SELECT COALESCE(NULLIF(t.album, ''), 'Unknown Album') AS album_name, "
+        "COALESCE(NULLIF(COALESCE(NULLIF(t.album_artist, ''), t.artist), ''), 'Unknown Artist') AS album_artist_name, "
+        "COALESCE(MAX(t.year), 0) AS max_year, "
+        "MIN(t.path) AS sample_path, "
+        "COUNT(*) AS track_count "
+        "FROM tracks t "
+        "WHERE t.id IN ("
+        "SELECT ta.track_id FROM track_artists ta "
+        "JOIN artists a ON a.id = ta.artist_id "
+        "WHERE a.name_norm = ?) "
+        "GROUP BY album_name COLLATE NOCASE, album_artist_name COLLATE NOCASE "
+        "ORDER BY CASE WHEN max_year > 0 THEN 0 ELSE 1 END ASC, "
+        "max_year DESC, album_name COLLATE NOCASE ASC"));
+    q.addBindValue(norm);
+    if (!q.exec()) return out;
+
+    while (q.next()) {
+        QVariantMap item;
+        item[QStringLiteral("album")]      = q.value(0).toString();
+        item[QStringLiteral("artist")]     = q.value(1).toString();
+        item[QStringLiteral("year")]       = q.value(2).toInt();
+        item[QStringLiteral("path")]       = q.value(3).toString();
+        item[QStringLiteral("trackCount")] = q.value(4).toInt();
+        out.append(std::move(item));
+    }
+    return out;
+}
+
+int PlayerBackend::enqueueExternalUrls(const QList<QUrl> &urls, bool playNow, bool playNext) {
+    if (urls.isEmpty()) return 0;
+
+    QStringList expandedPaths;
+    QSet<QString> seenDirs;
+
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+
+    const auto collectFromPath = [&](const QString &rawPath) {
+        if (rawPath.isEmpty()) return;
+        const QFileInfo fi(rawPath);
+        if (!fi.exists()) return;
+        const QString clean = fi.canonicalFilePath().isEmpty()
+            ? QDir::cleanPath(fi.absoluteFilePath())
+            : fi.canonicalFilePath();
+
+        if (fi.isDir()) {
+            if (seenDirs.contains(clean)) return;
+            seenDirs.insert(clean);
+            QStringList dirFiles;
+            QDirIterator it(clean, QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                const QString sub = it.next();
+                if (AudioFormats::isAudioFile(sub)) dirFiles.append(sub);
+            }
+            std::sort(dirFiles.begin(), dirFiles.end(),
+                      [&collator](const QString &a, const QString &b) {
+                          return collator.compare(a, b) < 0;
+                      });
+            expandedPaths.append(dirFiles);
+            return;
+        }
+
+        if (AudioFormats::isAudioFile(clean)) {
+            expandedPaths.append(clean);
+        }
+    };
+
+    for (const QUrl &url : urls) {
+        QString local;
+        if (url.isLocalFile()) local = url.toLocalFile();
+        else if (url.scheme().isEmpty()) local = url.path();
+        if (!local.isEmpty()) collectFromPath(local);
+    }
+
+    if (expandedPaths.isEmpty()) return 0;
+
+    QList<Track> resolved;
+    resolved.reserve(expandedPaths.size());
+    for (const QString &path : std::as_const(expandedPaths)) {
+        const Track t = resolveTrackForPath(path);
+        if (t.isValid()) resolved.append(t);
+    }
+    if (resolved.isEmpty()) return 0;
+
+    const bool wasEmpty = m_queue.count() == 0 && !m_hasFile && !m_currentTrack.isValid();
+    m_queueManuallyModified = true;
+
+    int targetPos = -1;
+    if (playNext || playNow) {
+        targetPos = m_queue.nextInsertionPosition();
+        m_queueModel->insertTracksNext(resolved);
+    } else {
+        targetPos = m_queue.count();
+        m_queueModel->appendTracks(resolved);
+    }
+    emit currentQueuePositionChanged();
+
+    if (playNow && targetPos >= 0 && targetPos < m_queue.count()) {
+        playFromQueue(targetPos);
+    } else if (wasEmpty && m_queue.count() > 0) {
+        loadTrack(m_queue.current(), false);
+    }
+
+    return resolved.size();
 }
 
 void PlayerBackend::openInFileManager(const QString &path) {

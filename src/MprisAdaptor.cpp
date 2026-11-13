@@ -223,6 +223,13 @@ QVariantMap MprisPlayerAdaptor::metadata() const {
     if (curTrack.discNo > 0) {
         dict.insert(QStringLiteral("xesam:discNumber"), curTrack.discNo);
     }
+    if (curTrack.year > 0) {
+        dict.insert(QStringLiteral("xesam:contentCreated"),
+                    QStringLiteral("%1").arg(curTrack.year, 4, 10, QLatin1Char('0')));
+    }
+    if (!curTrack.genre.trimmed().isEmpty()) {
+        dict.insert(QStringLiteral("xesam:genre"), QStringList{curTrack.genre.trimmed()});
+    }
 
     const QString art = m_backend->currentCoverPath();
     if (!art.isEmpty()) {
@@ -271,6 +278,23 @@ void MprisPlayerAdaptor::SetPosition(const QDBusObjectPath &trackId, qlonglong p
 }
 
 void MprisPlayerAdaptor::OpenUri(const QString &uri) {
-    if (uri.trimmed().isEmpty()) return;
-    m_backend->playMusic(uri);
+    const QString trimmed = uri.trimmed();
+    if (trimmed.isEmpty()) return;
+    m_backend->enqueueExternalUrls({QUrl::fromUserInput(trimmed)}, true, true);
+}
+
+YampInstanceAdaptor::YampInstanceAdaptor(PlayerBackend *backend)
+    : QDBusAbstractAdaptor(backend), m_backend(backend) {}
+
+void YampInstanceAdaptor::OpenUrls(const QStringList &urls) {
+    QList<QUrl> parsed;
+    parsed.reserve(urls.size());
+    for (const QString &raw : urls) {
+        const QString trimmed = raw.trimmed();
+        if (!trimmed.isEmpty()) parsed.append(QUrl::fromUserInput(trimmed));
+    }
+    if (!parsed.isEmpty()) {
+        m_backend->enqueueExternalUrls(parsed, true, true);
+    }
+    m_backend->requestRaise();
 }

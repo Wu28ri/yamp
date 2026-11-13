@@ -32,12 +32,12 @@ void AlbumModel::reload() {
         where = QStringLiteral("WHERE album_search LIKE %1 ESCAPE '\\' ").arg(pattern);
     }
     setQuery(QStringLiteral(
-        "SELECT album, "
-        "COALESCE(NULLIF(album_artist, ''), artist) AS artist, "
+        "SELECT COALESCE(NULLIF(album, ''), 'Unknown Album') AS album, "
+        "COALESCE(NULLIF(COALESCE(NULLIF(album_artist, ''), artist), ''), 'Unknown Artist') AS artist, "
         "MIN(path) AS path "
         "FROM tracks ") + where + QStringLiteral(
-        "GROUP BY album COLLATE NOCASE, "
-        "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE "
+        "GROUP BY COALESCE(NULLIF(album, ''), 'Unknown Album') COLLATE NOCASE, "
+        "COALESCE(NULLIF(COALESCE(NULLIF(album_artist, ''), artist), ''), 'Unknown Artist') COLLATE NOCASE "
         "ORDER BY album COLLATE NOCASE, artist COLLATE NOCASE"));
     while (canFetchMore()) fetchMore();
 }

@@ -199,36 +199,56 @@ int TrackQueue::ensureTrackStored(const Track &track) {
 }
 
 void TrackQueue::insertNext(const Track &track) {
-    const int trackId = ensureTrackStored(track);
+    insertTracksNext({track});
+}
+
+void TrackQueue::insertTracksNext(const QList<Track> &tracks) {
+    std::vector<int> ids;
+    ids.reserve(static_cast<size_t>(tracks.size()));
+    for (const Track &t : tracks) {
+        if (t.isValid()) ids.push_back(ensureTrackStored(t));
+    }
+    if (ids.empty()) return;
+
     const bool wasEmpty = m_playOrder.empty();
     const int currentId = (!m_currentDetached && m_currentIndex >= 0 &&
                            m_currentIndex < static_cast<int>(m_playOrder.size()))
                               ? m_playOrder[static_cast<size_t>(m_currentIndex)] : -1;
     const int insertionPosition = nextInsertionPosition();
-    m_playOrder.insert(m_playOrder.begin() + insertionPosition, trackId);
+    m_playOrder.insert(m_playOrder.begin() + insertionPosition, ids.begin(), ids.end());
     if (!m_currentDetached) {
         if (wasEmpty) {
             m_currentIndex = 0;
         } else if (insertionPosition <= m_currentIndex) {
-            ++m_currentIndex;
+            m_currentIndex += static_cast<int>(ids.size());
         }
     }
     if (!m_shuffle) {
         m_unshuffledOrder = m_playOrder;
     } else if (currentId >= 0) {
         const auto it = std::find(m_unshuffledOrder.begin(), m_unshuffledOrder.end(), currentId);
-        if (it != m_unshuffledOrder.end()) m_unshuffledOrder.insert(it + 1, trackId);
-        else m_unshuffledOrder.push_back(trackId);
+        if (it != m_unshuffledOrder.end()) m_unshuffledOrder.insert(it + 1, ids.begin(), ids.end());
+        else m_unshuffledOrder.insert(m_unshuffledOrder.end(), ids.begin(), ids.end());
     } else {
-        m_unshuffledOrder.push_back(trackId);
+        m_unshuffledOrder.insert(m_unshuffledOrder.end(), ids.begin(), ids.end());
     }
 }
 
 void TrackQueue::appendTrack(const Track &track) {
-    const int trackId = ensureTrackStored(track);
+    appendTracks({track});
+}
+
+void TrackQueue::appendTracks(const QList<Track> &tracks) {
+    std::vector<int> ids;
+    ids.reserve(static_cast<size_t>(tracks.size()));
+    for (const Track &t : tracks) {
+        if (t.isValid()) ids.push_back(ensureTrackStored(t));
+    }
+    if (ids.empty()) return;
+
     const bool wasEmpty = m_playOrder.empty();
-    m_playOrder.push_back(trackId);
-    m_unshuffledOrder.push_back(trackId);
+    m_playOrder.insert(m_playOrder.end(), ids.begin(), ids.end());
+    m_unshuffledOrder.insert(m_unshuffledOrder.end(), ids.begin(), ids.end());
     if (wasEmpty && !m_currentDetached) {
         m_currentIndex = 0;
     }

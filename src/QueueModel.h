@@ -24,7 +24,9 @@ public:
     Q_INVOKABLE void remove(int position);
 
     void insertTrack(const Track &track);
+    void insertTracksNext(const QList<Track> &tracks);
     void appendTrack(const Track &track);
+    void appendTracks(const QList<Track> &tracks);
     void clear(bool keepCurrentDetached = false);
     bool retainPaths(const QSet<QString> &paths);
     void resetAll();

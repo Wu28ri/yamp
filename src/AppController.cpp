@@ -24,6 +24,7 @@ void AppController::applyInitialSettings() {
     m_backend->setReplayGainEnabled(m_settings->replayGainEnabled());
     m_backend->setReplayGainMode(m_settings->replayGainMode());
     m_backend->setReplayGainPreampDb(m_settings->replayGainPreampDb());
+    m_backend->setReplayGainFallbackDb(m_settings->replayGainFallbackDb());
     m_backend->setReplayGainClipProtect(m_settings->replayGainClipProtect());
 
     if (!m_settings->musicFolders().isEmpty() && m_backend->watchedFolders().isEmpty()) {
@@ -61,6 +62,7 @@ void AppController::wireSignals() {
     connect(s, &Settings::replayGainEnabledChanged,     b, [s, b]() { b->setReplayGainEnabled(s->replayGainEnabled()); });
     connect(s, &Settings::replayGainModeChanged,        b, [s, b]() { b->setReplayGainMode(s->replayGainMode()); });
     connect(s, &Settings::replayGainPreampDbChanged,    b, [s, b]() { b->setReplayGainPreampDb(s->replayGainPreampDb()); });
+    connect(s, &Settings::replayGainFallbackDbChanged,  b, [s, b]() { b->setReplayGainFallbackDb(s->replayGainFallbackDb()); });
     connect(s, &Settings::replayGainClipProtectChanged, b, [s, b]() { b->setReplayGainClipProtect(s->replayGainClipProtect()); });
 
     connect(s, &Settings::audioDeviceChanged,         b, [s, b]() { b->setAudioDevice(s->audioDevice()); });

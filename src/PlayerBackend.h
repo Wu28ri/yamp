@@ -9,6 +9,8 @@
 
 #include <QAbstractItemModel>
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -139,7 +141,13 @@ public:
     void setReplayGainEnabled(bool enabled);
     void setReplayGainMode(int mode);
     void setReplayGainPreampDb(qreal db);
+    void setReplayGainFallbackDb(qreal db);
     void setReplayGainClipProtect(bool enabled);
+
+    void setStartupUrls(const QList<QUrl> &urls) { m_startupUrls = urls; }
+    Q_INVOKABLE int enqueueExternalUrls(const QList<QUrl> &urls,
+                                        bool playNow = false,
+                                        bool playNext = false);
 
     Q_INVOKABLE void togglePlayback();
     Q_INVOKABLE void play();
@@ -162,6 +170,15 @@ public:
     Q_INVOKABLE void addPlayNext(const QString &path);
     Q_INVOKABLE void addToQueue(const QString &path);
     Q_INVOKABLE void clearQueue();
+    Q_INVOKABLE void playAlbum(const QString &albumName, const QString &artistName = QString(), bool shufflePlay = false);
+    Q_INVOKABLE void addAlbumPlayNext(const QString &albumName, const QString &artistName = QString());
+    Q_INVOKABLE void addAlbumToQueue(const QString &albumName, const QString &artistName = QString());
+    Q_INVOKABLE void playArtist(const QString &artistName, bool shufflePlay = false);
+    Q_INVOKABLE void addArtistPlayNext(const QString &artistName);
+    Q_INVOKABLE void addArtistToQueue(const QString &artistName);
+    Q_INVOKABLE QVariantMap albumDetails(const QString &albumName, const QString &artistName = QString()) const;
+    Q_INVOKABLE QVariantMap artistDetails(const QString &artistName) const;
+    Q_INVOKABLE QVariantList artistAlbums(const QString &artistName) const;
     Q_INVOKABLE void openInFileManager(const QString &path);
     Q_INVOKABLE QVariantMap trackContextForPath(const QString &path);
     Q_INVOKABLE QVariantList listHardwareDevices();
@@ -227,7 +244,10 @@ private:
     void setCategoryFilter(const QString &filter, const QString &sortColumn);
     void applyFilter();
     QString combinedFilter() const;
-    QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {});
+    QList<Track> queryTracks(const QString &whereClause = {}, const QString &orderBy = {}) const;
+    QList<Track> tracksForAlbum(const QString &albumName, const QString &artistName) const;
+    QList<Track> tracksForArtist(const QString &artistName) const;
+    void playTrackList(const QList<Track> &tracks, bool shufflePlay);
     Track queryTrackByPath(const QString &path) const;
     void setupMpris();
     void applyGaplessSettings();
@@ -297,6 +317,12 @@ private:
     QTimer *m_queueSaveTimer = nullptr;
     bool m_queueStateReady = false;
     bool m_queueDirty = false;
+    mutable bool m_queueJsonCacheValid = false;
+    mutable QJsonArray m_cachedTracksJson;
+    mutable QJsonArray m_cachedPlayOrderJson;
+    mutable QJsonArray m_cachedUnshuffledJson;
+    mutable QJsonObject m_cachedExternalMetaJson;
+    qint64 m_lastSavedPositionMs = 0;
     quint64 m_queueSaveSeq = 0;
     int  m_lastEmittedQueueCount = 0;
     qint64 m_lastEmittedQueueDuration = 0;
@@ -305,12 +331,14 @@ private:
     bool m_inSyncWithFolders = false;
     QStringList m_desiredFolders;
     QSet<QString> m_deferredScanFolders;
+    QList<QUrl> m_startupUrls;
 
     int     m_repeatMode     = RepeatOff;
     bool    m_gaplessPlayback = true;
     bool    m_rgEnabled      = false;
     int     m_rgMode         = ReplayGainMode::RgModeTrack;
     qreal   m_rgPreampDb     = 0.0;
+    qreal   m_rgFallbackDb   = 0.0;
     bool    m_rgClipProtect  = true;
     QString m_audioDevice    = QStringLiteral("auto");
     bool    m_bitPerfectEnabled = false;
