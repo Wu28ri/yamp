@@ -6,4 +6,7 @@ Exec=appyamp
 Icon=yamp
 Terminal=false
 Type=Application
+StartupNotify=true
+StartupWMClass=appyamp
 Categories=AudioVideo;Audio;Player;Qt;
+Keywords=music;audio;player;mpv;flac;alsa;
