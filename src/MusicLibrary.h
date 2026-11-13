@@ -19,8 +19,8 @@ public:
 signals:
     void countDetermined(int totalFiles);
     void progress(int processed, int total);
-    void batchReady();
-    void finished(const QList<Track> &newTracks, bool success);
+    void batchReady(bool removedAny);
+    void finished(bool anyChanged, bool anyRemoved, bool success);
 
 private:
     QString m_rootPath;

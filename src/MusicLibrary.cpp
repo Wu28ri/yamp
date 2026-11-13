@@ -75,6 +75,25 @@ int parseLeadingInt(const QString &raw) {
     return (ok && val > 0) ? val : 0;
 }
 
+int parseYearString(const QString &raw) {
+    const QString trimmed = raw.trimmed();
+    if (trimmed.isEmpty()) return 0;
+    static const QRegularExpression yearRe(QStringLiteral(R"(\b([12]\d{3})\b)"));
+    const QRegularExpressionMatch match = yearRe.match(trimmed);
+    if (!match.hasMatch()) return 0;
+    bool ok = false;
+    const int y = match.captured(1).toInt(&ok);
+    return (ok && y >= 1000 && y <= 2999) ? y : 0;
+}
+
+bool isTruthyFlag(const QString &raw) {
+    const QString v = raw.trimmed().toLower();
+    if (v.isEmpty()) return false;
+    if (v == QLatin1String("1") || v == QLatin1String("true") || v == QLatin1String("yes"))
+        return true;
+    return parseLeadingInt(v) > 0;
+}
+
 }
 
 namespace MusicLibrary {
@@ -115,26 +134,50 @@ bool initialize() {
             "path TEXT UNIQUE, duration INTEGER, "
             "search_text TEXT, track_no INTEGER, disc_no INTEGER DEFAULT 0, "
             "tech_info TEXT, file_size INTEGER DEFAULT 0, "
-            "album_artist TEXT, file_mtime INTEGER DEFAULT 0)"),
+            "album_artist TEXT, file_mtime INTEGER DEFAULT 0, "
+            "year INTEGER DEFAULT 0, genre TEXT DEFAULT '', "
+            "album_search TEXT DEFAULT '')"),
             "create tracks table")) return false;
 
+    bool migratedColumns = false;
     {
         bool hasDiscNo = false;
+        bool hasYear = false;
+        bool hasGenre = false;
+        bool hasAlbumSearch = false;
         QSqlQuery info(db);
         if (info.exec(QStringLiteral("PRAGMA table_info(tracks)"))) {
             while (info.next()) {
-                if (info.value(1).toString() == QLatin1String("disc_no")) {
-                    hasDiscNo = true;
-                    break;
-                }
+                const QString col = info.value(1).toString();
+                if (col == QLatin1String("disc_no")) hasDiscNo = true;
+                else if (col == QLatin1String("year")) hasYear = true;
+                else if (col == QLatin1String("genre")) hasGenre = true;
+                else if (col == QLatin1String("album_search")) hasAlbumSearch = true;
             }
         }
         if (!hasDiscNo) {
             if (!execRequired(QStringLiteral(
                     "ALTER TABLE tracks ADD COLUMN disc_no INTEGER DEFAULT 0"),
                     "migrate tracks.disc_no")) return false;
-            execRequired(QStringLiteral("UPDATE tracks SET file_mtime = 0"),
-                         "schedule metadata refresh for disc_no and artist links");
+            migratedColumns = true;
+        }
+        if (!hasYear) {
+            if (!execRequired(QStringLiteral(
+                    "ALTER TABLE tracks ADD COLUMN year INTEGER DEFAULT 0"),
+                    "migrate tracks.year")) return false;
+            migratedColumns = true;
+        }
+        if (!hasGenre) {
+            if (!execRequired(QStringLiteral(
+                    "ALTER TABLE tracks ADD COLUMN genre TEXT DEFAULT ''"),
+                    "migrate tracks.genre")) return false;
+            migratedColumns = true;
+        }
+        if (!hasAlbumSearch) {
+            if (!execRequired(QStringLiteral(
+                    "ALTER TABLE tracks ADD COLUMN album_search TEXT DEFAULT ''"),
+                    "migrate tracks.album_search")) return false;
+            migratedColumns = true;
         }
     }
 
@@ -191,11 +234,78 @@ bool initialize() {
         "BEGIN DELETE FROM track_artists WHERE track_id = OLD.id; END"),
         "create track cleanup trigger")) return false;
 
+    if (migratedColumns && db.transaction()) {
+        QSqlQuery selTracks(db);
+        selTracks.setForwardOnly(true);
+        QSqlQuery updTrack(db);
+        updTrack.prepare(QStringLiteral(
+            "UPDATE tracks SET album_search = ?, file_mtime = 0 WHERE id = ?"));
+        if (selTracks.exec(QStringLiteral(
+                "SELECT id, album, album_artist, artist FROM tracks"))) {
+            while (selTracks.next()) {
+                const qint64 id = selTracks.value(0).toLongLong();
+                const QString album = selTracks.value(1).toString();
+                const QString albumArtist = selTracks.value(2).toString();
+                const QString artist = selTracks.value(3).toString();
+                const QString effArtist = albumArtist.isEmpty() ? artist : albumArtist;
+                updTrack.bindValue(0, SqlUtils::normalizeSearch(album + QLatin1Char(' ') + effArtist));
+                updTrack.bindValue(1, id);
+                updTrack.exec();
+            }
+        }
+
+        QSqlQuery selArtists(db);
+        struct ArtistRow { qint64 id; QString name; QString norm; };
+        QList<ArtistRow> rows;
+        if (selArtists.exec(QStringLiteral("SELECT id, name, name_norm FROM artists"))) {
+            while (selArtists.next()) {
+                rows.append({selArtists.value(0).toLongLong(),
+                             selArtists.value(1).toString(),
+                             selArtists.value(2).toString()});
+            }
+        }
+        QSqlQuery findNorm(db);
+        findNorm.prepare(QStringLiteral("SELECT id FROM artists WHERE name_norm = ?"));
+        QSqlQuery updNorm(db);
+        updNorm.prepare(QStringLiteral("UPDATE artists SET name_norm = ? WHERE id = ?"));
+        QSqlQuery moveLinks(db);
+        moveLinks.prepare(QStringLiteral(
+            "UPDATE OR IGNORE track_artists SET artist_id = ? WHERE artist_id = ?"));
+        QSqlQuery delOldLinks(db);
+        delOldLinks.prepare(QStringLiteral("DELETE FROM track_artists WHERE artist_id = ?"));
+        QSqlQuery delOldArtist(db);
+        delOldArtist.prepare(QStringLiteral("DELETE FROM artists WHERE id = ?"));
+        for (const ArtistRow &row : rows) {
+            const QString targetNorm = normalizeArtistName(row.name);
+            if (targetNorm.isEmpty() || targetNorm == row.norm) continue;
+            findNorm.bindValue(0, targetNorm);
+            qint64 existingId = 0;
+            if (findNorm.exec() && findNorm.next()) {
+                existingId = findNorm.value(0).toLongLong();
+            }
+            findNorm.finish();
+            if (existingId > 0 && existingId != row.id) {
+                moveLinks.bindValue(0, existingId);
+                moveLinks.bindValue(1, row.id);
+                moveLinks.exec();
+                delOldLinks.bindValue(0, row.id);
+                delOldLinks.exec();
+                delOldArtist.bindValue(0, row.id);
+                delOldArtist.exec();
+            } else {
+                updNorm.bindValue(0, targetNorm);
+                updNorm.bindValue(1, row.id);
+                updNorm.exec();
+            }
+        }
+        db.commit();
+    }
+
     return true;
 }
 
 QString normalizeArtistName(const QString &raw) {
-    return raw.trimmed().toLower().simplified();
+    return SqlUtils::normalizeSearch(raw.trimmed().simplified());
 }
 
 QStringList splitArtists(const QString &raw) {
@@ -205,7 +315,7 @@ QStringList splitArtists(const QString &raw) {
 
     static const QRegularExpression splitter(
         QStringLiteral(
-            R"(\s*(?:[;×]|,(?!\s*the\b)|\s+/\s+|\bfeat\b\.?|\bft\b\.?|\bfeaturing\b|\bvs\b\.?|\bpresents\b|\bwith\b)\s*)"
+            R"(\s*(?:[;×\x00]|\s+/\s+|\s+(?:feat\.?|ft\.?|featuring|vs\.?|presents)\s+)\s*)"
             R"(|(?-i:\s+x\s+))"),
         QRegularExpression::CaseInsensitiveOption);
 
@@ -296,18 +406,26 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
     QString album  = QStringLiteral("Unknown Album");
     QString albumArtistTag;
     QString techInfo;
+    QString genre;
+    QStringList discreteArtists;
     int duration = 0;
     int trackNo  = 0;
     int discNo   = 0;
+    int year     = 0;
 
     if (auto *tag = f.tag()) {
         const QString tTitle  = QString::fromStdString(tag->title().to8Bit(true)).trimmed();
         const QString tArtist = QString::fromStdString(tag->artist().to8Bit(true)).trimmed();
         const QString tAlbum  = QString::fromStdString(tag->album().to8Bit(true)).trimmed();
+        const QString tGenre  = QString::fromStdString(tag->genre().to8Bit(true)).trimmed();
         if (!tTitle.isEmpty())  title  = tTitle;
         if (!tArtist.isEmpty()) artist = tArtist;
         if (!tAlbum.isEmpty())  album  = tAlbum;
+        if (!tGenre.isEmpty())  genre  = tGenre;
         trackNo = tag->track();
+        if (tag->year() >= 1000 && tag->year() <= 2999) {
+            year = static_cast<int>(tag->year());
+        }
     }
     if (auto *file = f.file()) {
         const TagLib::PropertyMap props = file->properties();
@@ -316,9 +434,35 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
             if (it == props.end() || it->second.isEmpty()) return {};
             return QString::fromStdString(it->second.front().to8Bit(true)).trimmed();
         };
+        const auto pickMultiProp = [&props](const char *key) -> QStringList {
+            const auto it = props.find(key);
+            if (it == props.end() || it->second.isEmpty()) return {};
+            QStringList list;
+            for (const TagLib::String &val : it->second) {
+                const QString s = QString::fromStdString(val.to8Bit(true)).trimmed();
+                if (!s.isEmpty()) list.append(s);
+            }
+            return list;
+        };
+
         albumArtistTag = pickProp("ALBUMARTIST");
         if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM ARTIST");
         if (albumArtistTag.isEmpty()) albumArtistTag = pickProp("ALBUM_ARTIST");
+
+        if (albumArtistTag.isEmpty()) {
+            QString compRaw = pickProp("COMPILATION");
+            if (compRaw.isEmpty()) compRaw = pickProp("TCMP");
+            if (compRaw.isEmpty()) compRaw = pickProp("ITUNESCOMPILATION");
+            if (isTruthyFlag(compRaw)) {
+                albumArtistTag = QStringLiteral("Various Artists");
+            }
+        }
+
+        discreteArtists = pickMultiProp("ARTISTS");
+        if (discreteArtists.size() <= 1) {
+            const QStringList multiArtist = pickMultiProp("ARTIST");
+            if (multiArtist.size() > 1) discreteArtists = multiArtist;
+        }
 
         QString discRaw = pickProp("DISCNUMBER");
         if (discRaw.isEmpty()) discRaw = pickProp("DISCNUM");
@@ -328,6 +472,16 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
 
         if (trackNo <= 0) {
             trackNo = parseLeadingInt(pickProp("TRACKNUMBER"));
+        }
+
+        if (year <= 0) {
+            QString dateRaw = pickProp("ORIGINALDATE");
+            if (dateRaw.isEmpty()) dateRaw = pickProp("ORIGINALYEAR");
+            if (dateRaw.isEmpty()) dateRaw = pickProp("DATE");
+            if (dateRaw.isEmpty()) dateRaw = pickProp("YEAR");
+            if (dateRaw.isEmpty()) dateRaw = pickProp("TDRC");
+            if (dateRaw.isEmpty()) dateRaw = pickProp("TYER");
+            year = parseYearString(dateRaw);
         }
     }
     if (auto *audio = f.audioProperties()) {
@@ -375,6 +529,9 @@ bool readTrackFromFile(const QString &filePath, Track &t, qint64 &fileSize,
     t.techInfo    = techInfo;
     t.trackNo     = trackNo;
     t.discNo      = discNo;
+    t.year        = year;
+    t.genre       = genre;
+    t.artistTags  = std::move(discreteArtists);
     return true;
 }
 
@@ -386,7 +543,7 @@ LibraryScanner::LibraryScanner(QString rootPath, QObject *parent)
 void LibraryScanner::run() {
     if (m_rootPath.isEmpty()) {
         emit countDetermined(0);
-        emit finished({}, true);
+        emit finished(false, false, true);
         return;
     }
 
@@ -398,18 +555,13 @@ void LibraryScanner::run() {
                         QDirIterator::Subdirectories);
         while (it.hasNext()) {
             if (QThread::currentThread()->isInterruptionRequested()) {
-                emit finished({}, false);
+                emit finished(false, false, false);
                 return;
             }
             allFiles.append(it.next());
         }
     }
     emit countDetermined(allFiles.size());
-
-    if (allFiles.isEmpty()) {
-        emit finished({}, true);
-        return;
-    }
 
     constexpr int  kBatchSize        = 250;
     constexpr int  kBatchMaxMs       = 800;
@@ -418,7 +570,7 @@ void LibraryScanner::run() {
     QSqlDatabase db;
     const QString connName = LibraryDb::openScopedConnection(QStringLiteral("scan"), db);
     if (connName.isEmpty()) {
-        emit finished({}, false);
+        emit finished(false, false, false);
         return;
     }
 
@@ -443,11 +595,52 @@ void LibraryScanner::run() {
         }
     }
 
-    QList<Track> newTracks;
     bool dbFailed = false;
     bool anyChanged = false;
+    bool anyRemoved = false;
+
+    if (!existingFiles.isEmpty()) {
+        const QSet<QString> diskSet(allFiles.cbegin(), allFiles.cend());
+        QStringList removals;
+        for (auto it = existingFiles.cbegin(); it != existingFiles.cend(); ++it) {
+            if (!diskSet.contains(it.key())) removals.append(it.key());
+        }
+        if (!removals.isEmpty()) {
+            QSqlQuery begin(db);
+            if (!begin.exec(QStringLiteral("BEGIN IMMEDIATE"))) {
+                dbFailed = true;
+            } else {
+                QSqlQuery del(db);
+                del.prepare(QStringLiteral("DELETE FROM tracks WHERE path = ?"));
+                for (const QString &gone : removals) {
+                    if (QThread::currentThread()->isInterruptionRequested()) {
+                        dbFailed = true;
+                        break;
+                    }
+                    del.bindValue(0, gone);
+                    if (!del.exec()) {
+                        dbFailed = true;
+                        break;
+                    }
+                    if (del.numRowsAffected() > 0) {
+                        anyChanged = true;
+                        anyRemoved = true;
+                    }
+                }
+                if (dbFailed || QThread::currentThread()->isInterruptionRequested()) {
+                    db.rollback();
+                } else if (!db.commit()) {
+                    db.rollback();
+                    dbFailed = true;
+                } else if (anyRemoved) {
+                    emit batchReady(true);
+                }
+            }
+        }
+    }
+
     int processed = 0;
-    while (processed < allFiles.size() &&
+    while (!dbFailed && processed < allFiles.size() &&
            !QThread::currentThread()->isInterruptionRequested()) {
         struct PreparedTrack {
             Track track;
@@ -473,7 +666,7 @@ void LibraryScanner::run() {
                     PreparedTrack item;
                     if (MusicLibrary::readTrackFromFile(filePath, item.track,
                                                         item.fileSize, item.modifiedTime)) {
-                        prepared.append(item);
+                        prepared.append(std::move(item));
                     }
                 }
             }
@@ -505,8 +698,6 @@ void LibraryScanner::run() {
             }
             const auto writeResult = inserter.upsert(
                 item.track, item.fileSize, item.modifiedTime);
-            if (writeResult == ScannerHelpers::TrackWriteResult::Inserted)
-                newTracks.append(item.track);
             if (writeResult == ScannerHelpers::TrackWriteResult::Error) {
                 dbFailed = true;
                 break;
@@ -528,7 +719,7 @@ void LibraryScanner::run() {
         }
         if (batchChanged) {
             anyChanged = true;
-            emit batchReady();
+            emit batchReady(false);
         }
     }
 
@@ -543,5 +734,5 @@ void LibraryScanner::run() {
     LibraryDb::closeScopedConnection(connName, db);
 
     const bool success = !QThread::currentThread()->isInterruptionRequested() && !dbFailed;
-    emit finished(success ? newTracks : QList<Track>{}, success);
+    emit finished(anyChanged, anyRemoved, success);
 }

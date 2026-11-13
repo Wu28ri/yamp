@@ -2,6 +2,7 @@
 
 #include <QMetaType>
 #include <QString>
+#include <QStringList>
 
 struct Track {
     Q_GADGET
@@ -14,6 +15,8 @@ struct Track {
     Q_PROPERTY(QString techInfo    MEMBER techInfo)
     Q_PROPERTY(int     trackNo     MEMBER trackNo)
     Q_PROPERTY(int     discNo      MEMBER discNo)
+    Q_PROPERTY(int     year        MEMBER year)
+    Q_PROPERTY(QString genre       MEMBER genre)
 
 public:
     QString path;
@@ -25,6 +28,9 @@ public:
     QString techInfo;
     int trackNo = 0;
     int discNo = 0;
+    int year = 0;
+    QString genre;
+    QStringList artistTags;
 
     bool isValid() const { return !path.isEmpty(); }
 };

@@ -48,9 +48,9 @@ void ScanSession::start() {
     connect(m_scanner, &LibraryScanner::batchReady, this, &ScanSession::batchReady);
 
     connect(m_scanner, &LibraryScanner::finished, this,
-            [this](const QList<Track> &newTracks, bool success) {
+            [this](bool anyChanged, bool anyRemoved, bool success) {
         m_failed = !success && !m_cancelled;
-        emit finished(m_rootPath, newTracks, success);
+        emit finished(m_rootPath, anyChanged, anyRemoved, success);
         m_thread->quit();
     });
     connect(m_thread, &QThread::finished, this, [this]() {

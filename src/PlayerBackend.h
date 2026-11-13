@@ -219,7 +219,7 @@ private:
     void saveQueueState();
     void syncQueueStats();
     Track resolveTrackForPath(const QString &path);
-    void refreshAllModels();
+    void refreshAllModels(bool pruneQueue = true);
     void pruneQueueToLibrary();
     void clearLibraryDatabase();
     void removeFolderFromDatabase(const QString &folder);
@@ -300,7 +300,9 @@ private:
     quint64 m_queueSaveSeq = 0;
     int  m_lastEmittedQueueCount = 0;
     qint64 m_lastEmittedQueueDuration = 0;
+    bool m_scanBatchNeedsPrune = false;
     bool m_clearPending = false;
+    bool m_inSyncWithFolders = false;
     QStringList m_desiredFolders;
     QSet<QString> m_deferredScanFolders;
 

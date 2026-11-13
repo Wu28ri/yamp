@@ -13,13 +13,21 @@
 #include <QFileSystemWatcher>
 #include <QHash>
 #include <QMetaObject>
+#include <QPointer>
 #include <QSet>
+#include <QSocketNotifier>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTimer>
 #include <QVariant>
 
 #include <algorithm>
+
+#ifdef Q_OS_LINUX
+#include <cerrno>
+#include <sys/inotify.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -206,20 +214,21 @@ ReconcileResult reconcileDirsBlocking(QSqlDatabase &db,
         if (stopping.load(std::memory_order_relaxed)) return result;
         QDir qdir(dir);
         if (qdir.exists()) {
-            QDirIterator subdirs(dir,
-                                 QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+            result.newSubdirsToWatch.insert(dir);
+            QDirIterator entries(dir,
+                                 QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks,
                                  QDirIterator::Subdirectories);
-            while (subdirs.hasNext()) result.newSubdirsToWatch.insert(subdirs.next());
-
-            QDirIterator files(dir,
-                               AudioFormats::nameFilters(),
-                               QDir::Files | QDir::NoSymLinks,
-                               QDirIterator::Subdirectories);
-            while (files.hasNext()) {
-                const QFileInfo info(files.next());
-                diskFiles.insert(info.absoluteFilePath(),
-                                 FileState{info.size(),
-                                           info.lastModified().toMSecsSinceEpoch()});
+            while (entries.hasNext()) {
+                if (stopping.load(std::memory_order_relaxed)) return result;
+                entries.next();
+                const QFileInfo info = entries.fileInfo();
+                if (info.isDir()) {
+                    result.newSubdirsToWatch.insert(info.filePath());
+                } else if (info.isFile() && AudioFormats::isAudioFile(info.fileName())) {
+                    diskFiles.insert(info.absoluteFilePath(),
+                                     FileState{info.size(),
+                                               info.lastModified().toMSecsSinceEpoch()});
+                }
             }
         }
         if (!loadDbFilesUnder(db, dir, dbSnapshot)) {
@@ -270,11 +279,20 @@ LibraryWatcher::LibraryWatcher(QObject *parent)
     : QObject(parent),
     m_watcher(new QFileSystemWatcher(this)),
     m_debounce(new QTimer(this)) {
+    m_workerPool.setMaxThreadCount(1);
     m_debounce->setSingleShot(true);
     m_debounce->setInterval(kDebounceMs);
     connect(m_debounce, &QTimer::timeout, this, &LibraryWatcher::flushPending);
     connect(m_watcher, &QFileSystemWatcher::directoryChanged,
             this, &LibraryWatcher::onDirectoryChanged);
+#ifdef Q_OS_LINUX
+    m_inotifyFd = ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (m_inotifyFd >= 0) {
+        m_inotifyNotifier = new QSocketNotifier(m_inotifyFd, QSocketNotifier::Read, this);
+        connect(m_inotifyNotifier, &QSocketNotifier::activated,
+                this, &LibraryWatcher::drainInotifyEvents);
+    }
+#endif
 }
 
 LibraryWatcher::~LibraryWatcher() {
@@ -283,6 +301,15 @@ LibraryWatcher::~LibraryWatcher() {
     if (m_debounce->isActive()) m_debounce->stop();
     m_workerPool.clear();
     m_workerPool.waitForDone();
+#ifdef Q_OS_LINUX
+    if (m_inotifyNotifier) {
+        m_inotifyNotifier->setEnabled(false);
+    }
+    if (m_inotifyFd >= 0) {
+        ::close(m_inotifyFd);
+        m_inotifyFd = -1;
+    }
+#endif
 }
 
 QStringList LibraryWatcher::roots() const {
@@ -291,14 +318,18 @@ QStringList LibraryWatcher::roots() const {
 
 void LibraryWatcher::start() {
     const QStringList loaded = loadRoots();
+    QStringList initialTopDirs;
     for (const QString &raw : loaded) {
         const QString r = QDir(raw).absolutePath();
         if (!QDir(r).exists()) continue;
         if (m_roots.contains(r)) continue;
         m_roots.insert(r);
-
-        watchTreeRecursive(r);
+        initialTopDirs.append(r);
+        m_initialWatchPending.insert(r);
         m_pendingDirs.insert(r);
+    }
+    if (!initialTopDirs.isEmpty()) {
+        watchDirectories(initialTopDirs);
     }
     if (!m_pendingDirs.isEmpty()) {
         flushPending();
@@ -365,7 +396,8 @@ LibraryWatcher::RegisterResult LibraryWatcher::registerScannedRoot(const QString
     bool retry = false;
     const QString clean = attachRoot(path, &retry);
     if (clean.isEmpty()) return retry ? RegisterResult::Retry : RegisterResult::AlreadyCovered;
-    watchTreeRecursive(clean);
+    watchDirectories({clean});
+    scheduleWatchTreeAsync(clean);
     return RegisterResult::Ready;
 }
 
@@ -390,6 +422,7 @@ void LibraryWatcher::removeRoot(const QString &path) {
 
     unwatchTree(clean);
     m_roots.remove(clean);
+    m_initialWatchPending.remove(clean);
 
     QSqlDatabase db = QSqlDatabase::database();
     LibraryDb::NonBlockingWrite nonBlocking(db);
@@ -412,17 +445,24 @@ void LibraryWatcher::clearAll() {
     if (m_debounce->isActive()) m_debounce->stop();
     const QStringList watched = m_watcher->directories();
     if (!watched.isEmpty()) m_watcher->removePaths(watched);
+    clearInotifyWatches();
     m_roots.clear();
+    m_initialWatchPending.clear();
     m_pendingDirs.clear();
 }
 
 void LibraryWatcher::rescanAll(const QSet<QString> &excludedRoots) {
     const QStringList current = roots();
+    QStringList topDirs;
     for (const QString &r : current) {
         if (excludedRoots.contains(r)) continue;
         if (!QDir(r).exists()) continue;
-        watchTreeRecursive(r);
+        topDirs.append(r);
+        m_initialWatchPending.insert(r);
         m_pendingDirs.insert(r);
+    }
+    if (!topDirs.isEmpty()) {
+        watchDirectories(topDirs);
     }
     if (!m_pendingDirs.isEmpty()) {
         flushPending();
@@ -432,7 +472,8 @@ void LibraryWatcher::rescanAll(const QSet<QString> &excludedRoots) {
 void LibraryWatcher::rescanRoot(const QString &root) {
     const QString clean = QDir(root).absolutePath();
     if (!m_roots.contains(clean) || !QDir(clean).exists()) return;
-    watchTreeRecursive(clean);
+    watchDirectories({clean});
+    m_initialWatchPending.insert(clean);
     m_pendingDirs.insert(clean);
     flushPending();
 }
@@ -453,11 +494,18 @@ void LibraryWatcher::flushPending() {
                 return isWithin(dir, parent);
             })) pending.insert(dir);
     }
+    QSet<QString> initialCovered;
+    for (const QString &dir : pending) {
+        if (m_initialWatchPending.contains(dir)) {
+            initialCovered.insert(dir);
+            m_initialWatchPending.remove(dir);
+        }
+    }
     m_pendingDirs.clear();
     m_reconcileRunning = true;
     const quint64 generation = m_generation.load(std::memory_order_relaxed);
 
-    m_workerPool.start([this, pending, generation]() {
+    m_workerPool.start([this, pending, initialCovered, generation]() {
         QSqlDatabase db;
         const QString connName = LibraryDb::openScopedConnection(QStringLiteral("lw"), db);
         ReconcileResult result;
@@ -468,7 +516,7 @@ void LibraryWatcher::flushPending() {
         }
         LibraryDb::closeScopedConnection(connName, db);
 
-        QMetaObject::invokeMethod(this, [this, pending, result, generation]() {
+        QMetaObject::invokeMethod(this, [this, pending, initialCovered, result, generation]() {
             if (generation == m_generation.load(std::memory_order_relaxed)) {
                 QStringList directories;
                 if (result.success) {
@@ -478,12 +526,21 @@ void LibraryWatcher::flushPending() {
                             })) directories.append(sub);
                     }
                 }
-                for (const QString &added : watchDirectories(directories))
-                    m_pendingDirs.insert(added);
+                const QStringList newlyWatched = watchDirectories(directories);
+                for (const QString &added : newlyWatched) {
+                    const bool fromInitialWalk = std::any_of(
+                        initialCovered.cbegin(), initialCovered.cend(),
+                        [&added](const QString &initRoot) { return isWithin(added, initRoot); });
+                    if (!fromInitialWalk) m_pendingDirs.insert(added);
+                }
                 if (result.success) {
                     if (result.changed) emit libraryChanged();
-                    if (result.retry) m_pendingDirs.unite(pending);
+                    if (result.retry) {
+                        m_initialWatchPending.unite(initialCovered);
+                        m_pendingDirs.unite(pending);
+                    }
                 } else if (result.retry) {
+                    m_initialWatchPending.unite(initialCovered);
                     m_pendingDirs.unite(pending);
                 }
             }
@@ -511,7 +568,10 @@ QStringList LibraryWatcher::watchDirectories(const QStringList &paths) {
             alreadySet.remove(path);
         }
     }
-    if (!stale.isEmpty()) m_watcher->removePaths(stale);
+    if (!stale.isEmpty()) {
+        m_watcher->removePaths(stale);
+        removeInotifyWatches(stale);
+    }
     QStringList filtered;
     for (const QString &path : paths) {
         if (!alreadySet.contains(path) && QDir(path).exists()) filtered.append(path);
@@ -525,17 +585,35 @@ QStringList LibraryWatcher::watchDirectories(const QStringList &paths) {
                 return failedSet.contains(path);
             });
         }
+        addInotifyWatches(filtered);
     }
     return filtered;
 }
 
-void LibraryWatcher::watchTreeRecursive(const QString &root) {
-    QStringList paths;
-    if (QDir(root).exists()) paths.append(root);
-    QDirIterator it(root, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
-                    QDirIterator::Subdirectories);
-    while (it.hasNext()) paths.append(it.next());
-    watchDirectories(paths);
+void LibraryWatcher::scheduleWatchTreeAsync(const QString &root) {
+    QPointer<LibraryWatcher> guard(this);
+    const quint64 expectedGen = m_generation.load(std::memory_order_relaxed);
+    QThreadPool::globalInstance()->start([this, guard, root, expectedGen]() {
+        if (!guard || m_stopping.load(std::memory_order_relaxed)) return;
+        QStringList paths;
+        if (QDir(root).exists()) paths.append(root);
+        QDirIterator it(root, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+                        QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            if (!guard || m_stopping.load(std::memory_order_relaxed) ||
+                m_generation.load(std::memory_order_relaxed) != expectedGen) {
+                return;
+            }
+            paths.append(it.next());
+        }
+        if (!guard || paths.isEmpty()) return;
+        QMetaObject::invokeMethod(guard, [this, guard, root, expectedGen, paths = std::move(paths)]() {
+            if (!guard || m_stopping.load(std::memory_order_relaxed)) return;
+            if (m_generation.load(std::memory_order_relaxed) != expectedGen) return;
+            if (!m_roots.contains(root)) return;
+            watchDirectories(paths);
+        }, Qt::QueuedConnection);
+    });
 }
 
 void LibraryWatcher::unwatchTree(const QString &root) {
@@ -545,4 +623,92 @@ void LibraryWatcher::unwatchTree(const QString &root) {
         if (isWithin(d, root)) toRemove.append(d);
     }
     if (!toRemove.isEmpty()) m_watcher->removePaths(toRemove);
+    removeInotifyWatches(toRemove);
+}
+
+void LibraryWatcher::addInotifyWatches(const QStringList &paths) {
+#ifdef Q_OS_LINUX
+    if (m_inotifyFd < 0) return;
+    constexpr uint32_t kMask = IN_CLOSE_WRITE | IN_ATTRIB | IN_MOVED_TO |
+                               IN_DELETE_SELF | IN_MOVE_SELF;
+    for (const QString &dir : paths) {
+        if (m_dirToWd.contains(dir)) continue;
+        const QByteArray encoded = dir.toUtf8();
+        const int wd = ::inotify_add_watch(m_inotifyFd, encoded.constData(), kMask);
+        if (wd >= 0) {
+            m_dirToWd.insert(dir, wd);
+            m_wdToDir.insert(wd, dir);
+        }
+    }
+#else
+    Q_UNUSED(paths);
+#endif
+}
+
+void LibraryWatcher::removeInotifyWatches(const QStringList &paths) {
+#ifdef Q_OS_LINUX
+    if (m_inotifyFd < 0) return;
+    for (const QString &dir : paths) {
+        const auto it = m_dirToWd.constFind(dir);
+        if (it == m_dirToWd.constEnd()) continue;
+        const int wd = it.value();
+        ::inotify_rm_watch(m_inotifyFd, wd);
+        m_wdToDir.remove(wd);
+        m_dirToWd.erase(it);
+    }
+#else
+    Q_UNUSED(paths);
+#endif
+}
+
+void LibraryWatcher::clearInotifyWatches() {
+#ifdef Q_OS_LINUX
+    if (m_inotifyFd < 0) return;
+    for (auto it = m_dirToWd.cbegin(); it != m_dirToWd.cend(); ++it) {
+        ::inotify_rm_watch(m_inotifyFd, it.value());
+    }
+    m_dirToWd.clear();
+    m_wdToDir.clear();
+#endif
+}
+
+void LibraryWatcher::drainInotifyEvents() {
+#ifdef Q_OS_LINUX
+    if (m_inotifyFd < 0) return;
+    alignas(inotify_event) char buffer[8192];
+    while (true) {
+        const ssize_t bytesRead = ::read(m_inotifyFd, buffer, sizeof(buffer));
+        if (bytesRead <= 0) {
+            if (bytesRead < 0 && errno == EINTR) continue;
+            break;
+        }
+        ssize_t offset = 0;
+        while (offset < bytesRead) {
+            const auto *ev = reinterpret_cast<const inotify_event *>(buffer + offset);
+            offset += static_cast<ssize_t>(sizeof(inotify_event)) + ev->len;
+
+            if (ev->mask & IN_Q_OVERFLOW) {
+                rescanAll();
+                continue;
+            }
+            const QString dir = m_wdToDir.value(ev->wd);
+            if (ev->mask & (IN_IGNORED | IN_DELETE_SELF | IN_MOVE_SELF)) {
+                if (!dir.isEmpty()) {
+                    m_wdToDir.remove(ev->wd);
+                    m_dirToWd.remove(dir);
+                    onDirectoryChanged(dir);
+                }
+                continue;
+            }
+            if (dir.isEmpty()) continue;
+            if (ev->mask & (IN_CLOSE_WRITE | IN_ATTRIB | IN_MOVED_TO)) {
+                const bool isDir = (ev->mask & IN_ISDIR) != 0;
+                const QString fileName = ev->len > 0 ? QString::fromUtf8(ev->name) : QString();
+                if (isDir || fileName.isEmpty() || AudioFormats::isAudioFile(fileName)) {
+                    onDirectoryChanged(dir);
+                }
+            }
+        }
+    }
+#endif
 }

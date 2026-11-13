@@ -53,8 +53,8 @@ void ScanCoordinator::startScanAttempt(const QString &folderPath, quint64 genera
     connect(session, &ScanSession::batchReady, this, &ScanCoordinator::batchReady);
 
     connect(session, &ScanSession::finished, this,
-            [this, session](const QString &path, const QList<Track> &newTracks, bool success) {
-                if (!session->cancelled() && success) emit newTracksAvailable(newTracks);
+            [this, session](const QString &path, bool anyChanged, bool anyRemoved, bool success) {
+                if (!session->cancelled() && success) emit scanFinished(anyChanged, anyRemoved);
                 if (session->failed() && m_watcher) m_watcher->rescanRoot(path);
                 m_progresses.remove(session);
                 recomputeTotals();

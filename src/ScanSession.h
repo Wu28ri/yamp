@@ -26,8 +26,8 @@ public:
 
 signals:
     void progressChanged();
-    void batchReady();
-    void finished(const QString &path, const QList<Track> &newTracks, bool success);
+    void batchReady(bool removedAny);
+    void finished(const QString &path, bool anyChanged, bool anyRemoved, bool success);
 
 private:
     QString m_rootPath;

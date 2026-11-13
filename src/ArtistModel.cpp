@@ -29,11 +29,7 @@ void ArtistModel::reload() {
     if (!m_search.isEmpty()) {
         const QString pattern =
             SqlUtils::containsPattern(SqlUtils::normalizeSearch(m_search));
-        where = QStringLiteral(
-            "WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
-            "a.name_norm, CHAR(1105), CHAR(1077)), '''', ''), "
-            "CHAR(8216), ''), CHAR(8217), ''), CHAR(700), '') LIKE %1 ESCAPE '\\' ")
-            .arg(pattern);
+        where = QStringLiteral("WHERE a.name_norm LIKE %1 ESCAPE '\\' ").arg(pattern);
     }
     setQuery(QStringLiteral(
         "SELECT a.name, "

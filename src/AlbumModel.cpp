@@ -25,26 +25,19 @@ QHash<int, QByteArray> AlbumModel::roleNames() const {
 }
 
 void AlbumModel::reload() {
-    QString outerWhere;
+    QString where;
     if (!m_search.isEmpty()) {
         const QString pattern =
             SqlUtils::containsPattern(SqlUtils::normalizeSearch(m_search));
-        outerWhere = QStringLiteral(
-            "WHERE %1 LIKE %3 ESCAPE '\\' "
-            "OR %2 LIKE %3 ESCAPE '\\' ")
-            .arg(SqlUtils::normalizedSearchExpression(QStringLiteral("album")),
-                 SqlUtils::normalizedSearchExpression(QStringLiteral("artist")),
-                 pattern);
+        where = QStringLiteral("WHERE album_search LIKE %1 ESCAPE '\\' ").arg(pattern);
     }
     setQuery(QStringLiteral(
-        "SELECT album, artist, path FROM ("
         "SELECT album, "
         "COALESCE(NULLIF(album_artist, ''), artist) AS artist, "
         "MIN(path) AS path "
-        "FROM tracks "
+        "FROM tracks ") + where + QStringLiteral(
         "GROUP BY album COLLATE NOCASE, "
-        "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE"
-        ") ") + outerWhere + QStringLiteral(
+        "COALESCE(NULLIF(album_artist, ''), artist) COLLATE NOCASE "
         "ORDER BY album COLLATE NOCASE, artist COLLATE NOCASE"));
     while (canFetchMore()) fetchMore();
 }

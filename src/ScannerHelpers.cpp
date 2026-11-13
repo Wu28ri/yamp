@@ -15,14 +15,15 @@ TrackInserter::TrackInserter(QSqlDatabase &db)
     m_upsertTrack.prepare(QStringLiteral(
         "INSERT INTO tracks "
         "(title, artist, album, path, duration, search_text, track_no, disc_no, tech_info, "
-        " file_size, album_artist, file_mtime) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        " file_size, album_artist, file_mtime, year, genre, album_search) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(path) DO UPDATE SET "
         "title = excluded.title, artist = excluded.artist, album = excluded.album, "
         "duration = excluded.duration, search_text = excluded.search_text, "
         "track_no = excluded.track_no, disc_no = excluded.disc_no, "
         "tech_info = excluded.tech_info, file_size = excluded.file_size, "
-        "album_artist = excluded.album_artist, file_mtime = excluded.file_mtime"));
+        "album_artist = excluded.album_artist, file_mtime = excluded.file_mtime, "
+        "year = excluded.year, genre = excluded.genre, album_search = excluded.album_search"));
     m_findTrackId.prepare(QStringLiteral("SELECT id FROM tracks WHERE path = ?"));
     m_deleteTrackArtists.prepare(QStringLiteral("DELETE FROM track_artists WHERE track_id = ?"));
     m_upsertArtist.prepare(QStringLiteral(
@@ -39,6 +40,10 @@ TrackWriteResult TrackInserter::upsert(const Track &track, qint64 fileSize,
         SqlUtils::normalizeSearch(
             track.title + QLatin1Char(' ') + track.artist + QLatin1Char(' ') +
             track.album + QLatin1Char(' ') + track.albumArtist);
+    const QString effectiveAlbumArtist =
+        track.albumArtist.isEmpty() ? track.artist : track.albumArtist;
+    const QString albumSearch =
+        SqlUtils::normalizeSearch(track.album + QLatin1Char(' ') + effectiveAlbumArtist);
 
     m_findTrackId.bindValue(0, track.path);
     if (!m_findTrackId.exec()) {
@@ -62,6 +67,9 @@ TrackWriteResult TrackInserter::upsert(const Track &track, qint64 fileSize,
     m_upsertTrack.bindValue(9, fileSize);
     m_upsertTrack.bindValue(10, track.albumArtist);
     m_upsertTrack.bindValue(11, modifiedTime);
+    m_upsertTrack.bindValue(12, track.year);
+    m_upsertTrack.bindValue(13, track.genre);
+    m_upsertTrack.bindValue(14, albumSearch);
     if (!m_upsertTrack.exec()) {
         qWarning() << "[TrackInserter] upsert track" << track.path
                    << m_upsertTrack.lastError().text();
@@ -90,11 +98,32 @@ TrackWriteResult TrackInserter::upsert(const Track &track, qint64 fileSize,
             return TrackWriteResult::Error;
         }
     }
-    if (!MusicLibrary::linkTrackToArtistsPrepared(
-        trackId, track.artist,
-        m_upsertArtist, m_findArtistId, m_linkTrackArtist, &m_artistIdCache)) {
-        qWarning() << "[TrackInserter] link track artists" << track.path;
-        return TrackWriteResult::Error;
+    if (!track.artistTags.isEmpty()) {
+        for (const QString &tagArtist : track.artistTags) {
+            if (!MusicLibrary::linkTrackToArtistsPrepared(
+                    trackId, tagArtist,
+                    m_upsertArtist, m_findArtistId, m_linkTrackArtist, &m_artistIdCache)) {
+                qWarning() << "[TrackInserter] link discrete track artist" << track.path;
+                return TrackWriteResult::Error;
+            }
+        }
+    } else {
+        if (!MusicLibrary::linkTrackToArtistsPrepared(
+                trackId, track.artist,
+                m_upsertArtist, m_findArtistId, m_linkTrackArtist, &m_artistIdCache)) {
+            qWarning() << "[TrackInserter] link track artists" << track.path;
+            return TrackWriteResult::Error;
+        }
+    }
+    if (!track.albumArtist.isEmpty() &&
+        MusicLibrary::normalizeArtistName(track.albumArtist) !=
+            MusicLibrary::normalizeArtistName(track.artist)) {
+        if (!MusicLibrary::linkTrackToArtistsPrepared(
+                trackId, track.albumArtist,
+                m_upsertArtist, m_findArtistId, m_linkTrackArtist, &m_artistIdCache)) {
+            qWarning() << "[TrackInserter] link album artist" << track.path;
+            return TrackWriteResult::Error;
+        }
     }
     return existed ? TrackWriteResult::Updated : TrackWriteResult::Inserted;
 }

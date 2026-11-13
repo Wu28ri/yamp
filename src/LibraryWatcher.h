@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QString>
@@ -9,6 +10,7 @@
 #include <atomic>
 
 class QFileSystemWatcher;
+class QSocketNotifier;
 class QTimer;
 
 class LibraryWatcher : public QObject {
@@ -38,18 +40,27 @@ signals:
 private slots:
     void onDirectoryChanged(const QString &dir);
     void flushPending();
+    void drainInotifyEvents();
 
 private:
     QStringList loadRoots();
     QString attachRoot(const QString &path, bool *retry);
 
     QStringList watchDirectories(const QStringList &paths);
-    void watchTreeRecursive(const QString &root);
+    void scheduleWatchTreeAsync(const QString &root);
     void unwatchTree(const QString &root);
+    void addInotifyWatches(const QStringList &paths);
+    void removeInotifyWatches(const QStringList &paths);
+    void clearInotifyWatches();
 
     QFileSystemWatcher *m_watcher = nullptr;
+    QSocketNotifier *m_inotifyNotifier = nullptr;
+    int m_inotifyFd = -1;
+    QHash<int, QString> m_wdToDir;
+    QHash<QString, int> m_dirToWd;
     QTimer *m_debounce = nullptr;
     QSet<QString> m_pendingDirs;
+    QSet<QString> m_initialWatchPending;
     QSet<QString> m_roots;
     QThreadPool m_workerPool;
     bool m_reconcileRunning = false;

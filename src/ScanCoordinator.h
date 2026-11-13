@@ -27,8 +27,8 @@ public:
 
 signals:
     void progressChanged();
-    void newTracksAvailable(const QList<Track> &tracks);
-    void batchReady();
+    void scanFinished(bool anyChanged, bool anyRemoved);
+    void batchReady(bool removedAny);
 
 private:
     void startScanAttempt(const QString &folderPath, quint64 generation);

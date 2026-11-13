@@ -88,6 +88,9 @@ void writeQueuePayloadToDisk(const QString &path, const QByteArray &payload, qui
     }
 }
 
+const QString kTrackSelectColumns = QStringLiteral(
+    "path, title, artist, album, duration, tech_info, track_no, album_artist, disc_no, year, genre");
+
 Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
     Track t;
     t.path        = q.value(offset + 0).toString();
@@ -99,6 +102,8 @@ Track trackFromQuery(const QSqlQuery &q, int offset = 0) {
     t.trackNo     = q.value(offset + 6).toInt();
     t.albumArtist = q.value(offset + 7).toString();
     t.discNo      = q.value(offset + 8).toInt();
+    t.year        = q.value(offset + 9).toInt();
+    t.genre       = q.value(offset + 10).toString();
     return t;
 }
 
@@ -299,25 +304,35 @@ PlayerBackend::PlayerBackend(QObject *parent)
     });
 
     m_libraryWatcher = new LibraryWatcher(this);
-    connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this,
-            &PlayerBackend::refreshAllModels);
+    connect(m_libraryWatcher, &LibraryWatcher::libraryChanged, this, [this]() {
+        refreshAllModels(true);
+    });
 
     m_scanRefreshTimer = new QTimer(this);
     m_scanRefreshTimer->setSingleShot(true);
     m_scanRefreshTimer->setInterval(750);
-    connect(m_scanRefreshTimer, &QTimer::timeout, this,
-            &PlayerBackend::refreshAllModels);
+    connect(m_scanRefreshTimer, &QTimer::timeout, this, [this]() {
+        const bool prune = std::exchange(m_scanBatchNeedsPrune, false);
+        refreshAllModels(prune);
+    });
 
     m_scanCoordinator = new ScanCoordinator(m_libraryWatcher, this);
     connect(m_scanCoordinator, &ScanCoordinator::progressChanged,
             this, &PlayerBackend::scanProgressChanged);
-    connect(m_scanCoordinator, &ScanCoordinator::newTracksAvailable, this,
-            [this](const QList<Track> &) {
+    connect(m_scanCoordinator, &ScanCoordinator::scanFinished, this,
+            [this](bool anyChanged, bool anyRemoved) {
+                const bool pendingBatch = m_scanRefreshTimer->isActive();
+                const bool pendingPrune = std::exchange(m_scanBatchNeedsPrune, false);
                 m_scanRefreshTimer->stop();
-                refreshAllModels();
-                if (m_queue.count() == 0) rebuildQueueFromCurrentFilter();
+                if (anyChanged || pendingBatch) {
+                    refreshAllModels(anyRemoved || pendingPrune);
+                }
+                if (m_queue.count() == 0 && (anyChanged || pendingBatch)) {
+                    rebuildQueueFromCurrentFilter();
+                }
             });
-    connect(m_scanCoordinator, &ScanCoordinator::batchReady, this, [this]() {
+    connect(m_scanCoordinator, &ScanCoordinator::batchReady, this, [this](bool removedAny) {
+        if (removedAny) m_scanBatchNeedsPrune = true;
         if (!m_scanRefreshTimer->isActive()) m_scanRefreshTimer->start();
     });
 
@@ -1138,9 +1153,7 @@ void PlayerBackend::togglePlayback() {
 
 QList<Track> PlayerBackend::queryTracks(const QString &whereClause, const QString &orderBy) {
     QList<Track> out;
-    QString sql = QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist, disc_no "
-        "FROM tracks");
+    QString sql = QStringLiteral("SELECT ") + kTrackSelectColumns + QStringLiteral(" FROM tracks");
     if (!whereClause.isEmpty()) sql += QStringLiteral(" WHERE ") + whereClause;
     sql += QStringLiteral(" ORDER BY ") + (orderBy.isEmpty() ? QStringLiteral("id ASC") : orderBy);
 
@@ -1788,9 +1801,8 @@ int PlayerBackend::getRowForPath(const QString &path) {
 Track PlayerBackend::queryTrackByPath(const QString &path) const {
     if (path.isEmpty()) return {};
     QSqlQuery q;
-    q.prepare(QStringLiteral(
-        "SELECT path, title, artist, album, duration, tech_info, track_no, album_artist, disc_no "
-        "FROM tracks WHERE path = ?"));
+    q.prepare(QStringLiteral("SELECT ") + kTrackSelectColumns +
+              QStringLiteral(" FROM tracks WHERE path = ?"));
     q.addBindValue(path);
     if (!q.exec() || !q.next()) return {};
     return trackFromQuery(q);
@@ -1914,7 +1926,7 @@ void PlayerBackend::openInFileManager(const QString &path) {
             });
 }
 
-void PlayerBackend::refreshAllModels() {
+void PlayerBackend::refreshAllModels(bool pruneQueue) {
     const auto finishQuery = [](QSqlQueryModel *model) {
         QT_IGNORE_DEPRECATIONS(QSqlQuery query = model->query();)
         query.finish();
@@ -1927,7 +1939,7 @@ void PlayerBackend::refreshAllModels() {
     m_albumModel->reload();
     m_artistModel->reload();
 
-    pruneQueueToLibrary();
+    if (pruneQueue) pruneQueueToLibrary();
 }
 
 void PlayerBackend::pruneQueueToLibrary() {
@@ -2097,7 +2109,9 @@ void PlayerBackend::removeFolder(const QString &folder, const QStringList &remai
 
     m_scanCoordinator->cancelRoot(clean);
     m_libraryWatcher->removeRoot(clean);
-    m_libraryWatcher->rescanAll(m_scanCoordinator->activeRoots());
+    if (!m_inSyncWithFolders) {
+        m_libraryWatcher->rescanAll(m_scanCoordinator->activeRoots());
+    }
 
     removeFolderFromDatabase(clean);
 }
@@ -2149,41 +2163,51 @@ void PlayerBackend::removeFolderFromDatabase(const QString &clean) {
         QSqlQuery delRoot(db);
         delRoot.prepare(QStringLiteral("DELETE FROM watch_roots WHERE path = ?"));
         delRoot.addBindValue(clean);
-        if ((removeTracks && !del.exec()) || !delRoot.exec() || !db.commit()) {
+        const bool tracksOk = !removeTracks || del.exec();
+        const bool rootOk = tracksOk && delRoot.exec();
+        if (rootOk && removeTracks) MusicLibrary::pruneOrphanArtists(db);
+        if (!rootOk || !db.commit()) {
             db.rollback();
             QTimer::singleShot(250, this, [this, clean]() {
                 removeFolderFromDatabase(clean);
             });
             return;
         }
-        if (removeTracks) MusicLibrary::pruneOrphanArtists(db);
     }
 
-    if (!removeTracks) return;
-
-    const QString prefix = clean + QLatin1Char('/');
-    const bool currentInRemoved = !m_currentPath.isEmpty() &&
-                                   (m_currentPath == clean || m_currentPath.startsWith(prefix));
-    bool currentPreserved = false;
-    for (const QString &root : roots) {
-        if (m_currentPath == root || m_currentPath.startsWith(root + QLatin1Char('/'))) {
-            currentPreserved = true;
-            break;
+    if (removeTracks) {
+        const QString prefix = clean + QLatin1Char('/');
+        const bool currentInRemoved = !m_currentPath.isEmpty() &&
+                                       (m_currentPath == clean || m_currentPath.startsWith(prefix));
+        bool currentPreserved = false;
+        for (const QString &root : roots) {
+            if (m_currentPath == root || m_currentPath.startsWith(root + QLatin1Char('/'))) {
+                currentPreserved = true;
+                break;
+            }
         }
-    }
-    if (currentInRemoved && !currentPreserved) {
-        resetPlaybackState();
+        if (currentInRemoved && !currentPreserved) {
+            resetPlaybackState();
+        }
+
+        refreshAllModels(true);
+
+        if (!m_queueManuallyModified) {
+            rebuildQueueFromCurrentFilter();
+        }
+        emit currentQueuePositionChanged();
     }
 
-    refreshAllModels();
-
-    rebuildQueueFromCurrentFilter();
-    emit currentQueuePositionChanged();
-    if (!m_desiredFolders.isEmpty()) syncWithFolders(m_desiredFolders);
+    if (!m_inSyncWithFolders && !m_desiredFolders.isEmpty()) {
+        syncWithFolders(m_desiredFolders);
+    }
 }
 
 void PlayerBackend::syncWithFolders(const QStringList &folders) {
     m_desiredFolders = folders;
+    if (m_inSyncWithFolders) return;
+    m_inSyncWithFolders = true;
+
     QSet<QString> desired;
     for (const QString &raw : folders) {
         const QString clean = QDir(raw).absolutePath();
@@ -2200,4 +2224,5 @@ void PlayerBackend::syncWithFolders(const QStringList &folders) {
         if (!currentSet.contains(want)) scanFolder(QUrl::fromLocalFile(want));
     }
     m_libraryWatcher->rescanAll(m_scanCoordinator->activeRoots());
+    m_inSyncWithFolders = false;
 }
