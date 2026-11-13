@@ -1,10 +1,10 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Templates as T
 
-ScrollBar {
+T.ScrollBar {
     id: bar
     z: 20
-    policy: ScrollBar.AsNeeded
+    policy: T.ScrollBar.AsNeeded
     hoverEnabled: true
     readonly property bool keepsSearchOpen: true
 

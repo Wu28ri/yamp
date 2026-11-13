@@ -56,11 +56,26 @@ Window {
     property real   savedArtistsScrollOffset: 0
     property bool   sidebarSearchExpanded: false
     property real   sidebarWidthBeforeSearch: 56
+    property string toastMessage: ""
+    property bool   toastVisible: false
     readonly property bool searchActive: sideBar.searchOpen
     readonly property bool textInputFocused: sideBar.searchFocused
         || (activeFocusItem !== null
             && (activeFocusItem.selectByMouse !== undefined
                 || activeFocusItem.cursorPosition !== undefined))
+
+    Timer {
+        id: toastTimer
+        interval: 2400
+        onTriggered: root.toastVisible = false
+    }
+
+    function showToast(msg) {
+        if (!msg) return
+        toastMessage = msg
+        toastVisible = true
+        toastTimer.restart()
+    }
 
     function snapshotNavState() {
         return {
@@ -504,8 +519,192 @@ Window {
         }
 
         BottomBar {
+            id: bottomBar
             Layout.fillWidth: true
             Layout.preferredHeight: 105
+        }
+    }
+
+    Rectangle {
+        id: toastBanner
+        z: 90
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: bottomBar.height + 16
+        width: Math.min(root.width - 40, toastLabel.implicitWidth + 32)
+        height: 36
+        radius: 18
+        color: Qt.rgba(sysPalette.base.r, sysPalette.base.g, sysPalette.base.b, 0.96)
+        border.width: 1
+        border.color: Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.45)
+        opacity: root.toastVisible ? 1.0 : 0.0
+        visible: opacity > 0.01
+
+        Behavior on opacity {
+            NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
+        }
+
+        Text {
+            id: toastLabel
+            anchors.centerIn: parent
+            width: Math.min(implicitWidth, toastBanner.width - 32)
+            elide: Text.ElideRight
+            text: root.toastMessage
+            color: sysPalette.text
+            font.pixelSize: 13
+            font.bold: true
+        }
+    }
+
+    DropArea {
+        id: externalDropArea
+        z: 100
+        anchors.fill: parent
+        keys: ["text/uri-list"]
+
+        readonly property real splitX: (queuePanel.opened && queuePanel.width >= 200)
+            ? (root.width - queuePanel.width)
+            : (root.width * 0.52)
+        readonly property bool appendMode: drag.x >= splitX
+
+        onEntered: (drag) => {
+            if (!drag.hasUrls) {
+                drag.accepted = false
+            }
+        }
+
+        onDropped: (drop) => {
+            if (!drop.hasUrls || drop.urls.length === 0)
+                return
+            const appendOnly = (drop.x >= externalDropArea.splitX)
+            drop.acceptProposedAction()
+            const added = playerBackend.enqueueExternalUrls(drop.urls, !appendOnly, !appendOnly)
+            if (added > 0) {
+                if (!appSettings.queuePanelOpen)
+                    appSettings.queuePanelOpen = true
+                const noun = added === 1 ? " track" : " tracks"
+                root.showToast(appendOnly
+                               ? ("Added " + added + noun + " to queue")
+                               : ("Playing " + added + noun + " in queue"))
+            } else {
+                root.showToast("No supported audio files found")
+            }
+        }
+
+        Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: bottomBar.height
+            visible: externalDropArea.containsDrag
+            color: Qt.rgba(sysPalette.window.r, sysPalette.window.g, sysPalette.window.b, 0.88)
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 24
+                spacing: 18
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: 14
+                    color: !externalDropArea.appendMode
+                        ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.16)
+                        : Qt.rgba(sysPalette.base.r, sysPalette.base.g, sysPalette.base.b, 0.65)
+                    border.width: !externalDropArea.appendMode ? 2 : 1
+                    border.color: !externalDropArea.appendMode
+                        ? sysPalette.highlight
+                        : Qt.rgba(sysPalette.windowText.r, sysPalette.windowText.g, sysPalette.windowText.b, 0.18)
+
+                    Column {
+                        anchors.centerIn: parent
+                        width: Math.max(120, parent.width - 32)
+                        spacing: 8
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            text: "▶"
+                            font.pixelSize: 26
+                            color: !externalDropArea.appendMode ? sysPalette.highlight : sysPalette.windowText
+                            opacity: !externalDropArea.appendMode ? 1.0 : 0.45
+                        }
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: "Play in Queue"
+                            font.pixelSize: 17
+                            font.bold: true
+                            color: sysPalette.text
+                        }
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: "Plays immediately · queue only, not added to library"
+                            font.pixelSize: 12
+                            color: sysPalette.windowText
+                            opacity: 0.6
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: !(queuePanel.opened && queuePanel.width >= 200)
+                    Layout.preferredWidth: (queuePanel.opened && queuePanel.width >= 200)
+                        ? Math.max(200, queuePanel.width - 24)
+                        : -1
+                    Layout.fillHeight: true
+                    radius: 14
+                    color: externalDropArea.appendMode
+                        ? Qt.rgba(sysPalette.highlight.r, sysPalette.highlight.g, sysPalette.highlight.b, 0.16)
+                        : Qt.rgba(sysPalette.base.r, sysPalette.base.g, sysPalette.base.b, 0.65)
+                    border.width: externalDropArea.appendMode ? 2 : 1
+                    border.color: externalDropArea.appendMode
+                        ? sysPalette.highlight
+                        : Qt.rgba(sysPalette.windowText.r, sysPalette.windowText.g, sysPalette.windowText.b, 0.18)
+
+                    Column {
+                        anchors.centerIn: parent
+                        width: Math.max(120, parent.width - 32)
+                        spacing: 8
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            text: "+"
+                            font.pixelSize: 28
+                            font.bold: true
+                            color: externalDropArea.appendMode ? sysPalette.highlight : sysPalette.windowText
+                            opacity: externalDropArea.appendMode ? 1.0 : 0.45
+                        }
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: "Add to End of Queue"
+                            font.pixelSize: 17
+                            font.bold: true
+                            color: sysPalette.text
+                        }
+
+                        Text {
+                            width: parent.width
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                            text: "Appends to queue · not added to library"
+                            font.pixelSize: 12
+                            color: sysPalette.windowText
+                            opacity: 0.6
+                        }
+                    }
+                }
+            }
         }
     }
 }

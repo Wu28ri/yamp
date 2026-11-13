@@ -8,7 +8,7 @@ ListView {
     clip: true
     reuseItems: true
     headerPositioning: ListView.OverlayHeader
-    cacheBuffer: 600
+    cacheBuffer: 1200
 
     property int  discCount: 1
     property bool alive: true
@@ -127,7 +127,9 @@ ListView {
                 return
             }
 
+            listView.forceLayout()
             listView.positionViewAtIndex(idx, ListView.Center)
+            listView.forceLayout()
 
             const hit = listView.indexAt(listView.width / 2,
                                          listView.contentY + listView.height / 2)
