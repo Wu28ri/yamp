@@ -74,12 +74,8 @@ private:
     void trackReply(QNetworkReply *reply);
 
     void processQueue();
-    void fetchFromLastFmApi(const QString &key, const QString &artist);
     void fetchFromDeezer(const QString &key, const QString &artist);
-    void downloadArtistImage(const QString &key,
-                             const QString &artist,
-                             const QUrl &imageUrl,
-                             bool allowDeezerFallback);
+    void downloadArtistImage(const QString &key, const QUrl &imageUrl);
     void finishFetch(const QString &key, const QString &providerUrl);
 
     Settings              *m_settings = nullptr;

@@ -26,9 +26,11 @@ QByteArray embeddedPicture(const QString &trackPath) {
     if (auto *flac = dynamic_cast<TagLib::FLAC::File *>(f.file())) {
         const auto &pictures = flac->pictureList();
         if (!pictures.isEmpty()) {
-            const TagLib::FLAC::Picture *chosen = pictures.front();
+            const TagLib::FLAC::Picture *chosen = nullptr;
             for (const auto *p : pictures) {
-                if (p && p->type() == TagLib::FLAC::Picture::FrontCover && !p->data().isEmpty()) {
+                if (!p || p->data().isEmpty()) continue;
+                if (!chosen) chosen = p;
+                if (p->type() == TagLib::FLAC::Picture::FrontCover) {
                     chosen = p;
                     break;
                 }
@@ -55,11 +57,12 @@ QByteArray embeddedPicture(const QString &trackPath) {
     } else {
         const auto props = f.file()->complexProperties("PICTURE");
         if (!props.isEmpty()) {
-            pic = props.front()["data"].toByteVector();
             for (const auto &prop : props) {
-                const QString picType = QString::fromStdWString(prop["pictureType"].toString().toWString());
                 const auto candidate = prop["data"].toByteVector();
-                if (!candidate.isEmpty() && picType.compare(QStringLiteral("Front Cover"), Qt::CaseInsensitive) == 0) {
+                if (candidate.isEmpty()) continue;
+                if (pic.isEmpty()) pic = candidate;
+                const QString picType = QString::fromStdWString(prop["pictureType"].toString().toWString());
+                if (picType.compare(QStringLiteral("Front Cover"), Qt::CaseInsensitive) == 0) {
                     pic = candidate;
                     break;
                 }
@@ -71,7 +74,8 @@ QByteArray embeddedPicture(const QString &trackPath) {
     return QByteArray(pic.data(), static_cast<int>(pic.size()));
 }
 
-QString sidecarImagePath(const QString &trackPath) {
+QString sidecarImagePath(const QString &trackPath, bool *isNamedAlbumSidecar) {
+    if (isNamedAlbumSidecar) *isNamedAlbumSidecar = false;
     if (trackPath.isEmpty()) return {};
 
     const QFileInfo info(trackPath);
@@ -86,7 +90,8 @@ QString sidecarImagePath(const QString &trackPath) {
     auto scoreFileName = [](const QString &fileName) -> int {
         const QString base = QFileInfo(fileName).completeBaseName().toLower();
         if (base == QLatin1String("cover") || base == QLatin1String("folder")
-            || base == QLatin1String("front") || base == QLatin1String("album")) {
+            || base == QLatin1String("front") || base == QLatin1String("album")
+            || base == QLatin1String("artwork")) {
             return 100;
         }
         if (base.contains(QLatin1String("back")) || base.contains(QLatin1String("inlay"))
@@ -94,7 +99,8 @@ QString sidecarImagePath(const QString &trackPath) {
             return 5;
         }
         if (base.contains(QLatin1String("cover")) || base.contains(QLatin1String("folder"))
-            || base.contains(QLatin1String("front")) || base.contains(QLatin1String("album"))) {
+            || base.contains(QLatin1String("front")) || base.contains(QLatin1String("album"))
+            || base.contains(QLatin1String("artwork"))) {
             return 80;
         }
         return 20;
@@ -117,6 +123,9 @@ QString sidecarImagePath(const QString &trackPath) {
             }
         }
     }
+    if (isNamedAlbumSidecar) {
+        *isNamedAlbumSidecar = (bestScore >= 80);
+    }
     return bestPath;
 }
 
@@ -130,15 +139,17 @@ RawCoverData loadRawCover(const QString &trackPath) {
         return result;
     }
 
-    const QString sidecar = sidecarImagePath(trackPath);
+    bool namedSidecar = false;
+    const QString sidecar = sidecarImagePath(trackPath, &namedSidecar);
     if (!sidecar.isEmpty()) {
         QFile file(sidecar);
         if (file.open(QIODevice::ReadOnly)) {
             QByteArray raw = file.readAll();
             if (!raw.isEmpty()) {
-                result.bytes       = std::move(raw);
-                result.sidecarPath = sidecar;
-                result.source      = Source::Sidecar;
+                result.bytes               = std::move(raw);
+                result.sidecarPath         = sidecar;
+                result.source              = Source::Sidecar;
+                result.isNamedAlbumSidecar = namedSidecar;
                 return result;
             }
         }

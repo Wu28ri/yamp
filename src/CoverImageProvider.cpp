@@ -3,12 +3,18 @@
 
 #include <QBuffer>
 #include <QCryptographicHash>
+#include <QDataStream>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
 #include <QReadLocker>
 #include <QRunnable>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QThread>
 #include <QUrl>
 #include <QWriteLocker>
 #include <atomic>
@@ -62,7 +68,9 @@ QString dirSignature(const QString &dirPath) {
 
 const QByteArray kPlaceholderHash = QByteArrayLiteral("__placeholder__");
 
-constexpr int kMaxHashEntries = 65536;
+constexpr int     kMaxHashEntries = 65536;
+constexpr int     kMaxDiskThumbs  = 2500;
+constexpr quint32 kIndexMagic     = 0x59435631u; // "YCV1"
 
 template <typename Hash>
 void capHash(Hash &hash) {
@@ -167,14 +175,145 @@ int imageKb(const QImage &img) {
 }
 
 CoverImageProvider::CoverImageProvider() {
+    m_cacheDir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation)
+               + QStringLiteral("/cover_thumbs");
+    QDir().mkpath(m_cacheDir);
     m_sources.setMaxCost(m_sourceBudgetKb);
     m_scaled.setMaxCost(m_scaledBudgetKb);
     m_pool.setMaxThreadCount(4);
+    loadIndex();
 }
 
 CoverImageProvider::~CoverImageProvider() {
     m_pool.clear();
     m_pool.waitForDone();
+    saveIndex();
+    pruneDiskCache();
+}
+
+void CoverImageProvider::loadIndex() {
+    if (m_cacheDir.isEmpty()) return;
+    QFile file(m_cacheDir + QStringLiteral("/index.dat"));
+    if (!file.open(QIODevice::ReadOnly)) return;
+
+    QDataStream in(&file);
+    in.setVersion(QDataStream::Qt_6_5);
+    quint32 magic = 0;
+    qint32 count = 0;
+    in >> magic >> count;
+    if (in.status() != QDataStream::Ok || magic != kIndexMagic || count <= 0 || count > kMaxHashEntries) {
+        return;
+    }
+
+    m_pathToHash.reserve(count);
+    for (qint32 i = 0; i < count; ++i) {
+        QString key;
+        QByteArray val;
+        in >> key >> val;
+        if (in.status() != QDataStream::Ok) {
+            m_pathToHash.clear();
+            return;
+        }
+        if (!key.isEmpty() && !val.isEmpty()) {
+            m_pathToHash.insert(key, val);
+        }
+    }
+}
+
+void CoverImageProvider::saveIndex() {
+    QHash<QString, QByteArray> snapshot;
+    QString cacheDir;
+    {
+        QWriteLocker locker(&m_lock);
+        if (!m_indexDirty || m_cacheDir.isEmpty()) return;
+        snapshot = m_pathToHash;
+        cacheDir = m_cacheDir;
+        m_indexDirty = false;
+    }
+
+    QDir().mkpath(cacheDir);
+    QSaveFile file(cacheDir + QStringLiteral("/index.dat"));
+    if (!file.open(QIODevice::WriteOnly)) return;
+
+    QDataStream out(&file);
+    out.setVersion(QDataStream::Qt_6_5);
+    out << kIndexMagic << static_cast<qint32>(snapshot.size());
+    for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
+        out << it.key() << it.value();
+    }
+    file.commit();
+}
+
+void CoverImageProvider::pruneDiskCache() {
+    if (m_thumbsWritten.load(std::memory_order_relaxed) <= 0 || m_cacheDir.isEmpty()) return;
+
+    QDir dir(m_cacheDir);
+    if (!dir.exists()) return;
+
+    const QFileInfoList entries = dir.entryInfoList(QDir::Files, QDir::Time | QDir::Reversed);
+    QList<QFileInfo> thumbs;
+    thumbs.reserve(entries.size());
+    for (const QFileInfo &fi : entries) {
+        const QString name = fi.fileName();
+        if (name == QLatin1String("index.dat")) continue;
+        if (name.contains(QLatin1String(".tmp."))) {
+            QFile::remove(fi.absoluteFilePath());
+            continue;
+        }
+        thumbs.append(fi);
+    }
+
+    const int excess = thumbs.size() - kMaxDiskThumbs;
+    for (int i = 0; i < excess; ++i) {
+        QFile::remove(thumbs.at(i).absoluteFilePath());
+    }
+}
+
+QImage CoverImageProvider::loadDiskThumbnail(const QByteArray &contentHash, int maxEdge) const {
+    if (m_cacheDir.isEmpty() || contentHash.size() < 2 || contentHash.at(0) != 'h') return {};
+    const QString base = m_cacheDir + QLatin1Char('/')
+                       + QString::fromLatin1(contentHash.mid(1).toHex())
+                       + QLatin1Char('_') + QString::number(maxEdge);
+
+    QImage img;
+    if (QFileInfo::exists(base + QStringLiteral(".jpg"))) {
+        if (img.load(base + QStringLiteral(".jpg"), "JPG")) return img;
+    }
+    if (QFileInfo::exists(base + QStringLiteral(".png"))) {
+        if (img.load(base + QStringLiteral(".png"), "PNG")) return img;
+    }
+    return {};
+}
+
+void CoverImageProvider::saveDiskThumbnail(const QByteArray &contentHash, int maxEdge, const QImage &source) {
+    if (m_cacheDir.isEmpty() || source.isNull() || contentHash.size() < 2 || contentHash.at(0) != 'h') return;
+
+    const bool usePng = source.hasAlphaChannel();
+    const QString ext = usePng ? QStringLiteral(".png") : QStringLiteral(".jpg");
+    const QString finalPath = m_cacheDir + QLatin1Char('/')
+                            + QString::fromLatin1(contentHash.mid(1).toHex())
+                            + QLatin1Char('_') + QString::number(maxEdge) + ext;
+
+    if (QFileInfo::exists(finalPath)) return;
+
+    QDir().mkpath(m_cacheDir);
+    const QString tmpPath = finalPath + QStringLiteral(".tmp.")
+                          + QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()));
+    {
+        QFile tmp(tmpPath);
+        if (!tmp.open(QIODevice::WriteOnly)) return;
+        const bool ok = usePng ? source.save(&tmp, "PNG") : source.save(&tmp, "JPG", 88);
+        tmp.close();
+        if (!ok) {
+            QFile::remove(tmpPath);
+            return;
+        }
+    }
+    if (!QFile::rename(tmpPath, finalPath)) {
+        QFile::remove(tmpPath);
+        return;
+    }
+    m_thumbsWritten.fetch_add(1, std::memory_order_relaxed);
 }
 
 QQuickImageResponse *CoverImageProvider::requestImageResponse(const QString &id, const QSize &requestedSize) {
@@ -184,11 +323,23 @@ QQuickImageResponse *CoverImageProvider::requestImageResponse(const QString &id,
 }
 
 void CoverImageProvider::clearCache() {
-    QWriteLocker locker(&m_lock);
-    m_pathToHash.clear();
-    m_dirToHash.clear();
-    m_sources.clear();
-    m_scaled.clear();
+    QString cacheDir;
+    {
+        QWriteLocker locker(&m_lock);
+        m_pathToHash.clear();
+        m_dirToHash.clear();
+        m_sources.clear();
+        m_scaled.clear();
+        m_indexDirty = false;
+        cacheDir = m_cacheDir;
+    }
+    if (!cacheDir.isEmpty()) {
+        QDir dir(cacheDir);
+        const QFileInfoList files = dir.entryInfoList(QDir::Files);
+        for (const QFileInfo &fi : files) {
+            QFile::remove(fi.absoluteFilePath());
+        }
+    }
 }
 
 void CoverImageProvider::setMaxEdge(int edge) {
@@ -196,8 +347,6 @@ void CoverImageProvider::setMaxEdge(int edge) {
     QWriteLocker locker(&m_lock);
     if (m_maxEdge == edge) return;
     m_maxEdge = edge;
-    m_pathToHash.clear();
-    m_dirToHash.clear();
     m_sources.clear();
     m_scaled.clear();
 }
@@ -277,8 +426,18 @@ QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const 
             if (fromDirHash) {
                 QWriteLocker locker(&m_lock);
                 m_pathToHash.insert(pathKey, contentHash);
+                m_indexDirty = true;
             }
             return cachedScaled;
+        }
+
+        if (cachedSource.isNull()) {
+            cachedSource = loadDiskThumbnail(contentHash, maxEdge);
+            if (!cachedSource.isNull()) {
+                cachedSourceSize = cachedSource.size();
+                QWriteLocker locker(&m_lock);
+                m_sources.insert(sourceKey, new QImage(cachedSource), qMax(imageKb(cachedSource), 16));
+            }
         }
 
         if (!cachedSource.isNull()) {
@@ -288,7 +447,10 @@ QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const 
                 m_scaled.insert(scaledKey,
                                 new ScaledEntry{out, cachedSourceSize},
                                 qMax(imageKb(out), 16));
-                if (fromDirHash) m_pathToHash.insert(pathKey, contentHash);
+                if (fromDirHash) {
+                    m_pathToHash.insert(pathKey, contentHash);
+                    m_indexDirty = true;
+                }
             }
             if (size) *size = cachedSourceSize;
             return out;
@@ -300,6 +462,7 @@ QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const 
         QWriteLocker locker(&m_lock);
         capHash(m_pathToHash);
         m_pathToHash.insert(pathKey, kPlaceholderHash);
+        m_indexDirty = true;
 
         QImage img = makePlaceholder();
         if (size) *size = img.size();
@@ -319,19 +482,24 @@ QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const 
 
     const bool cacheSource = source.isNull();
     if (cacheSource) {
-        source = decodeCapped(raw.bytes, maxEdge);
+        source = loadDiskThumbnail(contentHash, maxEdge);
         if (source.isNull()) {
-            QWriteLocker locker(&m_lock);
-            capHash(m_pathToHash);
-            m_pathToHash.insert(pathKey, kPlaceholderHash);
+            source = decodeCapped(raw.bytes, maxEdge);
+            if (source.isNull()) {
+                QWriteLocker locker(&m_lock);
+                capHash(m_pathToHash);
+                m_pathToHash.insert(pathKey, kPlaceholderHash);
+                m_indexDirty = true;
 
-            QImage img = makePlaceholder();
-            if (size) *size = img.size();
-            return img;
+                QImage img = makePlaceholder();
+                if (size) *size = img.size();
+                return img;
+            }
+            saveDiskThumbnail(contentHash, maxEdge, source);
         }
     }
 
-    const bool shareAcrossDir = (raw.source == CoverExtractor::Source::Sidecar);
+    const bool shareAcrossDir = (raw.source == CoverExtractor::Source::Sidecar && raw.isNamedAlbumSidecar);
     {
         QWriteLocker locker(&m_lock);
         if (cacheSource)
@@ -339,6 +507,7 @@ QImage CoverImageProvider::loadCoverImage(const QString &id, QSize *size, const 
         capHash(m_pathToHash);
         capHash(m_dirToHash);
         m_pathToHash.insert(pathKey, contentHash);
+        m_indexDirty = true;
 
         if (shareAcrossDir) m_dirToHash.insert(dirKey, contentHash);
     }

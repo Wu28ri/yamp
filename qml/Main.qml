@@ -75,7 +75,7 @@ Window {
     }
 
     function coverSource(path) {
-        return path ? "image://cover/" + encodeURI(path) : ""
+        return path ? "image://cover/" + encodeURIComponent(path) : ""
     }
 
     function colorForName(name) {
