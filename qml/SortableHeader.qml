@@ -2,6 +2,7 @@ import QtQuick
 
 Item {
     id: header
+    readonly property bool keepsSearchOpen: true
 
     property string label: ""
     property string sortColumn: ""

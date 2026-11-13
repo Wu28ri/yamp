@@ -9,8 +9,9 @@ RowLayout {
     Layout.topMargin: compact ? 24 : 40
     spacing: compact ? 18 : 30
 
-    readonly property bool compact: width > 0 && width < 560
-    readonly property real avatarSize: compact ? 140 : 220
+    readonly property bool compact: (width > 0 && width < 560)
+                                    || (Window.window !== null && Window.window.height < 560)
+    readonly property real avatarSize: compact ? 132 : 220
 
     property alias avatarContent: avatarContainer.data
     property string title: ""
@@ -22,9 +23,10 @@ RowLayout {
 
     Item {
         id: avatarContainer
-        width: header.avatarSize; height: header.avatarSize
         Layout.preferredWidth: header.avatarSize
         Layout.preferredHeight: header.avatarSize
+        Layout.minimumWidth: header.avatarSize
+        Layout.maximumWidth: header.avatarSize
     }
 
     ColumnLayout {
@@ -73,5 +75,4 @@ RowLayout {
             }
         }
     }
-    Item { Layout.fillWidth: true }
 }

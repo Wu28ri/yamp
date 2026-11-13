@@ -179,7 +179,7 @@ Rectangle {
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                     wrapMode: Text.Wrap
-                    renderType: Text.NativeRendering
+                    renderType: Text.QtRendering
 
                     Behavior on color {
                         ColorAnimation {

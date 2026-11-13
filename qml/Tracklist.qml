@@ -15,7 +15,10 @@ ListView {
     property int  pendingScrollIdx: -1
     property bool persistScroll: false
     property bool suppressSave: false
-    property real contentYBeforeReset: 0
+    property real scrollOffsetBeforeReset: 0
+
+    readonly property real headerHeight: headerItem ? headerItem.height : 40
+    readonly property real topRestY: originY - headerHeight
 
     Component.onDestruction: alive = false
 
@@ -29,20 +32,20 @@ ListView {
         target: playerBackend.trackModel
         enabled: listView.alive && listView.parent !== null
         function onModelAboutToBeReset() {
-            listView.contentYBeforeReset = listView.contentY
+            listView.scrollOffsetBeforeReset = Math.max(0, listView.contentY - listView.topRestY)
             listView.suppressSave = true
         }
         function onModelReset() {
-            const y = listView.contentYBeforeReset
-            const targetRow = Math.ceil(Math.max(0, y) / 56) + 30
+            const offset = listView.scrollOffsetBeforeReset
+            const targetRow = Math.ceil(offset / 56) + 30
             playerBackend.trackModel.ensureFetchedTo(targetRow)
             Qt.callLater(function() {
                 if (!listView.alive || !listView.parent) return
                 listView.forceLayout()
-                const minY = listView.originY
+                const minY = listView.topRestY
                 const maxY = Math.max(minY,
-                    listView.contentHeight - listView.height + minY)
-                listView.contentY = Math.max(minY, Math.min(y, maxY))
+                    listView.contentHeight - listView.height + listView.originY)
+                listView.contentY = Math.max(minY, Math.min(minY + offset, maxY))
                 suppressTimer.restart()
             })
         }
@@ -50,17 +53,18 @@ ListView {
 
     Component.onCompleted: {
         persistScroll = (root.currentView === "tracks")
-        if (persistScroll && root.savedTracklistContentY > 0) {
-            const y = root.savedTracklistContentY
-            const targetRow = Math.ceil(y / 56) + 30
+        if (persistScroll && root.savedTracklistScrollOffset > 0) {
+            const offset = root.savedTracklistScrollOffset
+            const targetRow = Math.ceil(offset / 56) + 30
             playerBackend.trackModel.ensureFetchedTo(targetRow)
             forceLayout()
-            contentY = y
+            contentY = topRestY + offset
         }
     }
 
     onContentYChanged: {
-        if (persistScroll && !suppressSave) root.savedTracklistContentY = contentY
+        if (persistScroll && !suppressSave)
+            root.savedTracklistScrollOffset = Math.max(0, contentY - topRestY)
     }
 
     Timer {
@@ -111,7 +115,7 @@ ListView {
 
     readonly property bool showAlbumCol: width >= 540
     readonly property real colNum:   width < 460 ? 32 : 50
-    readonly property real colCover: 60
+    readonly property real colCover: 45
     readonly property real colAlbum: showAlbumCol ? Math.min(200, Math.max(110, (width - 360) * 0.35)) : 0
     readonly property real colTime:  60
 
@@ -141,13 +145,12 @@ ListView {
         width: listView.width; height: 40
         color: sysPalette.window
 
-        property string sortCol: "title"
-        property bool   sortAsc: true
+        readonly property string sortCol: playerBackend.sortColumn
+        readonly property bool   sortAsc: playerBackend.sortAscending
 
         function toggleSort(column) {
-            sortAsc = sortCol === column ? !sortAsc : true
-            sortCol = column
-            playerBackend.sortTracks(column, sortAsc)
+            const nextAsc = sortCol === column ? !sortAsc : true
+            playerBackend.sortTracks(column, nextAsc)
         }
 
         Row {
@@ -223,14 +226,17 @@ ListView {
             text: "Play next"
             onTriggered: playerBackend.addPlayNext(globalTrackMenu.trackPath)
         }
+        MenuItem {
+            text: "Add to queue"
+            onTriggered: playerBackend.addToQueue(globalTrackMenu.trackPath)
+        }
         MenuSeparator {}
         MenuItem {
             text: "Go to artist"
             onTriggered: {
                 const ctx = playerBackend.trackContextForPath(globalTrackMenu.trackPath)
                 if (!ctx || !ctx.artist) return
-                root.selectedArtist = ctx.artist
-                root.currentView    = "artistDetail"
+                root.openArtist(ctx.artist)
             }
         }
         MenuItem {
@@ -238,10 +244,7 @@ ListView {
             onTriggered: {
                 const ctx = playerBackend.trackContextForPath(globalTrackMenu.trackPath)
                 if (!ctx || !ctx.album) return
-                root.selectedAlbum     = ctx.album
-                root.selectedArtist    = ctx.albumArtist
-                root.selectedAlbumPath = globalTrackMenu.trackPath
-                root.currentView       = "albumDetail"
+                root.openAlbum(ctx.album, ctx.albumArtist, globalTrackMenu.trackPath)
             }
         }
         MenuSeparator {}
@@ -268,6 +271,7 @@ ListView {
         required property string album
         required property string path
         required property int    duration
+        required property int    trackNo
 
         readonly property bool isCurrent: playerBackend.currentPath === path
 
@@ -299,7 +303,9 @@ ListView {
                 anchors.leftMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
                 width: listView.colNum
-                text: trackItem.index + 1
+                text: (root.currentView === "albumDetail" || playerBackend.sortColumn === "track_no") && trackItem.trackNo > 0
+                      ? trackItem.trackNo
+                      : (trackItem.index + 1)
                 color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.windowText
                 opacity: 0.7
                 font.pixelSize: 13
@@ -320,7 +326,7 @@ ListView {
                     anchors.fill: parent
                     source: root.coverSource(trackItem.path)
                     fillMode: Image.PreserveAspectCrop
-                    sourceSize: Qt.size(40, 40)
+                    sourceSize: Qt.size(Math.ceil(40 * Screen.devicePixelRatio), Math.ceil(40 * Screen.devicePixelRatio))
                     asynchronous: true
                 }
             }
@@ -376,10 +382,13 @@ ListView {
                 width: listView.colTime
                 horizontalAlignment: Text.AlignRight
                 text: {
-                    const s = trackItem.duration
-                    const m = Math.floor(s / 60)
+                    const s = Math.max(0, trackItem.duration)
+                    const h = Math.floor(s / 3600)
+                    const m = Math.floor((s % 3600) / 60)
                     const sec = s % 60
-                    return m + ":" + (sec < 10 ? "0" : "") + sec
+                    const pad = (n) => (n < 10 ? "0" + n : "" + n)
+                    if (h > 0) return h + ":" + pad(m) + ":" + pad(sec)
+                    return m + ":" + pad(sec)
                 }
                 color: sysPalette.windowText
                 opacity: 0.6

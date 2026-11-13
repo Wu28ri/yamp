@@ -13,7 +13,8 @@ Window {
     color: sysPalette.window
 
     Component.onCompleted: {
-        Qt.application.font.hintingPreference = Font.PreferFullHinting
+        if (Screen.devicePixelRatio <= 1.0)
+            Qt.application.font.hintingPreference = Font.PreferFullHinting
     }
 
     property string currentView: "tracks"
@@ -21,7 +22,7 @@ Window {
     property string selectedAlbumPath: ""
     property string selectedArtist: ""
     property string viewBeforeLyrics: "tracks"
-    property real   savedTracklistContentY: 0
+    property real   savedTracklistScrollOffset: 0
     property bool   sidebarSearchExpanded: false
     property real   sidebarWidthBeforeSearch: 56
 
@@ -32,6 +33,24 @@ Window {
             viewBeforeLyrics = currentView
             currentView = "lyrics"
         }
+    }
+
+    function openArtist(artistName) {
+        if (!artistName) return
+        if (sideBar.searchOpen) sideBar.clearSearch()
+        selectedArtist = artistName
+        playerBackend.filterByArtist(artistName)
+        currentView = "artistDetail"
+    }
+
+    function openAlbum(albumName, albumArtist, trackPath) {
+        if (!albumName) return
+        if (sideBar.searchOpen) sideBar.clearSearch()
+        selectedAlbum = albumName
+        selectedArtist = albumArtist || ""
+        selectedAlbumPath = trackPath || ""
+        playerBackend.filterByAlbum(albumName, selectedArtist)
+        currentView = "albumDetail"
     }
 
     function deepestItemAt(item, scenePosition) {
@@ -75,34 +94,51 @@ Window {
 
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
+    Connections {
+        target: playerBackend
+        function onRaiseRequested() {
+            root.show()
+            root.raise()
+            root.requestActivate()
+        }
+    }
+
     Shortcut {
         sequence: "Space"
-        context: Qt.ApplicationShortcut
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchFocused
         onActivated: playerBackend.togglePlayback()
     }
     Shortcut {
         sequence: "Left"
-        context: Qt.ApplicationShortcut
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchFocused
         onActivated: playerBackend.position = Math.max(0, playerBackend.position - 5000)
     }
     Shortcut {
         sequence: "Right"
-        context: Qt.ApplicationShortcut
-        onActivated: playerBackend.position = Math.min(playerBackend.duration, playerBackend.position + 5000)
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchFocused
+        onActivated: {
+            if (playerBackend.duration > 0)
+                playerBackend.position = Math.min(playerBackend.duration, playerBackend.position + 5000)
+        }
     }
     Shortcut {
         sequence: "Up"
-        context: Qt.ApplicationShortcut
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchFocused
         onActivated: playerBackend.volume = Math.min(1.0, playerBackend.volume + 0.05)
     }
     Shortcut {
         sequence: "Down"
-        context: Qt.ApplicationShortcut
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchFocused
         onActivated: playerBackend.volume = Math.max(0.0, playerBackend.volume - 0.05)
     }
     Shortcut {
         sequence: StandardKey.Find
-        context: Qt.ApplicationShortcut
+        context: Qt.WindowShortcut
         onActivated: sideBar.openSearch()
     }
 
@@ -142,7 +178,11 @@ Window {
                 SplitView.preferredWidth: root.sidebarSearchExpanded ? 180 : appSettings.sidebarWidth
                 SplitView.minimumWidth: 56
                 SplitView.maximumWidth: 400
-                onSettingsClicked: settingsWindow.show()
+                onSettingsClicked: {
+                    settingsWindow.show()
+                    settingsWindow.raise()
+                    settingsWindow.requestActivate()
+                }
                 onExpandRequested: {
                     if (!root.sidebarSearchExpanded) {
                         sidebarSaveTimer.stop()

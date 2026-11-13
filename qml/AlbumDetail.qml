@@ -23,7 +23,7 @@ Item {
                     id: detailCoverImage
                     anchors.fill: parent
                     source: root.coverSource(root.selectedAlbumPath)
-                    sourceSize: Qt.size(220, 220)
+                    sourceSize: Qt.size(Math.ceil(220 * Screen.devicePixelRatio), Math.ceil(220 * Screen.devicePixelRatio))
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true
                     cache: true

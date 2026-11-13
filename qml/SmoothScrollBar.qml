@@ -6,6 +6,7 @@ ScrollBar {
     z: 20
     policy: ScrollBar.AsNeeded
     hoverEnabled: true
+    readonly property bool keepsSearchOpen: true
 
     implicitWidth: 14
     width: 14

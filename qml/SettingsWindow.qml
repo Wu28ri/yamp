@@ -25,6 +25,23 @@ Window {
         }
     }
 
+    Dialog {
+        id: clearDbDialog
+        title: "Clear Database"
+        modal: true
+        anchors.centerIn: parent
+        width: 380
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        onAccepted: appSettings.clearDatabase()
+
+        Label {
+            width: parent.width
+            wrapMode: Text.WordWrap
+            color: sysPalette.text
+            text: "Clear the music library database and remove watched folders?\n\nYour audio files on disk will not be modified."
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -52,6 +69,26 @@ Window {
 
             ColumnLayout {
                 spacing: settingsWindow.pageSpacing
+
+                Label {
+                    text: "Playback"
+                    font.pixelSize: 15
+                    font.bold: true
+                    color: sysPalette.text
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+
+                    Switch {
+                        text: "Gapless playback"
+                        checked: appSettings.gaplessPlayback
+                        onToggled: appSettings.gaplessPlayback = checked
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
 
                 Label {
                     text: "ReplayGain"
@@ -120,18 +157,26 @@ Window {
                     }
 
                     SpinBox {
+                        id: rgPreampSpin
                         Layout.preferredWidth: 120
-                        leftPadding: 8
                         from: -1500
                         to: 1500
                         stepSize: 25
                         value: Math.round(appSettings.replayGainPreampDb * 100)
                         onValueModified: appSettings.replayGainPreampDb = value / 100
+                        validator: DoubleValidator {
+                            bottom: -15.0
+                            top: 15.0
+                            decimals: 2
+                            notation: DoubleValidator.StandardNotation
+                        }
                         textFromValue: function(value) {
                             return (value / 100).toFixed(2)
                         }
                         valueFromText: function(text) {
-                            return Math.round(parseFloat(text) * 100)
+                            const parsed = parseFloat(text.replace(",", "."))
+                            if (isNaN(parsed)) return rgPreampSpin.value
+                            return Math.max(-1500, Math.min(1500, Math.round(parsed * 100)))
                         }
                     }
 
@@ -200,11 +245,13 @@ Window {
                                 model = playerBackend.listHardwareDevices()
                                 const index = indexOfValue(appSettings.audioDevice)
                                 currentIndex = index >= 0 ? index : (count > 0 ? 0 : -1)
-                                if (index < 0 && count > 0)
+                                if (index < 0 && count > 0
+                                        && bitPerfectSwitch.checked
+                                        && (!appSettings.audioDevice || appSettings.audioDevice === "auto")) {
                                     appSettings.audioDevice = currentValue
+                                }
                             }
 
-                            Component.onCompleted: refresh()
                             onVisibleChanged: if (visible) refresh()
                             onActivated: {
                                 if (currentIndex >= 0) appSettings.audioDevice = currentValue
@@ -301,7 +348,7 @@ Window {
                         icon.name: "edit-clear-history"
                         text: "Clear Database"
                         display: AbstractButton.TextBesideIcon
-                        onClicked: appSettings.clearDatabase()
+                        onClicked: clearDbDialog.open()
                     }
 
                     Button {
@@ -339,14 +386,14 @@ Window {
                         model: [128, 192, 256, 384, 512, 768, 1024]
                         function syncFromSettings() {
                             const idx = model.indexOf(appSettings.coverMaxEdge)
-                            currentIndex = idx >= 0 ? idx : 3
+                            currentIndex = idx >= 0 ? idx : 4
                         }
                         Component.onCompleted: syncFromSettings()
                         onActivated: appSettings.coverMaxEdge = model[currentIndex]
                     }
 
                     Label {
-                        text: edgeBox.model[edgeBox.currentIndex] + " px"
+                        text: "px"
                         color: sysPalette.windowText
                         opacity: 0.6
                     }
@@ -366,7 +413,6 @@ Window {
 
                     SpinBox {
                         Layout.preferredWidth: 120
-                        leftPadding: 8
                         from: 4
                         to: 1024
                         stepSize: 4
@@ -395,7 +441,6 @@ Window {
 
                     SpinBox {
                         Layout.preferredWidth: 120
-                        leftPadding: 8
                         from: 2
                         to: 512
                         stepSize: 2
@@ -488,7 +533,7 @@ Window {
                 spacing: settingsWindow.pageSpacing
 
                 Label {
-                    text: "YAMP 0.2"
+                    text: "YAMP " + Qt.application.version
                     font.pixelSize: 18
                     font.bold: true
                     color: sysPalette.text

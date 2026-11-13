@@ -13,7 +13,8 @@ GridView {
         const cols = Math.max(1, Math.floor(gridAvailableWidth / 200))
         return Math.floor(gridAvailableWidth / cols)
     }
-    cellHeight: 280
+    readonly property real coverSize: Math.max(80, Math.floor((cellWidth - 20) * 0.9))
+    cellHeight: coverSize + 74
     cacheBuffer: 600
     model: playerBackend.albumModel
 
@@ -39,8 +40,8 @@ GridView {
             spacing: 8
 
             Item {
-                Layout.preferredWidth: Math.floor((tile.width - 20) * 0.9)
-                Layout.preferredHeight: Layout.preferredWidth
+                Layout.preferredWidth: albumsGrid.coverSize
+                Layout.preferredHeight: albumsGrid.coverSize
                 Layout.alignment: Qt.AlignHCenter
 
                 Rectangle {
@@ -60,22 +61,9 @@ GridView {
                         anchors.fill: parent
                         fillMode: Image.PreserveAspectCrop
                         source: root.coverSource(tile.path)
-                        sourceSize: Qt.size(250, 250)
+                        sourceSize: Qt.size(Math.ceil(250 * Screen.devicePixelRatio), Math.ceil(250 * Screen.devicePixelRatio))
                         asynchronous: true
                         opacity: albumClickArea.pressed ? 0.8 : 1.0
-                    }
-
-                    MouseArea {
-                        id: albumClickArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            root.selectedAlbum     = tile.album
-                            root.selectedAlbumPath = tile.path
-                            root.selectedArtist    = tile.artist
-                            root.currentView       = "albumDetail"
-                        }
                     }
                 }
             }
@@ -106,6 +94,16 @@ GridView {
             }
 
             Item { Layout.fillHeight: true }
+        }
+
+        MouseArea {
+            id: albumClickArea
+            readonly property bool keepsSearchOpen: true
+            anchors.fill: parent
+            anchors.margins: 8
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.openAlbum(tile.album, tile.artist, tile.path)
         }
     }
 }

@@ -25,14 +25,21 @@ Rectangle {
             text: "Play next"
             onTriggered: playerBackend.addPlayNext(queueTrackMenu.trackPath)
         }
+        MenuItem {
+            text: "Add to queue"
+            onTriggered: playerBackend.addToQueue(queueTrackMenu.trackPath)
+        }
+        MenuItem {
+            text: "Remove from queue"
+            onTriggered: playerBackend.queueModel.remove(queueTrackMenu.queuePosition)
+        }
         MenuSeparator { }
         MenuItem {
             text: "Go to artist"
             onTriggered: {
                 const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
                 if (!ctx || !ctx.artist) return
-                root.selectedArtist = ctx.artist
-                root.currentView = "artistDetail"
+                root.openArtist(ctx.artist)
             }
         }
         MenuItem {
@@ -40,10 +47,7 @@ Rectangle {
             onTriggered: {
                 const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
                 if (!ctx || !ctx.album) return
-                root.selectedAlbum = ctx.album
-                root.selectedArtist = ctx.albumArtist
-                root.selectedAlbumPath = queueTrackMenu.trackPath
-                root.currentView = "albumDetail"
+                root.openAlbum(ctx.album, ctx.albumArtist, queueTrackMenu.trackPath)
             }
         }
         MenuSeparator { }
@@ -72,11 +76,44 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         anchors.leftMargin: 16
-        anchors.topMargin: 16
-        anchors.bottomMargin: 16
+        anchors.topMargin: 10
+        anchors.bottomMargin: 12
         anchors.rightMargin: 2
-        spacing: 16
+        spacing: 8
         visible: queuePanel.width > 50
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.rightMargin: 14
+            spacing: 8
+
+            Text {
+                text: "Queue"
+                color: sysPalette.text
+                font.pixelSize: 14
+                font.bold: true
+            }
+
+            Text {
+                visible: playerBackend.queueCount > 0
+                text: playerBackend.queueCount
+                color: sysPalette.windowText
+                opacity: 0.45
+                font.pixelSize: 12
+                font.family: "Monospace"
+            }
+
+            Item { Layout.fillWidth: true }
+
+            ToolButton {
+                icon.name: "edit-clear-all"
+                enabled: playerBackend.queueCount > 0
+                opacity: enabled ? 0.8 : 0.35
+                onClicked: playerBackend.clearQueue()
+                ToolTip.visible: hovered && enabled
+                ToolTip.text: "Clear queue"
+            }
+        }
 
         ListView {
             id: queueList
@@ -266,14 +303,15 @@ Rectangle {
                             }
 
                             Rectangle {
-                                width: 36; height: 36
+                                Layout.preferredWidth: 36
+                                Layout.preferredHeight: 36
                                 color: queueCoverImage.status === Image.Ready ? "transparent" : sysPalette.base
                                 radius: 4; clip: true
                                 Image {
                                     id: queueCoverImage
                                     anchors.fill: parent
                                     source: root.coverSource(delegateRoot.path)
-                                    sourceSize: Qt.size(36, 36)
+                                    sourceSize: Qt.size(Math.ceil(36 * Screen.devicePixelRatio), Math.ceil(36 * Screen.devicePixelRatio))
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                 }

@@ -13,6 +13,27 @@ Rectangle {
 
     readonly property bool compact: width < 140
     readonly property bool searchOpen: searchField.searchOpen
+    readonly property bool searchFocused: searchField.activeFocus
+
+    Timer {
+        id: searchDebounce
+        interval: 120
+        onTriggered: sideBar.applySearch(searchField.text)
+    }
+
+    function applySearch(query) {
+        if (root.currentView === "lyrics") {
+            playerBackend.clearCategoryFilter()
+            root.currentView = "tracks"
+        }
+        if (root.currentView === "albums") {
+            playerBackend.searchAlbums(query)
+        } else if (root.currentView === "artists") {
+            playerBackend.searchArtists(query)
+        } else {
+            playerBackend.searchTracks(query)
+        }
+    }
 
     Rectangle {
         width: 1
@@ -26,6 +47,7 @@ Rectangle {
     }
 
     function clearSearch() {
+        searchDebounce.stop()
         searchField.text = ""
         searchField.searchOpen = false
         playerBackend.searchTracks("")
@@ -108,26 +130,19 @@ Rectangle {
                     radius: 4
                 }
 
-                onTextEdited: {
-                    if (root.currentView === "lyrics")
-                        root.currentView = "tracks"
-                    if (root.currentView === "albums") {
-                        playerBackend.searchAlbums(text)
-                    } else if (root.currentView === "artists") {
-                        playerBackend.searchArtists(text)
-                    } else {
-                        playerBackend.searchTracks(text)
-                    }
-                }
+                onTextEdited: searchDebounce.restart()
 
                 Keys.onEscapePressed: clearSearch()
             }
         }
 
         ToolButton {
+            readonly property bool activeSection: root.currentView === "tracks"
             Layout.fillWidth: true
             text: "All tracks"
             icon.name: "go-home"
+            icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
+            font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
                 root.currentView = "tracks"
@@ -139,11 +154,15 @@ Rectangle {
         }
 
         ToolButton {
+            readonly property bool activeSection: root.currentView === "albums" || root.currentView === "albumDetail"
             Layout.fillWidth: true
             text: "Albums"
             icon.name: "media-optical-audio"
+            icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
+            font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
+                playerBackend.clearCategoryFilter()
                 root.currentView = "albums"
                 clearSearch()
             }
@@ -152,11 +171,15 @@ Rectangle {
         }
 
         ToolButton {
+            readonly property bool activeSection: root.currentView === "artists" || root.currentView === "artistDetail"
             Layout.fillWidth: true
             text: "Artists"
             icon.name: "system-users"
+            icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
+            font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
             onClicked: {
+                playerBackend.clearCategoryFilter()
                 root.currentView = "artists"
                 clearSearch()
             }

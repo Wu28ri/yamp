@@ -13,7 +13,8 @@ GridView {
         const cols = Math.max(1, Math.floor(gridAvailableWidth / 200))
         return Math.floor(gridAvailableWidth / cols)
     }
-    cellHeight: 280
+    readonly property real coverSize: Math.max(80, Math.floor((cellWidth - 20) * 0.9))
+    cellHeight: coverSize + 74
     cacheBuffer: 600
     model: playerBackend.artistModel
 
@@ -33,14 +34,16 @@ GridView {
         required property int    albumCount
         required property int    trackCount
 
+        onArtistChanged: artistImage.fetchedUrl = ""
+
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 10
             spacing: 8
 
             Item {
-                Layout.preferredWidth: Math.floor((tile.width - 20) * 0.9)
-                Layout.preferredHeight: Layout.preferredWidth
+                Layout.preferredWidth: artistsGrid.coverSize
+                Layout.preferredHeight: artistsGrid.coverSize
                 Layout.alignment: Qt.AlignHCenter
 
                 Rectangle {
@@ -65,7 +68,7 @@ GridView {
                         color: "white"
                         font.pixelSize: Math.round(parent.width * 0.32)
                         font.bold: true
-                        renderType: Text.NativeRendering
+                        renderType: Text.QtRendering
                     }
 
                     Image {
@@ -87,17 +90,6 @@ GridView {
                                 if (artistName === tile.artist)
                                     artistImage.fetchedUrl = imageUrl
                             }
-                        }
-                    }
-
-                    MouseArea {
-                        id: artistClickArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            root.selectedArtist = tile.artist
-                            root.currentView    = "artistDetail"
                         }
                     }
                 }
@@ -134,6 +126,16 @@ GridView {
             }
 
             Item { Layout.fillHeight: true }
+        }
+
+        MouseArea {
+            id: artistClickArea
+            readonly property bool keepsSearchOpen: true
+            anchors.fill: parent
+            anchors.margins: 8
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.openArtist(tile.artist)
         }
     }
 }

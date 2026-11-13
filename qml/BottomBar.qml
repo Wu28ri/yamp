@@ -40,15 +40,9 @@ Rectangle {
         const ctx = playerBackend.trackContextForPath(playerBackend.currentPath)
         if (!ctx) return
         if (target === "artist" && ctx.artist) {
-            root.selectedArtist = ctx.artist
-            playerBackend.filterByArtist(ctx.artist)
-            root.currentView = "artistDetail"
+            root.openArtist(ctx.artist)
         } else if (target === "album" && ctx.album) {
-            root.selectedAlbum = ctx.album
-            root.selectedArtist = ctx.albumArtist
-            root.selectedAlbumPath = playerBackend.currentPath
-            playerBackend.filterByAlbum(ctx.album, ctx.albumArtist)
-            root.currentView = "albumDetail"
+            root.openAlbum(ctx.album, ctx.albumArtist, playerBackend.currentPath)
         }
     }
 
@@ -59,10 +53,16 @@ Rectangle {
             left:  parent.left
             right: parent.right
         }
-        height: 20
+        height: 14
+        padding: 0
+        leftPadding: 0
+        rightPadding: 0
+        topPadding: 0
+        bottomPadding: 0
         z: 10
         from: 0
         to: playerBackend.duration > 0 ? playerBackend.duration : 1
+        enabled: playerBackend.duration > 0
         live: true
         onMoved: playerBackend.position = value
         hoverEnabled: true
@@ -75,9 +75,13 @@ Rectangle {
 
         background: Rectangle {
             implicitHeight: 4
-            width: progressSlider.availableWidth
+            x: 0
             y: 0
+            width: progressSlider.width
+            height: (progressSlider.hovered || progressSlider.pressed) ? 6 : 4
             color: sysPalette.base
+
+            Behavior on height { NumberAnimation { duration: 100 } }
 
             Rectangle {
                 width: progressSlider.visualPosition * parent.width
@@ -87,20 +91,22 @@ Rectangle {
         }
 
         handle: Rectangle {
-            x: progressSlider.leftPadding + progressSlider.visualPosition * (progressSlider.availableWidth - width)
-            y: -4
+            x: Math.max(0, Math.min(progressSlider.width - width,
+                        progressSlider.visualPosition * progressSlider.width - width / 2))
+            y: 0
             width: 12; height: 12
             radius: 6
             color: sysPalette.highlight
-            visible: progressSlider.hovered || progressSlider.pressed
+            visible: progressSlider.enabled && (progressSlider.hovered || progressSlider.pressed)
         }
     }
 
     Text {
         anchors {
-            left:           parent.left
-            verticalCenter: progressSlider.verticalCenter
-            leftMargin:     10
+            left:       parent.left
+            top:        parent.top
+            topMargin:  10
+            leftMargin: 10
         }
         text: bottomBar.formatTime(progressSlider.pressed ? progressSlider.value : playerBackend.position)
         color: sysPalette.windowText
@@ -113,9 +119,10 @@ Rectangle {
 
     Text {
         anchors {
-            right:          parent.right
-            verticalCenter: progressSlider.verticalCenter
-            rightMargin:    10
+            right:       parent.right
+            top:         parent.top
+            topMargin:   10
+            rightMargin: 10
         }
         text: bottomBar.formatTime(playerBackend.duration)
         color: sysPalette.windowText
@@ -149,7 +156,7 @@ Rectangle {
                 anchors.fill: parent
                 fillMode: Image.PreserveAspectCrop
                 source: root.coverSource(playerBackend.currentPath)
-                sourceSize: Qt.size(60, 60)
+                sourceSize: Qt.size(Math.ceil(60 * Screen.devicePixelRatio), Math.ceil(60 * Screen.devicePixelRatio))
                 asynchronous: true
             }
         }
@@ -274,8 +281,9 @@ Rectangle {
                         acceptedModifiers: Qt.NoModifier
                         gesturePolicy: TapHandler.DragThreshold
                         onTapped: (eventPoint) => {
-                            if (tapCount !== 1 || artistAlbumField.selectedText.length > 0
-                                    || titleField.selectedText.length > 0) return
+                            if (tapCount !== 1 || artistAlbumField.selectedText.length > 0) return
+                            if (titleField.selectedText.length > 0)
+                                titleField.deselect()
                             const destination = artistAlbumField.navigationTargetAt(eventPoint.position.x, eventPoint.position.y)
                             if (destination)
                                 bottomBar.openMetadata(destination)
@@ -328,6 +336,33 @@ Rectangle {
         ToolButton {
             icon.name: "media-skip-forward"
             onClicked: playerBackend.playNext()
+        }
+
+        ToolButton {
+            id: repeatButton
+            icon.name: "media-playlist-repeat"
+            icon.color: playerBackend.repeatMode !== 0 ? sysPalette.highlight : sysPalette.windowText
+            opacity: playerBackend.repeatMode !== 0 ? 1.0 : 0.5
+            onClicked: playerBackend.cycleRepeatMode()
+
+            Text {
+                visible: playerBackend.repeatMode === 2
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: 4
+                anchors.bottomMargin: 3
+                text: "1"
+                font.pixelSize: 9
+                font.bold: true
+                color: sysPalette.highlight
+            }
+
+            ToolTip.visible: hovered
+            ToolTip.text: {
+                if (playerBackend.repeatMode === 1) return "Repeat: All"
+                if (playerBackend.repeatMode === 2) return "Repeat: One"
+                return "Repeat: Off"
+            }
         }
     }
 
@@ -409,7 +444,11 @@ Rectangle {
             to: 100
             enabled: playerBackend.volumeControllable
             opacity: enabled ? 1.0 : 0.4
-            onMoved: playerBackend.volume = value / 100
+            onMoved: {
+                if (playerBackend.isMuted && value > 0)
+                    playerBackend.isMuted = false
+                playerBackend.volume = value / 100
+            }
 
             Binding {
                 volumeSlider.value: playerBackend.volume * 100

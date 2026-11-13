@@ -7,6 +7,13 @@ Item {
 
     Component.onCompleted: playerBackend.filterByArtist(root.selectedArtist)
 
+    Connections {
+        target: root
+        function onSelectedArtistChanged() {
+            detailArtistImage.fetchedUrl = ""
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
