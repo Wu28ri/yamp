@@ -140,10 +140,9 @@ ListView {
         }
     }
 
-    readonly property bool showCoverCol: root.currentView !== "albumDetail"
     readonly property bool showAlbumCol: width >= 540 && root.currentView !== "albumDetail"
     readonly property real colNum:   width < 460 ? 32 : 50
-    readonly property real colCover: showCoverCol ? 45 : 0
+    readonly property real colCover: 45
     readonly property real colAlbum: showAlbumCol ? Math.min(200, Math.max(110, (width - 360) * 0.35)) : 0
     readonly property real colTime:  60
 
@@ -242,7 +241,6 @@ ListView {
             }
 
             Item {
-                visible: listView.showCoverCol
                 width: listView.colCover
                 height: parent.height
             }
@@ -250,10 +248,10 @@ ListView {
             SortableHeader {
                 width: Math.max(60, parent.width
                                 - listView.colNum
-                                - (listView.showCoverCol ? listView.colCover + 10 : 0)
+                                - listView.colCover
                                 - (listView.showAlbumCol ? listView.colAlbum + 10 : 0)
                                 - listView.colTime
-                                - 20)
+                                - 30)
                 height: parent.height
                 label: "Name"
                 sortColumn: "title"
@@ -438,7 +436,6 @@ ListView {
 
         Rectangle {
             id: coverContainer
-            visible: listView.showCoverCol
             anchors.left: idxTxt.right
             anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
@@ -459,7 +456,7 @@ ListView {
                 id: trackCoverImage
                 anchors.fill: parent
                 visible: root.hasValidImage(trackCoverImage)
-                source: listView.showCoverCol ? root.coverSource(trackItem.path) : ""
+                source: root.coverSource(trackItem.path)
                 fillMode: Image.PreserveAspectCrop
                 sourceSize: Qt.size(Math.ceil(40 * Screen.devicePixelRatio), Math.ceil(40 * Screen.devicePixelRatio))
                 asynchronous: true
@@ -467,8 +464,8 @@ ListView {
         }
 
         Column {
-            anchors.left: listView.showCoverCol ? coverContainer.right : idxTxt.right
-            anchors.leftMargin: listView.showCoverCol ? 15 : 10
+            anchors.left: coverContainer.right
+            anchors.leftMargin: 15
             anchors.right: listView.showAlbumCol ? albumCell.left : timeTxt.left
             anchors.rightMargin: 15
             anchors.verticalCenter: parent.verticalCenter
