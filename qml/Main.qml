@@ -23,8 +23,11 @@ Window {
     property string selectedArtist: ""
     property string viewBeforeLyrics: "tracks"
     property real   savedTracklistScrollOffset: 0
+    property real   savedAlbumsScrollOffset: 0
+    property real   savedArtistsScrollOffset: 0
     property bool   sidebarSearchExpanded: false
     property real   sidebarWidthBeforeSearch: 56
+    readonly property bool searchActive: sideBar.searchOpen
 
     function toggleLyrics() {
         if (currentView === "lyrics") {
@@ -100,6 +103,11 @@ Window {
             root.show()
             root.raise()
             root.requestActivate()
+        }
+        function onLibraryCleared() {
+            root.savedTracklistScrollOffset = 0
+            root.savedAlbumsScrollOffset = 0
+            root.savedArtistsScrollOffset = 0
         }
     }
 

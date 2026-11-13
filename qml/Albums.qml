@@ -18,6 +18,80 @@ GridView {
     cacheBuffer: 600
     model: playerBackend.albumModel
 
+    property bool alive: true
+    property bool persistScroll: false
+    property bool suppressSave: true
+    property bool needsInitialRestore: true
+
+    Component.onDestruction: alive = false
+
+    function restoreScroll(offset) {
+        if (!alive || width <= 0 || height <= 0) return false
+        forceLayout()
+        const minY = originY
+        const maxY = Math.max(minY, contentHeight - height + originY)
+        contentY = Math.max(minY, Math.min(minY + offset, maxY))
+        return true
+    }
+
+    Timer {
+        id: suppressTimer
+        interval: 50
+        onTriggered: {
+            albumsGrid.suppressSave = false
+            if (albumsGrid.alive && albumsGrid.persistScroll && !root.searchActive)
+                root.savedAlbumsScrollOffset = Math.max(0, albumsGrid.contentY - albumsGrid.originY)
+        }
+    }
+
+    Connections {
+        target: playerBackend.albumModel
+        enabled: albumsGrid.alive && albumsGrid.parent !== null
+        function onModelAboutToBeReset() {
+            albumsGrid.suppressSave = true
+        }
+        function onModelReset() {
+            const offset = root.searchActive ? 0 : root.savedAlbumsScrollOffset
+            Qt.callLater(function() {
+                if (!albumsGrid.alive || !albumsGrid.parent) return
+                albumsGrid.restoreScroll(offset)
+                suppressTimer.restart()
+            })
+        }
+    }
+
+    Component.onCompleted: {
+        const offset = root.searchActive ? 0 : root.savedAlbumsScrollOffset
+        if (restoreScroll(offset))
+            needsInitialRestore = false
+        Qt.callLater(function() {
+            if (!albumsGrid.alive) return
+            if (albumsGrid.restoreScroll(offset))
+                albumsGrid.needsInitialRestore = false
+            albumsGrid.persistScroll = true
+            suppressTimer.restart()
+        })
+    }
+
+    onWidthChanged: {
+        if (needsInitialRestore && width > 0 && height > 0) {
+            if (restoreScroll(root.searchActive ? 0 : root.savedAlbumsScrollOffset))
+                needsInitialRestore = false
+        }
+    }
+
+    onHeightChanged: {
+        if (needsInitialRestore && width > 0 && height > 0) {
+            if (restoreScroll(root.searchActive ? 0 : root.savedAlbumsScrollOffset))
+                needsInitialRestore = false
+        }
+    }
+
+    onContentYChanged: {
+        if (persistScroll && !suppressSave && !root.searchActive)
+            root.savedAlbumsScrollOffset = Math.max(0, contentY - originY)
+    }
+
     ScrollBar.vertical: SmoothScrollBar {
         id: vbar
         flickable: albumsGrid

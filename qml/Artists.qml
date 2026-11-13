@@ -18,6 +18,80 @@ GridView {
     cacheBuffer: 600
     model: playerBackend.artistModel
 
+    property bool alive: true
+    property bool persistScroll: false
+    property bool suppressSave: true
+    property bool needsInitialRestore: true
+
+    Component.onDestruction: alive = false
+
+    function restoreScroll(offset) {
+        if (!alive || width <= 0 || height <= 0) return false
+        forceLayout()
+        const minY = originY
+        const maxY = Math.max(minY, contentHeight - height + originY)
+        contentY = Math.max(minY, Math.min(minY + offset, maxY))
+        return true
+    }
+
+    Timer {
+        id: suppressTimer
+        interval: 50
+        onTriggered: {
+            artistsGrid.suppressSave = false
+            if (artistsGrid.alive && artistsGrid.persistScroll && !root.searchActive)
+                root.savedArtistsScrollOffset = Math.max(0, artistsGrid.contentY - artistsGrid.originY)
+        }
+    }
+
+    Connections {
+        target: playerBackend.artistModel
+        enabled: artistsGrid.alive && artistsGrid.parent !== null
+        function onModelAboutToBeReset() {
+            artistsGrid.suppressSave = true
+        }
+        function onModelReset() {
+            const offset = root.searchActive ? 0 : root.savedArtistsScrollOffset
+            Qt.callLater(function() {
+                if (!artistsGrid.alive || !artistsGrid.parent) return
+                artistsGrid.restoreScroll(offset)
+                suppressTimer.restart()
+            })
+        }
+    }
+
+    Component.onCompleted: {
+        const offset = root.searchActive ? 0 : root.savedArtistsScrollOffset
+        if (restoreScroll(offset))
+            needsInitialRestore = false
+        Qt.callLater(function() {
+            if (!artistsGrid.alive) return
+            if (artistsGrid.restoreScroll(offset))
+                artistsGrid.needsInitialRestore = false
+            artistsGrid.persistScroll = true
+            suppressTimer.restart()
+        })
+    }
+
+    onWidthChanged: {
+        if (needsInitialRestore && width > 0 && height > 0) {
+            if (restoreScroll(root.searchActive ? 0 : root.savedArtistsScrollOffset))
+                needsInitialRestore = false
+        }
+    }
+
+    onHeightChanged: {
+        if (needsInitialRestore && width > 0 && height > 0) {
+            if (restoreScroll(root.searchActive ? 0 : root.savedArtistsScrollOffset))
+                needsInitialRestore = false
+        }
+    }
+
+    onContentYChanged: {
+        if (persistScroll && !suppressSave && !root.searchActive)
+            root.savedArtistsScrollOffset = Math.max(0, contentY - originY)
+    }
+
     ScrollBar.vertical: SmoothScrollBar {
         id: vbar
         flickable: artistsGrid
