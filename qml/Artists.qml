@@ -1,12 +1,11 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 
 GridView {
     id: artistsGrid
     anchors.fill: parent
     clip: true
-    reuseItems: false
+    reuseItems: true
     readonly property real gridAvailableWidth: Math.max(1, width - vbar.implicitWidth)
 
     cellWidth: {
@@ -99,6 +98,55 @@ GridView {
         bottomPadding: 8
     }
 
+    Menu {
+        id: artistContextMenu
+        property string artistName: ""
+
+        MenuItem {
+            text: "Play"
+            onTriggered: playerBackend.playArtist(artistContextMenu.artistName, playerBackend.shuffle)
+        }
+        MenuItem {
+            text: "Shuffle"
+            onTriggered: playerBackend.playArtist(artistContextMenu.artistName, true)
+        }
+        MenuItem {
+            text: "Play next"
+            onTriggered: playerBackend.addArtistPlayNext(artistContextMenu.artistName)
+        }
+        MenuItem {
+            text: "Add to queue"
+            onTriggered: playerBackend.addArtistToQueue(artistContextMenu.artistName)
+        }
+    }
+
+    Column {
+        anchors.centerIn: parent
+        spacing: 12
+        visible: artistsGrid.count === 0
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: {
+                if (appSettings.musicFolders.length === 0) return "No music folders added"
+                if (playerBackend.scanInProgress) return "Scanning music library…"
+                if (root.searchActive) return "No matching artists"
+                return "No artists in library"
+            }
+            color: sysPalette.windowText
+            opacity: 0.55
+            font.pixelSize: 15
+        }
+
+        Button {
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: appSettings.musicFolders.length === 0
+            text: "Add Music Folder…"
+            icon.name: "list-add"
+            onClicked: root.openAddFolderSettings()
+        }
+    }
+
     delegate: Item {
         id: tile
         width: artistsGrid.cellWidth
@@ -110,96 +158,95 @@ GridView {
 
         onArtistChanged: artistImage.fetchedUrl = ""
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 10
-            spacing: 8
+        Rectangle {
+            id: avatarBox
+            anchors.top: parent.top
+            anchors.topMargin: 10
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: artistsGrid.coverSize
+            height: artistsGrid.coverSize
+            radius: 8
+            color: root.hasValidImage(artistImage)
+                   ? "transparent"
+                   : root.colorForName(tile.artist)
 
-            Item {
-                Layout.preferredWidth: artistsGrid.coverSize
-                Layout.preferredHeight: artistsGrid.coverSize
-                Layout.alignment: Qt.AlignHCenter
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: parent.width
-                    height: parent.height
-                    radius: 8
-                    clip: true
-                    color: artistImage.status === Image.Ready
-                           ? "transparent"
-                           : root.colorForName(tile.artist)
-
-                    transformOrigin: Item.Center
-                    scale: artistClickArea.containsMouse ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 150 } }
-                    opacity: artistClickArea.pressed ? 0.85 : 1.0
-
-                    Text {
-                        anchors.centerIn: parent
-                        visible: artistImage.status !== Image.Ready
-                        text: root.initialsForName(tile.artist)
-                        color: "white"
-                        font.pixelSize: Math.round(parent.width * 0.32)
-                        font.bold: true
-                        renderType: Text.QtRendering
-                    }
-
-                    Image {
-                        id: artistImage
-                        property string fetchedUrl: ""
-                        anchors.fill: parent
-                        fillMode: Image.PreserveAspectCrop
-                        sourceSize: Qt.size(256, 256)
-                        asynchronous: true
-                        visible: status === Image.Ready
-                        source: artistImages.enabled
-                                ? (fetchedUrl || artistImages.artistImageUrl(tile.artist))
-                                : ""
-
-                        Connections {
-                            target: artistImages
-                            enabled: artistImages.enabled && artistImage.status !== Image.Ready
-                            function onArtistImageReady(artistName, imageUrl) {
-                                if (artistName === tile.artist)
-                                    artistImage.fetchedUrl = imageUrl
-                            }
-                        }
-                    }
-                }
-            }
+            transformOrigin: Item.Center
+            scale: artistClickArea.containsMouse ? 1.03 : 1.0
+            Behavior on scale { NumberAnimation { duration: 150 } }
+            opacity: artistClickArea.pressed ? 0.85 : 1.0
 
             Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: 5
-                Layout.preferredHeight: 18
-                text: tile.artist || "Unknown Artist"
-                color: sysPalette.text
+                anchors.centerIn: parent
+                visible: !root.hasValidImage(artistImage)
+                text: root.initialsForName(tile.artist)
+                color: "white"
+                font.pixelSize: Math.round(parent.width * 0.32)
                 font.bold: true
-                font.pixelSize: 14
-                renderType: Text.NativeRendering
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
-            }
-            Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: 5
-                Layout.preferredHeight: 16
-                text: {
-                    const a = tile.albumCount
-                    const t = tile.trackCount
-                    return a + (a === 1 ? " album · " : " albums · ")
-                         + t + (t === 1 ? " track"   : " tracks")
-                }
-                color: sysPalette.windowText
-                font.pixelSize: 12
-                renderType: Text.NativeRendering
-                opacity: 0.7
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
+                renderType: Text.QtRendering
             }
 
-            Item { Layout.fillHeight: true }
+            Image {
+                id: artistImage
+                property string fetchedUrl: ""
+                anchors.fill: parent
+                fillMode: Image.PreserveAspectCrop
+                sourceSize: Qt.size(Math.min(384, Math.ceil(220 * Screen.devicePixelRatio)),
+                                    Math.min(384, Math.ceil(220 * Screen.devicePixelRatio)))
+                asynchronous: true
+                visible: root.hasValidImage(artistImage)
+                source: artistImages.enabled
+                        ? (fetchedUrl || artistImages.artistImageUrl(tile.artist))
+                        : ""
+
+                Connections {
+                    target: artistImages
+                    enabled: artistImages.enabled && !root.hasValidImage(artistImage)
+                    function onArtistImageReady(artistName, imageUrl) {
+                        if (artistName === tile.artist)
+                            artistImage.fetchedUrl = imageUrl
+                    }
+                }
+            }
+        }
+
+        Text {
+            id: artistLabel
+            anchors.top: avatarBox.bottom
+            anchors.topMargin: 8
+            anchors.left: parent.left
+            anchors.leftMargin: 15
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            height: 18
+            text: tile.artist || "Unknown Artist"
+            color: sysPalette.text
+            font.bold: true
+            font.pixelSize: 14
+            renderType: Text.NativeRendering
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
+        }
+
+        Text {
+            anchors.top: artistLabel.bottom
+            anchors.topMargin: 4
+            anchors.left: parent.left
+            anchors.leftMargin: 15
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            height: 16
+            text: {
+                const a = tile.albumCount
+                const t = tile.trackCount
+                return a + (a === 1 ? " album · " : " albums · ")
+                     + t + (t === 1 ? " track"   : " tracks")
+            }
+            color: sysPalette.windowText
+            font.pixelSize: 12
+            renderType: Text.NativeRendering
+            opacity: 0.7
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
         }
 
         MouseArea {
@@ -208,8 +255,17 @@ GridView {
             anchors.fill: parent
             anchors.margins: 8
             hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.openArtist(tile.artist)
+            onClicked: mouse => {
+                const name = tile.artist || "Unknown Artist"
+                if (mouse.button === Qt.RightButton) {
+                    artistContextMenu.artistName = name
+                    artistContextMenu.popup()
+                } else {
+                    root.openArtist(name)
+                }
+            }
         }
     }
 }

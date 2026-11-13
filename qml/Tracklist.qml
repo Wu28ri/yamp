@@ -6,15 +6,17 @@ ListView {
     model: playerBackend.trackModel
     spacing: 0
     clip: true
-    reuseItems: false
+    reuseItems: true
     headerPositioning: ListView.OverlayHeader
-    cacheBuffer: 2000
+    cacheBuffer: 600
 
+    property int  discCount: 1
     property bool alive: true
     property bool ignoreNextScroll: false
     property int  pendingScrollIdx: -1
     property bool persistScroll: false
     property bool suppressSave: false
+    property bool needsInitialRestore: true
     property real scrollOffsetBeforeReset: 0
 
     readonly property real headerHeight: headerItem ? headerItem.height : 40
@@ -22,10 +24,25 @@ ListView {
 
     Component.onDestruction: alive = false
 
+    function restoreScroll(offset) {
+        if (!alive || width <= 0 || height <= 0) return false
+        const targetRow = Math.ceil(offset / 56) + 30
+        playerBackend.trackModel.ensureFetchedTo(targetRow)
+        forceLayout()
+        const minY = topRestY
+        const maxY = Math.max(minY, contentHeight - height + originY)
+        contentY = Math.max(minY, Math.min(minY + offset, maxY))
+        return true
+    }
+
     Timer {
         id: suppressTimer
-        interval: 120
-        onTriggered: listView.suppressSave = false
+        interval: 80
+        onTriggered: {
+            listView.suppressSave = false
+            if (listView.alive && listView.persistScroll && !root.searchActive)
+                root.savedTracklistScrollOffset = Math.max(0, listView.contentY - listView.topRestY)
+        }
     }
 
     Connections {
@@ -36,16 +53,12 @@ ListView {
             listView.suppressSave = true
         }
         function onModelReset() {
-            const offset = listView.scrollOffsetBeforeReset
-            const targetRow = Math.ceil(offset / 56) + 30
-            playerBackend.trackModel.ensureFetchedTo(targetRow)
+            const offset = listView.persistScroll
+                           ? (root.searchActive ? 0 : root.savedTracklistScrollOffset)
+                           : (root.searchActive ? 0 : listView.scrollOffsetBeforeReset)
             Qt.callLater(function() {
                 if (!listView.alive || !listView.parent) return
-                listView.forceLayout()
-                const minY = listView.topRestY
-                const maxY = Math.max(minY,
-                    listView.contentHeight - listView.height + listView.originY)
-                listView.contentY = Math.max(minY, Math.min(minY + offset, maxY))
+                listView.restoreScroll(offset)
                 suppressTimer.restart()
             })
         }
@@ -53,17 +66,31 @@ ListView {
 
     Component.onCompleted: {
         persistScroll = (root.currentView === "tracks")
-        if (persistScroll && root.savedTracklistScrollOffset > 0) {
-            const offset = root.savedTracklistScrollOffset
-            const targetRow = Math.ceil(offset / 56) + 30
-            playerBackend.trackModel.ensureFetchedTo(targetRow)
-            forceLayout()
-            contentY = topRestY + offset
+        if (persistScroll) {
+            const offset = root.searchActive ? 0 : root.savedTracklistScrollOffset
+            if (restoreScroll(offset))
+                needsInitialRestore = false
+            Qt.callLater(function() {
+                if (!listView.alive) return
+                if (listView.restoreScroll(offset))
+                    listView.needsInitialRestore = false
+                suppressTimer.restart()
+            })
+        } else {
+            needsInitialRestore = false
+        }
+    }
+
+    onHeightChanged: {
+        if (persistScroll && needsInitialRestore && width > 0 && height > 0) {
+            const offset = root.searchActive ? 0 : root.savedTracklistScrollOffset
+            if (restoreScroll(offset))
+                needsInitialRestore = false
         }
     }
 
     onContentYChanged: {
-        if (persistScroll && !suppressSave)
+        if (persistScroll && !suppressSave && !root.searchActive)
             root.savedTracklistScrollOffset = Math.max(0, contentY - topRestY)
     }
 
@@ -100,9 +127,7 @@ ListView {
                 return
             }
 
-            listView.forceLayout()
             listView.positionViewAtIndex(idx, ListView.Center)
-            listView.forceLayout()
 
             const hit = listView.indexAt(listView.width / 2,
                                          listView.contentY + listView.height / 2)
@@ -113,9 +138,10 @@ ListView {
         }
     }
 
-    readonly property bool showAlbumCol: width >= 540
+    readonly property bool showCoverCol: root.currentView !== "albumDetail"
+    readonly property bool showAlbumCol: width >= 540 && root.currentView !== "albumDetail"
     readonly property real colNum:   width < 460 ? 32 : 50
-    readonly property real colCover: 45
+    readonly property real colCover: showCoverCol ? 45 : 0
     readonly property real colAlbum: showAlbumCol ? Math.min(200, Math.max(110, (width - 360) * 0.35)) : 0
     readonly property real colTime:  60
 
@@ -145,6 +171,42 @@ ListView {
         flickable: listView
         topPadding: 44
         bottomPadding: 6
+    }
+
+    section.property: (root.currentView === "albumDetail" && listView.discCount > 1) ? "discNo" : ""
+    section.criteria: ViewSection.FullString
+    section.delegate: Item {
+        id: discSection
+        width: listView.width - listView.rightGutter
+        height: 36
+
+        required property string section
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 20
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 6
+            text: {
+                const n = parseInt(discSection.section, 10)
+                return "Disc " + (n > 0 ? n : 1)
+            }
+            color: sysPalette.windowText
+            opacity: 0.65
+            font.pixelSize: 12
+            font.bold: true
+        }
+
+        Rectangle {
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.leftMargin: 20
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            height: 1
+            color: sysPalette.windowText
+            opacity: 0.08
+        }
     }
 
     header: Rectangle {
@@ -177,10 +239,19 @@ ListView {
                 onToggled: column => headerRect.toggleSort(column)
             }
 
-            Item { width: listView.colCover; height: parent.height }
+            Item {
+                visible: listView.showCoverCol
+                width: listView.colCover
+                height: parent.height
+            }
 
             SortableHeader {
-                width: Math.max(60, parent.width - (listView.colNum + listView.colCover + (listView.showAlbumCol ? listView.colAlbum + 10 : 0) + listView.colTime + 30))
+                width: Math.max(60, parent.width
+                                - listView.colNum
+                                - (listView.showCoverCol ? listView.colCover + 10 : 0)
+                                - (listView.showAlbumCol ? listView.colAlbum + 10 : 0)
+                                - listView.colTime
+                                - 20)
                 height: parent.height
                 label: "Name"
                 sortColumn: "title"
@@ -263,15 +334,38 @@ ListView {
         }
     }
 
-    delegate: ItemDelegate {
+    Column {
+        anchors.centerIn: parent
+        spacing: 12
+        visible: listView.count === 0
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: {
+                if (appSettings.musicFolders.length === 0) return "No music folders added"
+                if (playerBackend.scanInProgress) return "Scanning music library…"
+                if (root.searchActive) return "No matching tracks"
+                return "No tracks found"
+            }
+            color: sysPalette.windowText
+            opacity: 0.55
+            font.pixelSize: 15
+        }
+
+        Button {
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: appSettings.musicFolders.length === 0
+            text: "Add Music Folder…"
+            icon.name: "list-add"
+            onClicked: root.openAddFolderSettings()
+        }
+    }
+
+    delegate: Item {
         id: trackItem
+        readonly property bool keepsSearchOpen: true
         width: listView.width - listView.rightGutter
         height: 56
-        padding: 0
-        leftInset: 6
-        rightInset: 14 - listView.rightGutter
-        topInset: 1
-        bottomInset: 1
 
         required property int    index
         required property string title
@@ -280,12 +374,21 @@ ListView {
         required property string path
         required property int    duration
         required property int    trackNo
+        required property int    discNo
 
         readonly property bool isCurrent: playerBackend.currentPath === path
+        readonly property bool rowHovered: rowHover.hovered
 
-        onClicked: {
-            listView.ignoreNextScroll = true
-            playerBackend.playMusic(trackItem.path)
+        HoverHandler {
+            id: rowHover
+        }
+
+        TapHandler {
+            acceptedButtons: Qt.LeftButton
+            onTapped: {
+                listView.ignoreNextScroll = true
+                playerBackend.playMusic(trackItem.path)
+            }
         }
 
         TapHandler {
@@ -296,113 +399,159 @@ ListView {
             }
         }
 
-        background: Rectangle {
+        Rectangle {
+            anchors.fill: parent
+            anchors.leftMargin: 6
+            anchors.rightMargin: 14 - listView.rightGutter
+            anchors.topMargin: 1
+            anchors.bottomMargin: 1
             radius: 6
-            color: trackItem.isCurrent ? sysPalette.highlight : (trackItem.hovered ? sysPalette.highlight : "transparent")
-            opacity: trackItem.isCurrent ? 0.15 : (trackItem.hovered ? 0.08 : 0)
+            color: trackItem.isCurrent
+                   ? sysPalette.highlight
+                   : (trackItem.rowHovered ? sysPalette.highlight : "transparent")
+            opacity: trackItem.isCurrent ? 0.15 : (trackItem.rowHovered ? 0.08 : 0)
         }
 
-        contentItem: Item {
-            anchors.fill: parent
+        Text {
+            id: idxTxt
+            anchors.left: parent.left
+            anchors.leftMargin: 20
+            anchors.verticalCenter: parent.verticalCenter
+            width: listView.colNum
+            text: {
+                const showTrackNum = (root.currentView === "albumDetail" || playerBackend.sortColumn === "track_no")
+                                     && trackItem.trackNo > 0
+                if (!showTrackNum) return trackItem.index + 1
+                if (root.currentView !== "albumDetail" && trackItem.discNo > 1) {
+                    const tn = trackItem.trackNo < 10 ? ("0" + trackItem.trackNo) : String(trackItem.trackNo)
+                    return trackItem.discNo + "-" + tn
+                }
+                return trackItem.trackNo
+            }
+            color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.windowText
+            opacity: 0.7
+            font.pixelSize: 13
+            renderType: Text.NativeRendering
+        }
+
+        Rectangle {
+            id: coverContainer
+            visible: listView.showCoverCol
+            anchors.left: idxTxt.right
+            anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            width: 40; height: 40
+            radius: 4
+            color: root.hasValidImage(trackCoverImage) ? "transparent" : sysPalette.mid
 
             Text {
-                id: idxTxt
-                anchors.left: parent.left
-                anchors.leftMargin: 20
-                anchors.verticalCenter: parent.verticalCenter
-                width: listView.colNum
-                text: (root.currentView === "albumDetail" || playerBackend.sortColumn === "track_no") && trackItem.trackNo > 0
-                      ? trackItem.trackNo
-                      : (trackItem.index + 1)
-                color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.windowText
-                opacity: 0.7
-                font.pixelSize: 13
+                anchors.centerIn: parent
+                visible: !root.hasValidImage(trackCoverImage)
+                text: "♪"
+                font.pixelSize: 14
+                color: sysPalette.windowText
+                opacity: 0.3
+            }
+
+            Image {
+                id: trackCoverImage
+                anchors.fill: parent
+                visible: root.hasValidImage(trackCoverImage)
+                source: listView.showCoverCol ? root.coverSource(trackItem.path) : ""
+                fillMode: Image.PreserveAspectCrop
+                sourceSize: Qt.size(Math.ceil(40 * Screen.devicePixelRatio), Math.ceil(40 * Screen.devicePixelRatio))
+                asynchronous: true
+            }
+        }
+
+        Column {
+            anchors.left: listView.showCoverCol ? coverContainer.right : idxTxt.right
+            anchors.leftMargin: listView.showCoverCol ? 15 : 10
+            anchors.right: listView.showAlbumCol ? albumCell.left : timeTxt.left
+            anchors.rightMargin: 15
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+
+            Text {
+                width: parent.width
+                height: 18
+                text: trackItem.title
+                elide: Text.ElideRight
+                color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.text
+                font.bold: true; font.pixelSize: 14
                 renderType: Text.NativeRendering
+                verticalAlignment: Text.AlignVCenter
             }
-
-            Rectangle {
-                id: coverContainer
-                anchors.left: idxTxt.right
-                anchors.leftMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                width: 40; height: 40
-                radius: 4; clip: true
-                color: trackCoverImage.status === Image.Ready ? "transparent" : sysPalette.mid
-
-                Image {
-                    id: trackCoverImage
-                    anchors.fill: parent
-                    source: root.coverSource(trackItem.path)
-                    fillMode: Image.PreserveAspectCrop
-                    sourceSize: Qt.size(Math.ceil(40 * Screen.devicePixelRatio), Math.ceil(40 * Screen.devicePixelRatio))
-                    asynchronous: true
-                }
+            Text {
+                width: parent.width
+                height: 16
+                text: trackItem.artist
+                elide: Text.ElideRight
+                color: sysPalette.windowText
+                opacity: 0.6
+                font.pixelSize: 12
+                renderType: Text.NativeRendering
+                verticalAlignment: Text.AlignVCenter
             }
+        }
 
-            Column {
-                anchors.left: coverContainer.right; anchors.leftMargin: 15
-                anchors.right: listView.showAlbumCol ? albumTxt.left : timeTxt.left
-                anchors.rightMargin: 15
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 2
-
-                Text {
-                    width: parent.width
-                    height: 18
-                    text: trackItem.title
-                    elide: Text.ElideRight
-                    color: trackItem.isCurrent ? sysPalette.highlight : sysPalette.text
-                    font.bold: true; font.pixelSize: 14
-                    renderType: Text.NativeRendering
-                    verticalAlignment: Text.AlignVCenter
-                }
-                Text {
-                    width: parent.width
-                    height: 16
-                    text: trackItem.artist
-                    elide: Text.ElideRight
-                    color: sysPalette.windowText
-                    opacity: 0.6
-                    font.pixelSize: 12
-                    renderType: Text.NativeRendering
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
+        Item {
+            id: albumCell
+            visible: listView.showAlbumCol
+            anchors.right: timeTxt.left
+            anchors.rightMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            width: listView.colAlbum
+            height: 28
 
             Text {
                 id: albumTxt
-                visible: listView.showAlbumCol
-                anchors.right: timeTxt.left; anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                width: listView.colAlbum
+                width: Math.min(implicitWidth, parent.width)
                 text: trackItem.album
                 elide: Text.ElideRight
-                color: sysPalette.windowText
-                opacity: 0.5
+                color: albumLinkMouse.containsMouse ? sysPalette.highlight : sysPalette.windowText
+                opacity: albumLinkMouse.containsMouse ? 0.9 : 0.55
                 font.pixelSize: 13
+                font.underline: albumLinkMouse.containsMouse
                 renderType: Text.NativeRendering
-            }
 
-            Text {
-                id: timeTxt
-                anchors.right: parent.right; anchors.rightMargin: 24 - listView.rightGutter
-                anchors.verticalCenter: parent.verticalCenter
-                width: listView.colTime
-                horizontalAlignment: Text.AlignRight
-                text: {
-                    const s = Math.max(0, trackItem.duration)
-                    const h = Math.floor(s / 3600)
-                    const m = Math.floor((s % 3600) / 60)
-                    const sec = s % 60
-                    const pad = (n) => (n < 10 ? "0" + n : "" + n)
-                    if (h > 0) return h + ":" + pad(m) + ":" + pad(sec)
-                    return m + ":" + pad(sec)
+                MouseArea {
+                    id: albumLinkMouse
+                    readonly property bool keepsSearchOpen: true
+                    anchors.fill: parent
+                    anchors.topMargin: -4
+                    anchors.bottomMargin: -4
+                    enabled: trackItem.album.length > 0
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                        const ctx = playerBackend.trackContextForPath(trackItem.path)
+                        root.openAlbum(ctx.album || trackItem.album, ctx.albumArtist || "", trackItem.path)
+                    }
                 }
-                color: sysPalette.windowText
-                opacity: 0.6
-                font.pixelSize: 13
-                renderType: Text.NativeRendering
             }
+        }
+
+        Text {
+            id: timeTxt
+            anchors.right: parent.right; anchors.rightMargin: 24 - listView.rightGutter
+            anchors.verticalCenter: parent.verticalCenter
+            width: listView.colTime
+            horizontalAlignment: Text.AlignRight
+            text: {
+                const s = Math.max(0, trackItem.duration)
+                const h = Math.floor(s / 3600)
+                const m = Math.floor((s % 3600) / 60)
+                const sec = s % 60
+                const pad = (n) => (n < 10 ? "0" + n : "" + n)
+                if (h > 0) return h + ":" + pad(m) + ":" + pad(sec)
+                return m + ":" + pad(sec)
+            }
+            color: sysPalette.windowText
+            opacity: 0.6
+            font.pixelSize: 13
+            renderType: Text.NativeRendering
         }
     }
 }

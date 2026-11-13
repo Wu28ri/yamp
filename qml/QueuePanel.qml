@@ -4,15 +4,26 @@ import QtQuick.Controls
 
 Rectangle {
     id: queuePanel
+    readonly property bool keepsSearchOpen: true
     color: sysPalette.window
     clip: true
 
     property bool opened: false
 
+    onOpenedChanged: {
+        if (opened && playerBackend.currentQueuePosition >= 0) {
+            Qt.callLater(function() {
+                if (queuePanel.opened && playerBackend.currentQueuePosition >= 0)
+                    queueList.positionViewAtIndex(playerBackend.currentQueuePosition, ListView.Center)
+            })
+        }
+    }
+
     Menu {
         id: queueTrackMenu
         property int queuePosition: -1
         property string trackPath: ""
+        property var trackCtx: ({})
 
         MenuItem {
             text: "Play"
@@ -36,16 +47,18 @@ Rectangle {
         MenuSeparator { }
         MenuItem {
             text: "Go to artist"
+            enabled: !!(queueTrackMenu.trackCtx && queueTrackMenu.trackCtx.inLibrary && queueTrackMenu.trackCtx.artist)
             onTriggered: {
-                const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
+                const ctx = queueTrackMenu.trackCtx
                 if (!ctx || !ctx.artist) return
                 root.openArtist(ctx.artist)
             }
         }
         MenuItem {
             text: "Go to album"
+            enabled: !!(queueTrackMenu.trackCtx && queueTrackMenu.trackCtx.inLibrary && queueTrackMenu.trackCtx.album)
             onTriggered: {
-                const ctx = playerBackend.trackContextForPath(queueTrackMenu.trackPath)
+                const ctx = queueTrackMenu.trackCtx
                 if (!ctx || !ctx.album) return
                 root.openAlbum(ctx.album, ctx.albumArtist, queueTrackMenu.trackPath)
             }
@@ -95,15 +108,24 @@ Rectangle {
             }
 
             Text {
+                Layout.fillWidth: true
+                elide: Text.ElideRight
                 visible: playerBackend.queueCount > 0
-                text: playerBackend.queueCount
+                text: {
+                    const dur = root.formatDurationTotal(playerBackend.queueDuration)
+                    return dur.length > 0
+                           ? (playerBackend.queueCount + " · " + dur)
+                           : String(playerBackend.queueCount)
+                }
                 color: sysPalette.windowText
                 opacity: 0.45
                 font.pixelSize: 12
-                font.family: "Monospace"
             }
 
-            Item { Layout.fillWidth: true }
+            Item {
+                visible: playerBackend.queueCount === 0
+                Layout.fillWidth: true
+            }
 
             ToolButton {
                 icon.name: "edit-clear-all"
@@ -124,6 +146,8 @@ Rectangle {
             reuseItems: true
             model: playerBackend.queueModel
 
+            readonly property real rightGutter: queueVBar.needed ? queueVBar.width : 10
+
             ScrollBar.vertical: SmoothScrollBar {
                 id: queueVBar
                 flickable: queueList
@@ -131,6 +155,28 @@ Rectangle {
 
             property bool ignoreNextScroll: false
             property Item draggedDelegate: null
+
+            Column {
+                anchors.centerIn: parent
+                spacing: 6
+                visible: queueList.count === 0
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Queue is empty"
+                    color: sysPalette.windowText
+                    opacity: 0.5
+                    font.pixelSize: 14
+                }
+
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Drop audio files or folders to enqueue"
+                    color: sysPalette.windowText
+                    opacity: 0.35
+                    font.pixelSize: 12
+                }
+            }
 
             FrameAnimation {
                 running: queueList.draggedDelegate !== null
@@ -171,7 +217,8 @@ Rectangle {
                         queueList.ignoreNextScroll = false
                         return
                     }
-                    queueList.positionViewAtIndex(playerBackend.currentQueuePosition, ListView.Center)
+                    if (playerBackend.currentQueuePosition >= 0 && queuePanel.width > 50)
+                        queueList.positionViewAtIndex(playerBackend.currentQueuePosition, ListView.Center)
                 }
             }
 
@@ -181,7 +228,7 @@ Rectangle {
 
             delegate: Item {
                 id: delegateRoot
-                width: Math.max(0, queueList.width - queueVBar.implicitWidth)
+                width: Math.max(0, queueList.width - queueList.rightGutter)
                 height: 56
                 z: mouseArea.drag.active ? 100 : 1
 
@@ -203,11 +250,11 @@ Rectangle {
                 }
 
                 function checkSwap() {
-                    if (!mouseArea.drag.active || mouseArea._moving)
+                    if (!mouseArea.drag.active || mouseArea._moving || queueList.count <= 1)
                         return
                     const mappedY = contentItem.mapToItem(queueList.contentItem, 0, contentItem.height / 2).y
-                    const targetIndex = queueList.indexAt(queueList.width / 2, mappedY)
-                    if (targetIndex !== -1 && targetIndex !== delegateRoot.index) {
+                    const targetIndex = Math.max(0, Math.min(queueList.count - 1, Math.floor(mappedY / 56)))
+                    if (targetIndex !== delegateRoot.index) {
                         mouseArea._moving = true
                         playerBackend.queueModel.move(delegateRoot.index, targetIndex)
                         Qt.callLater(() => mouseArea._moving = false)
@@ -219,6 +266,7 @@ Rectangle {
                     onTapped: {
                         queueTrackMenu.queuePosition = delegateRoot.index
                         queueTrackMenu.trackPath = delegateRoot.path
+                        queueTrackMenu.trackCtx = playerBackend.trackContextForPath(delegateRoot.path)
                         queueTrackMenu.popup()
                     }
                 }
@@ -305,11 +353,22 @@ Rectangle {
                             Rectangle {
                                 Layout.preferredWidth: 36
                                 Layout.preferredHeight: 36
-                                color: queueCoverImage.status === Image.Ready ? "transparent" : sysPalette.base
-                                radius: 4; clip: true
+                                color: root.hasValidImage(queueCoverImage) ? "transparent" : sysPalette.base
+                                radius: 4
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    visible: !root.hasValidImage(queueCoverImage)
+                                    text: "♪"
+                                    font.pixelSize: 13
+                                    color: sysPalette.windowText
+                                    opacity: 0.3
+                                }
+
                                 Image {
                                     id: queueCoverImage
                                     anchors.fill: parent
+                                    visible: root.hasValidImage(queueCoverImage)
                                     source: root.coverSource(delegateRoot.path)
                                     sourceSize: Qt.size(Math.ceil(36 * Screen.devicePixelRatio), Math.ceil(36 * Screen.devicePixelRatio))
                                     fillMode: Image.PreserveAspectCrop
@@ -344,9 +403,10 @@ Rectangle {
 
                             ToolButton {
                                 icon.name: "list-remove"
-                                opacity: mouseArea.containsMouse ? 1.0 : 0.0
-                                Behavior on opacity { NumberAnimation { duration: 150 } }
+                                visible: mouseArea.containsMouse
                                 onClicked: playerBackend.queueModel.remove(delegateRoot.index)
+                                ToolTip.visible: hovered
+                                ToolTip.text: "Remove from queue"
                             }
                         }
                     }

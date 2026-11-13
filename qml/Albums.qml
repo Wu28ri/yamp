@@ -1,12 +1,11 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Layouts
 
 GridView {
     id: albumsGrid
     anchors.fill: parent
     clip: true
-    reuseItems: false
+    reuseItems: true
     readonly property real gridAvailableWidth: Math.max(1, width - vbar.implicitWidth)
 
     cellWidth: {
@@ -99,6 +98,63 @@ GridView {
         bottomPadding: 8
     }
 
+    Menu {
+        id: albumContextMenu
+        property string albumName: ""
+        property string artistName: ""
+
+        MenuItem {
+            text: "Play"
+            onTriggered: playerBackend.playAlbum(albumContextMenu.albumName, albumContextMenu.artistName, playerBackend.shuffle)
+        }
+        MenuItem {
+            text: "Shuffle"
+            onTriggered: playerBackend.playAlbum(albumContextMenu.albumName, albumContextMenu.artistName, true)
+        }
+        MenuItem {
+            text: "Play next"
+            onTriggered: playerBackend.addAlbumPlayNext(albumContextMenu.albumName, albumContextMenu.artistName)
+        }
+        MenuItem {
+            text: "Add to queue"
+            onTriggered: playerBackend.addAlbumToQueue(albumContextMenu.albumName, albumContextMenu.artistName)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: "Go to artist"
+            enabled: albumContextMenu.artistName.length > 0
+                     && albumContextMenu.artistName !== "Unknown Artist"
+            onTriggered: root.openArtist(albumContextMenu.artistName)
+        }
+    }
+
+    Column {
+        anchors.centerIn: parent
+        spacing: 12
+        visible: albumsGrid.count === 0
+
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: {
+                if (appSettings.musicFolders.length === 0) return "No music folders added"
+                if (playerBackend.scanInProgress) return "Scanning music library…"
+                if (root.searchActive) return "No matching albums"
+                return "No albums in library"
+            }
+            color: sysPalette.windowText
+            opacity: 0.55
+            font.pixelSize: 15
+        }
+
+        Button {
+            anchors.horizontalCenter: parent.horizontalCenter
+            visible: appSettings.musicFolders.length === 0
+            text: "Add Music Folder…"
+            icon.name: "list-add"
+            onClicked: root.openAddFolderSettings()
+        }
+    }
+
     delegate: Item {
         id: tile
         width: albumsGrid.cellWidth
@@ -108,66 +164,74 @@ GridView {
         required property string artist
         required property string path
 
-        ColumnLayout {
-            anchors.fill: parent
-            anchors.margins: 10
-            spacing: 8
+        Rectangle {
+            id: coverBox
+            anchors.top: parent.top
+            anchors.topMargin: 10
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: albumsGrid.coverSize
+            height: albumsGrid.coverSize
+            color: root.hasValidImage(coverImage) ? "transparent" : sysPalette.mid
+            radius: 8
 
-            Item {
-                Layout.preferredWidth: albumsGrid.coverSize
-                Layout.preferredHeight: albumsGrid.coverSize
-                Layout.alignment: Qt.AlignHCenter
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: parent.width
-                    height: parent.height
-                    color: coverImage.status === Image.Ready ? "transparent" : sysPalette.mid
-                    radius: 8
-                    clip: true
-
-                    transformOrigin: Item.Center
-                    scale: albumClickArea.containsMouse ? 1.03 : 1.0
-                    Behavior on scale { NumberAnimation { duration: 150 } }
-
-                    Image {
-                        id: coverImage
-                        anchors.fill: parent
-                        fillMode: Image.PreserveAspectCrop
-                        source: root.coverSource(tile.path)
-                        sourceSize: Qt.size(Math.ceil(250 * Screen.devicePixelRatio), Math.ceil(250 * Screen.devicePixelRatio))
-                        asynchronous: true
-                        opacity: albumClickArea.pressed ? 0.8 : 1.0
-                    }
-                }
-            }
+            transformOrigin: Item.Center
+            scale: albumClickArea.containsMouse ? 1.03 : 1.0
+            Behavior on scale { NumberAnimation { duration: 150 } }
 
             Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: 5
-                Layout.preferredHeight: 18
-                text: tile.album || "Album"
-                color: sysPalette.text
-                font.bold: true
-                font.pixelSize: 14
-                renderType: Text.NativeRendering
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
-            }
-            Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: 5
-                Layout.preferredHeight: 16
-                text: tile.artist || "Artist"
+                anchors.centerIn: parent
+                visible: !root.hasValidImage(coverImage)
+                text: "♪"
+                font.pixelSize: Math.round(parent.width * 0.32)
                 color: sysPalette.windowText
-                font.pixelSize: 12
-                renderType: Text.NativeRendering
-                opacity: 0.7
-                elide: Text.ElideRight
-                verticalAlignment: Text.AlignVCenter
+                opacity: 0.3
             }
 
-            Item { Layout.fillHeight: true }
+            Image {
+                id: coverImage
+                anchors.fill: parent
+                visible: root.hasValidImage(coverImage)
+                fillMode: Image.PreserveAspectCrop
+                source: root.coverSource(tile.path)
+                sourceSize: Qt.size(Math.ceil(250 * Screen.devicePixelRatio), Math.ceil(250 * Screen.devicePixelRatio))
+                asynchronous: true
+                opacity: albumClickArea.pressed ? 0.8 : 1.0
+            }
+        }
+
+        Text {
+            id: albumLabel
+            anchors.top: coverBox.bottom
+            anchors.topMargin: 8
+            anchors.left: parent.left
+            anchors.leftMargin: 15
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            height: 18
+            text: tile.album || "Unknown Album"
+            color: sysPalette.text
+            font.bold: true
+            font.pixelSize: 14
+            renderType: Text.NativeRendering
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
+        }
+
+        Text {
+            anchors.top: albumLabel.bottom
+            anchors.topMargin: 4
+            anchors.left: parent.left
+            anchors.leftMargin: 15
+            anchors.right: parent.right
+            anchors.rightMargin: 10
+            height: 16
+            text: tile.artist || "Unknown Artist"
+            color: sysPalette.windowText
+            font.pixelSize: 12
+            renderType: Text.NativeRendering
+            opacity: 0.7
+            elide: Text.ElideRight
+            verticalAlignment: Text.AlignVCenter
         }
 
         MouseArea {
@@ -176,8 +240,17 @@ GridView {
             anchors.fill: parent
             anchors.margins: 8
             hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
             cursorShape: Qt.PointingHandCursor
-            onClicked: root.openAlbum(tile.album, tile.artist, tile.path)
+            onClicked: mouse => {
+                if (mouse.button === Qt.RightButton) {
+                    albumContextMenu.albumName = tile.album || "Unknown Album"
+                    albumContextMenu.artistName = tile.artist || "Unknown Artist"
+                    albumContextMenu.popup()
+                } else {
+                    root.openAlbum(tile.album || "Unknown Album", tile.artist || "Unknown Artist", tile.path)
+                }
+            }
         }
     }
 }
