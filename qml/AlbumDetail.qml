@@ -30,10 +30,7 @@ Item {
                 }
             }
 
-            onBackRequested: {
-                root.currentView = "albums"
-                playerBackend.filterByAlbum("")
-            }
+            onBackRequested: root.goBack()
             onPlayRequested: {
                 playerBackend.shuffle = false
                 const firstPath = playerBackend.trackModel.pathForRow(0)

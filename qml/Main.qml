@@ -4,56 +4,247 @@ import QtQuick.Controls
 
 Window {
     id: root
-    width: 1280
-    height: 720
+    width: appSettings.windowWidth
+    height: appSettings.windowHeight
     minimumWidth: 640
     minimumHeight: 420
     visible: true
     title: "YAMP"
     color: sysPalette.window
 
+    signal locateCurrentTrackRequested()
+
     Component.onCompleted: {
         if (Screen.devicePixelRatio <= 1.0)
             Qt.application.font.hintingPreference = Font.PreferFullHinting
+        if (appSettings.windowMaximized)
+            root.showMaximized()
+    }
+
+    onClosing: settingsWindow.close()
+
+    Timer {
+        id: windowGeomTimer
+        interval: 400
+        onTriggered: {
+            if (root.visibility === Window.Windowed) {
+                appSettings.windowWidth = root.width
+                appSettings.windowHeight = root.height
+            }
+        }
+    }
+
+    onWidthChanged: if (visibility === Window.Windowed) windowGeomTimer.restart()
+    onHeightChanged: if (visibility === Window.Windowed) windowGeomTimer.restart()
+    onVisibilityChanged: (vis) => {
+        if (vis === Window.Maximized)
+            appSettings.windowMaximized = true
+        else if (vis === Window.Windowed)
+            appSettings.windowMaximized = false
     }
 
     property string currentView: "tracks"
     property string selectedAlbum: ""
+    property string selectedAlbumArtist: ""
     property string selectedAlbumPath: ""
     property string selectedArtist: ""
     property string viewBeforeLyrics: "tracks"
+    property var    navBackStack: []
+    property var    navForwardStack: []
     property real   savedTracklistScrollOffset: 0
     property real   savedAlbumsScrollOffset: 0
     property real   savedArtistsScrollOffset: 0
     property bool   sidebarSearchExpanded: false
     property real   sidebarWidthBeforeSearch: 56
     readonly property bool searchActive: sideBar.searchOpen
+    readonly property bool textInputFocused: sideBar.searchFocused
+        || (activeFocusItem !== null
+            && (activeFocusItem.selectByMouse !== undefined
+                || activeFocusItem.cursorPosition !== undefined))
+
+    function snapshotNavState() {
+        return {
+            view: currentView,
+            album: selectedAlbum,
+            albumArtist: selectedAlbumArtist,
+            albumPath: selectedAlbumPath,
+            artist: selectedArtist
+        }
+    }
+
+    function sameNavState(a, b) {
+        if (!a || !b) return false
+        return a.view === b.view
+            && a.album === b.album
+            && a.albumArtist === b.albumArtist
+            && a.artist === b.artist
+    }
+
+    function pushNavState() {
+        const snap = snapshotNavState()
+        if (navBackStack.length > 0 && sameNavState(navBackStack[navBackStack.length - 1], snap))
+            return
+        const next = navBackStack.slice(Math.max(0, navBackStack.length - 31))
+        next.push(snap)
+        navBackStack = next
+        navForwardStack = []
+    }
+
+    function applyNavState(s) {
+        if (!s) return
+        selectedAlbum = s.album || ""
+        selectedAlbumArtist = s.albumArtist || ""
+        selectedAlbumPath = s.albumPath || ""
+        selectedArtist = s.artist || ""
+        if (s.view === "albumDetail") {
+            playerBackend.filterByAlbum(selectedAlbum, selectedAlbumArtist)
+        } else if (s.view === "artistDetail") {
+            playerBackend.filterByArtist(selectedArtist)
+        } else if (s.view !== "lyrics") {
+            playerBackend.clearCategoryFilter()
+        }
+        currentView = s.view
+    }
+
+    function goBack() {
+        if (sideBar.searchOpen) {
+            sideBar.clearSearch()
+            return
+        }
+        if (navBackStack.length > 0) {
+            const backCopy = navBackStack.slice()
+            const target = backCopy.pop()
+            navBackStack = backCopy
+            const fwdCopy = navForwardStack.slice(Math.max(0, navForwardStack.length - 31))
+            fwdCopy.push(snapshotNavState())
+            navForwardStack = fwdCopy
+            applyNavState(target)
+            return
+        }
+        if (currentView === "albumDetail") {
+            playerBackend.clearCategoryFilter()
+            currentView = "albums"
+        } else if (currentView === "artistDetail") {
+            playerBackend.clearCategoryFilter()
+            currentView = "artists"
+        } else if (currentView === "lyrics") {
+            currentView = viewBeforeLyrics || "tracks"
+        }
+    }
+
+    function goForward() {
+        if (navForwardStack.length === 0) return
+        if (sideBar.searchOpen) sideBar.clearSearch()
+        const fwdCopy = navForwardStack.slice()
+        const target = fwdCopy.pop()
+        navForwardStack = fwdCopy
+        const backCopy = navBackStack.slice(Math.max(0, navBackStack.length - 31))
+        backCopy.push(snapshotNavState())
+        navBackStack = backCopy
+        applyNavState(target)
+    }
+
+    function navigateToSection(section) {
+        if (currentView === section && !sideBar.searchOpen) {
+            playerBackend.clearCategoryFilter()
+            return
+        }
+        pushNavState()
+        if (sideBar.searchOpen) sideBar.clearSearch()
+        playerBackend.clearCategoryFilter()
+        currentView = section
+    }
 
     function toggleLyrics() {
         if (currentView === "lyrics") {
-            currentView = viewBeforeLyrics
+            goBack()
         } else {
+            if (!playerBackend.currentPath) return
             viewBeforeLyrics = currentView
+            pushNavState()
             currentView = "lyrics"
         }
     }
 
     function openArtist(artistName) {
-        if (!artistName) return
+        const targetArtist = artistName || "Unknown Artist"
+        if (currentView === "artistDetail" && selectedArtist === targetArtist && !sideBar.searchOpen)
+            return
+        pushNavState()
         if (sideBar.searchOpen) sideBar.clearSearch()
-        selectedArtist = artistName
-        playerBackend.filterByArtist(artistName)
+        selectedArtist = targetArtist
+        playerBackend.filterByArtist(targetArtist)
         currentView = "artistDetail"
     }
 
     function openAlbum(albumName, albumArtist, trackPath) {
-        if (!albumName) return
+        const targetAlbum = albumName || "Unknown Album"
+        const targetArtist = albumArtist || ""
+        if (currentView === "albumDetail" && selectedAlbum === targetAlbum
+                && selectedAlbumArtist === targetArtist && !sideBar.searchOpen)
+            return
+        pushNavState()
         if (sideBar.searchOpen) sideBar.clearSearch()
-        selectedAlbum = albumName
-        selectedArtist = albumArtist || ""
+        selectedAlbum = targetAlbum
+        selectedAlbumArtist = targetArtist
+        selectedArtist = targetArtist
         selectedAlbumPath = trackPath || ""
-        playerBackend.filterByAlbum(albumName, selectedArtist)
+        playerBackend.filterByAlbum(targetAlbum, targetArtist)
         currentView = "albumDetail"
+    }
+
+    function jumpToCurrentTrack() {
+        const path = playerBackend.currentPath
+        if (!path) return
+        if (sideBar.searchOpen) sideBar.clearSearch()
+
+        const ctx = playerBackend.trackContextForPath(path)
+        if (!ctx || !ctx.inLibrary) {
+            queuePanel.opened = true
+            return
+        }
+
+        if (currentView === "lyrics") {
+            const prev = viewBeforeLyrics || "tracks"
+            if (prev === "albumDetail" || prev === "artistDetail" || prev === "tracks") {
+                currentView = prev
+            } else {
+                playerBackend.clearCategoryFilter()
+                currentView = "tracks"
+            }
+        } else if (currentView === "albums" || currentView === "artists") {
+            pushNavState()
+            playerBackend.clearCategoryFilter()
+            currentView = "tracks"
+        }
+
+        if ((currentView === "albumDetail" || currentView === "artistDetail")
+                && playerBackend.getRowForPath(path) < 0) {
+            pushNavState()
+            playerBackend.clearCategoryFilter()
+            currentView = "tracks"
+        }
+
+        Qt.callLater(() => root.locateCurrentTrackRequested())
+    }
+
+    function openAddFolderSettings() {
+        settingsWindow.openTab(2)
+    }
+
+    function hasValidImage(img) {
+        return img !== null && img !== undefined
+            && img.status === Image.Ready && img.implicitWidth > 1
+    }
+
+    function formatDurationTotal(totalSec) {
+        const sec = Math.max(0, Math.floor(totalSec || 0))
+        if (sec <= 0) return ""
+        const h = Math.floor(sec / 3600)
+        const m = Math.floor((sec % 3600) / 60)
+        if (h > 0) return h + " hr " + m + " min"
+        if (m > 0) return m + " min"
+        return sec + " sec"
     }
 
     function deepestItemAt(item, scenePosition) {
@@ -68,6 +259,11 @@ Window {
                 return true
             if (item.down !== undefined && item.checkable !== undefined
                     && item.clicked !== undefined)
+                return true
+            if (item.from !== undefined && item.to !== undefined
+                    && item.visualPosition !== undefined)
+                return true
+            if (item.selectByMouse !== undefined)
                 return true
             item = item.parent
         }
@@ -108,25 +304,41 @@ Window {
             root.savedTracklistScrollOffset = 0
             root.savedAlbumsScrollOffset = 0
             root.savedArtistsScrollOffset = 0
+            root.navBackStack = []
+            root.navForwardStack = []
+            root.selectedAlbum = ""
+            root.selectedAlbumArtist = ""
+            root.selectedAlbumPath = ""
+            root.selectedArtist = ""
+            if (root.currentView === "albumDetail"
+                    || root.currentView === "artistDetail"
+                    || root.currentView === "lyrics") {
+                root.currentView = "tracks"
+            }
+        }
+        function onMetadataChanged() {
+            if (root.currentView === "lyrics" && playerBackend.currentPath === "") {
+                root.goBack()
+            }
         }
     }
 
     Shortcut {
         sequence: "Space"
         context: Qt.WindowShortcut
-        enabled: !sideBar.searchFocused
+        enabled: !root.textInputFocused
         onActivated: playerBackend.togglePlayback()
     }
     Shortcut {
         sequence: "Left"
         context: Qt.WindowShortcut
-        enabled: !sideBar.searchFocused
+        enabled: !root.textInputFocused
         onActivated: playerBackend.position = Math.max(0, playerBackend.position - 5000)
     }
     Shortcut {
         sequence: "Right"
         context: Qt.WindowShortcut
-        enabled: !sideBar.searchFocused
+        enabled: !root.textInputFocused
         onActivated: {
             if (playerBackend.duration > 0)
                 playerBackend.position = Math.min(playerBackend.duration, playerBackend.position + 5000)
@@ -135,19 +347,55 @@ Window {
     Shortcut {
         sequence: "Up"
         context: Qt.WindowShortcut
-        enabled: !sideBar.searchFocused
+        enabled: !root.textInputFocused
         onActivated: playerBackend.volume = Math.min(1.0, playerBackend.volume + 0.05)
     }
     Shortcut {
         sequence: "Down"
         context: Qt.WindowShortcut
-        enabled: !sideBar.searchFocused
+        enabled: !root.textInputFocused
         onActivated: playerBackend.volume = Math.max(0.0, playerBackend.volume - 0.05)
     }
     Shortcut {
         sequence: StandardKey.Find
         context: Qt.WindowShortcut
         onActivated: sideBar.openSearch()
+    }
+    Shortcut {
+        sequence: "Ctrl+L"
+        context: Qt.WindowShortcut
+        onActivated: root.jumpToCurrentTrack()
+    }
+    Shortcut {
+        sequence: StandardKey.Back
+        context: Qt.WindowShortcut
+        enabled: !root.textInputFocused
+        onActivated: root.goBack()
+    }
+    Shortcut {
+        sequence: StandardKey.Forward
+        context: Qt.WindowShortcut
+        enabled: !root.textInputFocused
+        onActivated: root.goForward()
+    }
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: !sideBar.searchOpen
+                 && (root.currentView === "albumDetail"
+                     || root.currentView === "artistDetail"
+                     || root.currentView === "lyrics")
+        onActivated: root.goBack()
+    }
+
+    TapHandler {
+        acceptedButtons: Qt.BackButton | Qt.ForwardButton
+        onTapped: (eventPoint, button) => {
+            if (button === Qt.BackButton)
+                root.goBack()
+            else if (button === Qt.ForwardButton)
+                root.goForward()
+        }
     }
 
     TapHandler {
@@ -164,6 +412,7 @@ Window {
 
     SettingsWindow {
         id: settingsWindow
+        transientParent: root
         visible: false
     }
 
@@ -177,8 +426,11 @@ Window {
             orientation: Qt.Horizontal
 
             handle: Rectangle {
+                readonly property bool keepsSearchOpen: true
                 implicitWidth: 2
-                color: "transparent"
+                color: SplitHandle.hovered || SplitHandle.pressed ? sysPalette.highlight : "transparent"
+                opacity: SplitHandle.pressed ? 0.55 : (SplitHandle.hovered ? 0.35 : 0.0)
+                Behavior on opacity { NumberAnimation { duration: 120 } }
             }
 
             SideBar {

@@ -15,6 +15,19 @@ Window {
     readonly property int labelWidth: 160
     readonly property int pageSpacing: 14
 
+    function openTab(index) {
+        settingsTabBar.currentIndex = index
+        show()
+        raise()
+        requestActivate()
+    }
+
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        onActivated: settingsWindow.close()
+    }
+
     SystemPalette { id: sysPalette; colorGroup: SystemPalette.Active }
 
     FolderDialog {
@@ -61,11 +74,19 @@ Window {
             }
         }
 
-        StackLayout {
+        ScrollView {
+            id: settingsScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.margins: 24
-            currentIndex: settingsTabBar.currentIndex
+            clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+            StackLayout {
+                width: settingsScroll.availableWidth - 48
+                height: Math.max(implicitHeight, settingsScroll.availableHeight - 48)
+                x: 24
+                y: 24
+                currentIndex: settingsTabBar.currentIndex
 
             ColumnLayout {
                 spacing: settingsWindow.pageSpacing
@@ -189,6 +210,52 @@ Window {
                     Item { Layout.fillWidth: true }
                 }
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    enabled: rgEnabledBox.checked
+
+                    Label {
+                        text: "Fallback gain"
+                        color: sysPalette.text
+                        Layout.preferredWidth: settingsWindow.labelWidth
+                    }
+
+                    SpinBox {
+                        id: rgFallbackSpin
+                        Layout.preferredWidth: 120
+                        from: -1500
+                        to: 1500
+                        stepSize: 25
+                        value: Math.round(appSettings.replayGainFallbackDb * 100)
+                        onValueModified: appSettings.replayGainFallbackDb = value / 100
+                        validator: DoubleValidator {
+                            bottom: -15.0
+                            top: 15.0
+                            decimals: 2
+                            notation: DoubleValidator.StandardNotation
+                        }
+                        textFromValue: function(value) {
+                            return (value / 100).toFixed(2)
+                        }
+                        valueFromText: function(text) {
+                            const parsed = parseFloat(text.replace(",", "."))
+                            if (isNaN(parsed)) return rgFallbackSpin.value
+                            return Math.max(-1500, Math.min(1500, Math.round(parsed * 100)))
+                        }
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Applied to tracks without ReplayGain tags"
+                    }
+
+                    Label {
+                        text: "dB"
+                        color: sysPalette.windowText
+                        opacity: 0.6
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
                 Item { Layout.fillHeight: true }
             }
 
@@ -216,6 +283,11 @@ Window {
                         id: bitPerfectSwitch
                         checked: appSettings.audioBitPerfect
                         onToggled: appSettings.audioBitPerfect = checked
+
+                        Binding {
+                            bitPerfectSwitch.checked: appSettings.audioBitPerfect
+                            restoreMode: Binding.RestoreBindingOrValue
+                        }
                     }
                 }
 
@@ -477,7 +549,7 @@ Window {
                 }
 
                 Switch {
-                    text: "Load artist profile pictures via Last.fm"
+                    text: "Load artist profile pictures online"
                     checked: artistImages.enabled
                     onToggled: artistImages.enabled = checked
                 }
@@ -487,9 +559,13 @@ Window {
                     spacing: 10
 
                     Label {
-                        text: lastfm.authenticated
-                              ? ("Connected as " + lastfm.username)
-                              : "Not connected"
+                        text: {
+                            if (lastfm.authenticated)
+                                return "Connected as " + lastfm.username
+                            if (lastfm.awaitingAuth)
+                                return "Waiting for browser authorization…"
+                            return "Not connected"
+                        }
                         color: sysPalette.text
                         Layout.fillWidth: true
                     }
@@ -564,6 +640,7 @@ Window {
                 }
 
                 Item { Layout.fillHeight: true }
+            }
             }
         }
     }

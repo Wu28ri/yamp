@@ -67,7 +67,12 @@ void AppController::wireSignals() {
 
     connect(s, &Settings::audioDeviceChanged,         b, [s, b]() { b->setAudioDevice(s->audioDevice()); });
     connect(s, &Settings::audioSoftwareVolumeChanged, b, [s, b]() { b->setSoftwareVolume(s->audioSoftwareVolume()); });
-    connect(s, &Settings::audioBitPerfectChanged,     b, [s, b]() { b->setBitPerfect(s->audioBitPerfect()); });
+    connect(s, &Settings::audioBitPerfectChanged,     b, [s, b]() {
+        b->setBitPerfect(s->audioBitPerfect());
+        if (s->audioBitPerfect() != b->bitPerfect()) {
+            s->setAudioBitPerfect(b->bitPerfect());
+        }
+    });
     connect(s, &Settings::gaplessPlaybackChanged,     b, [s, b]() { b->setGaplessPlayback(s->gaplessPlayback()); });
 
     connect(s, &Settings::coverMaxEdgeChanged, this, [this, s]() {

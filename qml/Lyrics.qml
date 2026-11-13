@@ -38,11 +38,18 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 20
+            Layout.leftMargin: 12
             Layout.rightMargin: 20
-            Layout.topMargin: 8
-            Layout.bottomMargin: 8
+            Layout.topMargin: 6
+            Layout.bottomMargin: 6
             spacing: 8
+
+            ToolButton {
+                icon.name: "go-previous"
+                onClicked: root.goBack()
+                ToolTip.visible: hovered
+                ToolTip.text: "Back"
+            }
 
             Text {
                 Layout.fillWidth: true
@@ -108,6 +115,17 @@ Rectangle {
                     followPlayback = false
             }
 
+            WheelHandler {
+                blocking: false
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: {
+                    if (playerBackend.lyricsSynchronized) {
+                        lyricsScroll.stop()
+                        lyricsList.followPlayback = false
+                    }
+                }
+            }
+
             NumberAnimation {
                 id: lyricsScroll
                 target: lyricsList
@@ -160,6 +178,11 @@ Rectangle {
                     }
                 }
 
+                HoverHandler {
+                    enabled: lyricLine.modelData.timeMs >= 0
+                    cursorShape: Qt.PointingHandCursor
+                }
+
                 background: Rectangle {
                     radius: 8
                     color: lyricLine.hovered ? sysPalette.mid : "transparent"
@@ -172,10 +195,10 @@ Rectangle {
                     textFormat: Text.PlainText
                     color: lyricLine.active ? sysPalette.highlight : sysPalette.windowText
                     opacity: !playerBackend.lyricsSynchronized || lyricLine.active ? 1.0 : 0.42
-                    font.pixelSize: lyricLine.active
-                                    ? Math.min(42, Math.max(22, lyricsList.width / 30))
-                                    : Math.min(34, Math.max(18, lyricsList.width / 40))
-                    font.bold: lyricLine.active
+                    font.pixelSize: Math.min(42, Math.max(22, Math.round(lyricsList.width / 30)))
+                    font.bold: true
+                    transformOrigin: Item.Center
+                    scale: !playerBackend.lyricsSynchronized || lyricLine.active ? 1.0 : 0.82
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                     wrapMode: Text.Wrap
@@ -193,7 +216,7 @@ Rectangle {
                             easing.type: Easing.OutCubic
                         }
                     }
-                    Behavior on font.pixelSize {
+                    Behavior on scale {
                         NumberAnimation {
                             duration: lyricLine.transitionDuration
                             easing.type: Easing.OutCubic

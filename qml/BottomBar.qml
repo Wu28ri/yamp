@@ -36,9 +36,15 @@ Rectangle {
         return m + ":" + pad(s)
     }
 
+    readonly property bool hasActiveTrack: playerBackend.currentPath !== ""
+    readonly property var currentTrackCtx: hasActiveTrack
+        ? playerBackend.trackContextForPath(playerBackend.currentPath)
+        : null
+    readonly property bool canNavigateMetadata: currentTrackCtx !== null && currentTrackCtx.inLibrary === true
+
     function openMetadata(target) {
-        const ctx = playerBackend.trackContextForPath(playerBackend.currentPath)
-        if (!ctx) return
+        const ctx = bottomBar.currentTrackCtx
+        if (!ctx || !ctx.inLibrary) return
         if (target === "artist" && ctx.artist) {
             root.openArtist(ctx.artist)
         } else if (target === "album" && ctx.album) {
@@ -57,6 +63,7 @@ Rectangle {
         z: 10
         from: 0
         to: playerBackend.duration > 0 ? playerBackend.duration : 1
+        enabled: playerBackend.duration > 0
         live: true
         onMoved: playerBackend.position = value
         hoverEnabled: true
@@ -68,13 +75,14 @@ Rectangle {
         }
 
         background: Rectangle {
+            x: progressSlider.leftPadding
             implicitHeight: 4
             width: progressSlider.availableWidth
             y: 0
             color: sysPalette.base
 
             Rectangle {
-                width: progressSlider.visualPosition * parent.width
+                width: playerBackend.duration > 0 ? progressSlider.visualPosition * parent.width : 0
                 height: parent.height
                 color: sysPalette.highlight
             }
@@ -86,7 +94,7 @@ Rectangle {
             width: 12; height: 12
             radius: 6
             color: sysPalette.highlight
-            visible: progressSlider.hovered || progressSlider.pressed
+            visible: playerBackend.duration > 0 && (progressSlider.hovered || progressSlider.pressed)
         }
     }
 
@@ -98,7 +106,7 @@ Rectangle {
         }
         text: bottomBar.formatTime(progressSlider.pressed ? progressSlider.value : playerBackend.position)
         color: sysPalette.windowText
-        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
+        opacity: playerBackend.duration > 0 && (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
         font.pixelSize: 10
         font.family: "Monospace"
         z: 11
@@ -113,7 +121,7 @@ Rectangle {
         }
         text: bottomBar.formatTime(playerBackend.duration)
         color: sysPalette.windowText
-        opacity: (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
+        opacity: playerBackend.duration > 0 && (progressSlider.hovered || progressSlider.pressed) ? 0.5 : 0.0
         font.pixelSize: 10
         font.family: "Monospace"
         z: 11
@@ -133,19 +141,45 @@ Rectangle {
         clip: true
 
         Rectangle {
+            id: bottomCoverContainer
             Layout.preferredWidth: bottomBar.veryCompact ? 48 : 60
             Layout.preferredHeight: bottomBar.veryCompact ? 48 : 60
-            color: bottomCoverImage.status === Image.Ready ? "transparent" : sysPalette.base
+            color: root.hasValidImage(bottomCoverImage) ? "transparent" : sysPalette.base
             radius: 4
-            clip: true
+
+            Text {
+                anchors.centerIn: parent
+                visible: !root.hasValidImage(bottomCoverImage)
+                text: "♪"
+                color: sysPalette.windowText
+                opacity: 0.35
+                font.pixelSize: bottomBar.veryCompact ? 18 : 22
+            }
+
             Image {
                 id: bottomCoverImage
                 anchors.fill: parent
+                visible: root.hasValidImage(bottomCoverImage)
                 fillMode: Image.PreserveAspectCrop
                 source: root.coverSource(playerBackend.currentPath)
                 sourceSize: Qt.size(Math.ceil(60 * Screen.devicePixelRatio), Math.ceil(60 * Screen.devicePixelRatio))
                 asynchronous: true
+                opacity: coverClickArea.pressed ? 0.8 : 1.0
             }
+
+            MouseArea {
+                id: coverClickArea
+                readonly property bool keepsSearchOpen: true
+                anchors.fill: parent
+                enabled: bottomBar.hasActiveTrack
+                hoverEnabled: true
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: root.jumpToCurrentTrack()
+            }
+
+            ToolTip.visible: coverClickArea.containsMouse && bottomBar.hasActiveTrack
+            ToolTip.delay: 500
+            ToolTip.text: "Jump to playing track (Ctrl+L)"
         }
 
         ColumnLayout {
@@ -166,12 +200,13 @@ Rectangle {
                     id: titleField
                     width: Math.min(Math.ceil(titleMetrics.advanceWidth) + 6, parent.width)
                     height: parent.height
-                    text: playerBackend.currentTitle
+                    text: bottomBar.hasActiveTrack ? playerBackend.currentTitle : "Not playing"
                     color: sysPalette.text
+                    opacity: bottomBar.hasActiveTrack ? 1.0 : 0.45
                     font.bold: true
                     textFormat: Text.PlainText
                     readOnly: true
-                    selectByMouse: true
+                    selectByMouse: bottomBar.hasActiveTrack
                     persistentSelection: true
                     clip: true
                     verticalAlignment: TextEdit.AlignVCenter
@@ -182,6 +217,7 @@ Rectangle {
 
                     TapHandler {
                         acceptedButtons: Qt.RightButton
+                        enabled: bottomBar.hasActiveTrack
                         onTapped: {
                             if (titleField.selectedText.length === 0) titleField.selectAll()
                             metadataTextMenu.editor = titleField
@@ -194,6 +230,7 @@ Rectangle {
             Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 18
+                visible: bottomBar.hasActiveTrack
 
                 TextMetrics {
                     id: artistAlbumMetrics
@@ -203,7 +240,7 @@ Rectangle {
 
                 TextEdit {
                     id: artistAlbumField
-                    readonly property string hoveredMetadata: metadataHover.hovered
+                    readonly property string hoveredMetadata: bottomBar.canNavigateMetadata && metadataHover.hovered
                         ? navigationTargetAt(metadataHover.point.position.x, metadataHover.point.position.y) : ""
                     width: Math.min(Math.ceil(artistAlbumMetrics.advanceWidth) + 6, parent.width)
                     height: parent.height
@@ -403,11 +440,18 @@ Rectangle {
             readonly property bool effectivelyMuted: playerBackend.isMuted || playerBackend.volume <= 0
             property real volumeBeforeMute: 1.0
 
-            icon.name: effectivelyMuted ? "audio-volume-muted" : "audio-volume-high"
+            icon.name: {
+                if (effectivelyMuted) return "audio-volume-muted"
+                if (playerBackend.volume < 0.34) return "audio-volume-low"
+                if (playerBackend.volume < 0.67) return "audio-volume-medium"
+                return "audio-volume-high"
+            }
             opacity: enabled ? 0.8 : 0.35
             enabled: playerBackend.volumeControllable
-            ToolTip.visible: hovered && !enabled
-            ToolTip.text: "Volume is locked in direct ALSA mode\n(enable Software volume in Audio settings)"
+            ToolTip.visible: hovered
+            ToolTip.text: enabled
+                ? (effectivelyMuted ? "Unmute" : ("Mute (" + Math.round(playerBackend.volume * 100) + "%)"))
+                : "Volume is locked in direct ALSA mode\n(enable Software volume in Audio settings)"
             onClicked: {
                 if (effectivelyMuted) {
                     playerBackend.isMuted = false
@@ -435,6 +479,19 @@ Rectangle {
                 if (playerBackend.isMuted && value > 0)
                     playerBackend.isMuted = false
                 playerBackend.volume = value / 100
+            }
+
+            WheelHandler {
+                enabled: volumeSlider.enabled
+                acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                onWheel: (event) => {
+                    const step = (event.angleDelta.y / 120.0) * 0.05
+                    if (step === 0) return
+                    const next = Math.max(0.0, Math.min(1.0, playerBackend.volume + step))
+                    if (playerBackend.isMuted && next > 0)
+                        playerBackend.isMuted = false
+                    playerBackend.volume = next
+                }
             }
 
             Binding {

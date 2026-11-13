@@ -120,6 +120,14 @@ ListView {
     readonly property real colTime:  60
 
     Connections {
+        target: root
+        enabled: listView.alive && listView.parent !== null
+        function onLocateCurrentTrackRequested() {
+            scrollDebounce.restart()
+        }
+    }
+
+    Connections {
         target: playerBackend
         function onCurrentIndexChanged() {
             if (listView.ignoreNextScroll) {

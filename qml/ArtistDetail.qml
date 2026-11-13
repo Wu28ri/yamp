@@ -61,10 +61,7 @@ Item {
                 }
             }
 
-            onBackRequested: {
-                root.currentView = "artists"
-                playerBackend.filterByArtist("")
-            }
+            onBackRequested: root.goBack()
             onPlayRequested: {
                 playerBackend.shuffle = false
                 const firstPath = playerBackend.trackModel.pathForRow(0)

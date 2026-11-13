@@ -144,11 +144,7 @@ Rectangle {
             icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
             font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-            onClicked: {
-                root.currentView = "tracks"
-                clearSearch()
-                playerBackend.filterByAlbum("")
-            }
+            onClicked: root.navigateToSection("tracks")
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text
         }
@@ -161,11 +157,7 @@ Rectangle {
             icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
             font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-            onClicked: {
-                playerBackend.clearCategoryFilter()
-                root.currentView = "albums"
-                clearSearch()
-            }
+            onClicked: root.navigateToSection("albums")
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text
         }
@@ -178,16 +170,24 @@ Rectangle {
             icon.color: activeSection ? sysPalette.highlight : sysPalette.windowText
             font.bold: activeSection
             display: sideBar.compact ? AbstractButton.IconOnly : AbstractButton.TextBesideIcon
-            onClicked: {
-                playerBackend.clearCategoryFilter()
-                root.currentView = "artists"
-                clearSearch()
-            }
+            onClicked: root.navigateToSection("artists")
             ToolTip.visible: sideBar.compact && hovered
             ToolTip.text: text
         }
 
         Item { Layout.fillHeight: true }
+
+        ToolButton {
+            visible: playerBackend.scanInProgress && sideBar.compact
+            Layout.alignment: Qt.AlignHCenter
+            icon.name: "view-refresh"
+            enabled: true
+            opacity: 0.75
+            ToolTip.visible: hovered
+            ToolTip.text: playerBackend.scanTotal > 0
+                ? ("Scanning library: " + playerBackend.scanProgress + " / " + playerBackend.scanTotal)
+                : "Scanning library…"
+        }
 
         ColumnLayout {
             Layout.fillWidth: true
